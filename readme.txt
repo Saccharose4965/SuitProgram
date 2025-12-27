@@ -94,3 +94,17 @@ Open TODO / wishlist
 - Extras: costume/LED/audio preset randomizer, Tournai map on OLED, IMU fusion for limb pose to drive LEDs/stick, task priority/core pinning guidance for FreeRTOS.
 - fix audio recording and calls
 - fix fft postprocessing, for now the selected BPM is flickering, we need to have a more robust BPM identification.
+
+Task core pinning / priorities (FreeRTOS)
+-----------------------------------------
+- Audio RX: `audio_rx_task` pinned to core1 (prio 1); writer task `audio_rx_wr` pinned to core0 (prio 3). Filenames auto-increment via `rx_rec_index.txt`.
+- FFT visualizer: `fft_task` pinned to core1 (prio 5). Old FFT (`oldfft.c`) spawns unpinned.
+- Audio capture: `audio_capture_task` pinned to core1 (prio configMAX_PRIORITIES-2) to leave core0 for Wi-Fi/BT.
+- IMU sampler: `mpu6500_start_sampler` defaults to core1 (prio 2 unless overridden).
+- IMU orientation: `imu_orientation_task` pinned to core1 (prio 2).
+- OLED/UI: `oled_task` runs unpinned (either core, prio 2).
+- LED modes: unpinned (either core, prio 4).
+- Music player: `music_play_task` and `audio_play_task` created with `tskNO_AFFINITY` (scheduler picks core).
+- GPS tasks: `gps_task`/`gps_svc`/`gps_ui` unpinned (prios 5/4/4). GPS time sync task unpinned (prio 4).
+- Call/Comms: call RX/play/Tx tasks and mic Tx tasks are unpinned (prios 5–6); telemetry RX unpinned (prio 4).
+- Audio capture/FFT/IMU heavy work are generally on core1; keep Wi-Fi/BT-friendly tasks (A2DP, link) on core0 by leaving them unpinned or explicitly pinning to 0 if needed.
