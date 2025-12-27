@@ -97,14 +97,17 @@ Open TODO / wishlist
 
 Task core pinning / priorities (FreeRTOS)
 -----------------------------------------
-- Audio RX: `audio_rx_task` pinned to core1 (prio 1); writer task `audio_rx_wr` pinned to core0 (prio 3). Filenames auto-increment via `rx_rec_index.txt`.
-- FFT visualizer: `fft_task` pinned to core1 (prio 5). Old FFT (`oldfft.c`) spawns unpinned.
-- Audio capture: `audio_capture_task` pinned to core1 (prio configMAX_PRIORITIES-2) to leave core0 for Wi-Fi/BT.
-- IMU sampler: `mpu6500_start_sampler` defaults to core1 (prio 2 unless overridden).
-- IMU orientation: `imu_orientation_task` pinned to core1 (prio 2).
-- OLED/UI: `oled_task` runs unpinned (either core, prio 2).
-- LED modes: unpinned (either core, prio 4).
-- Music player: `music_play_task` and `audio_play_task` created with `tskNO_AFFINITY` (scheduler picks core).
-- GPS tasks: `gps_task`/`gps_svc`/`gps_ui` unpinned (prios 5/4/4). GPS time sync task unpinned (prio 4).
-- Call/Comms: call RX/play/Tx tasks and mic Tx tasks are unpinned (prios 5–6); telemetry RX unpinned (prio 4).
-- Audio capture/FFT/IMU heavy work are generally on core1; keep Wi-Fi/BT-friendly tasks (A2DP, link) on core0 by leaving them unpinned or explicitly pinning to 0 if needed.
+Core 0 (Wi-Fi/BT friendly, lower contention)
+- audio_rx writer task (`audio_rx_wr`, prio 3)
+- Audio player/music tasks (`audio_play_task`, `music_play_task`) are unpinned; scheduler often keeps BT/A2DP on core0
+- Telemetry RX, call/comms tasks, LED modes, OLED/UI, GPS tasks: unpinned (scheduler may place on core0)
+
+Core 1 (heavy DSP/render)
+- `audio_rx_task` (prio 1)
+- FFT visualizer `fft_task` (prio 5)
+- Audio capture `audio_capture_task` (prio configMAX_PRIORITIES-2)
+- IMU sampler default (`mpu6500_start_sampler`, prio 2) and IMU orientation task (`imu_orientation_task`, prio 2)
+
+Notes
+- Unpinned tasks (LED modes, OLED/UI, music player, GPS, call/comms, telemetry) can float; pin heavy DSP to core1 and keep Wi-Fi/BT/A2DP free on core0 when tuning.
+- Audio RX filenames auto-increment via `rx_rec_index.txt`; last path stored in `rx_rec_last.txt`.
