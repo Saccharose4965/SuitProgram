@@ -50,7 +50,7 @@ static const char *TAG = "audio_rx";
 // Progress log cadence
 #define AUDIO_RX_LOG_BYTES     (128 * 1024)
 // RX rate limit (bytes/sec). Set to 0 to disable.
-#define AUDIO_RX_RATE_LIMIT_BPS (100 * 1024)  // throttle to keep UI responsive
+#define AUDIO_RX_RATE_LIMIT_BPS (0 * 1024)  // no throttle; set to limit bytes/sec
 
 // Task priority (keep below the UI / main loop)
 #define AUDIO_RX_TASK_PRIO     1
