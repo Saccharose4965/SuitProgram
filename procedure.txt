@@ -1,0 +1,3 @@
+source /home/anotherone/Documents/suit/esp-idf/export.sh
+idf.py -p /dev/ttyACM0 -b 115200 flash monitor
+

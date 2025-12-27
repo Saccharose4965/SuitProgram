@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""
+Generate t48_sprites.h from 2048.png (15x15 tiles + 5x5 arrows).
+
+This script intentionally avoids external dependencies (pure Python PNG decode).
+"""
+
+from __future__ import annotations
+import os
+import struct
+import zlib
+from typing import List, Sequence
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+PNG_PATH = os.path.join(ROOT, "2048.png")
+OUT_PATH = os.path.join(os.path.dirname(__file__), "include", "t48_sprites.h")
+
+TILE_SIZE = 15
+TILE_COUNT = 16
+STEP = 14  # tiles overlap by 1px: 15px tile every 14px
+
+ARROW_SIZE = 5
+ARROW_COUNT = 4
+ARROW_X0 = 4
+ARROW_SPACING = ARROW_SIZE + 2  # 7px between arrow starts
+ARROW_ORDER = ("up", "right", "down", "left")
+
+# Order in the PNG (read order, 4x4 grid)
+PNG_TILE_VALUES: Sequence[int] = (
+    65536, 32768, 16384, 8192,
+    1024, 2048, 4096, 16,
+    512, 256, 128, 64,
+    2, 4, 8, 32,
+)
+
+# Desired order for runtime: ascending powers of two (index = exponent-1)
+TILE_VALUES: Sequence[int] = tuple(2 ** i for i in range(1, 17))
+
+
+def paeth(a: int, b: int, c: int) -> int:
+    p = a + b - c
+    pa = abs(p - a)
+    pb = abs(p - b)
+    pc = abs(p - c)
+    if pa <= pb and pa <= pc:
+        return a
+    if pb <= pc:
+        return b
+    return c
+
+
+def decode_png(path: str) -> List[List[int]]:
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise SystemExit("Not a PNG file")
+
+    ptr = 8
+    idat = bytearray()
+    w = h = None
+
+    while ptr < len(data):
+        ln = int.from_bytes(data[ptr:ptr + 4], "big"); ptr += 4
+        typ = data[ptr:ptr + 4]; ptr += 4
+        chunk = data[ptr:ptr + ln]; ptr += ln
+        ptr += 4  # skip CRC
+        if typ == b"IHDR":
+            w, h, bit_depth, color_type, comp, flt, inter = struct.unpack(">IIBBBBB", chunk)
+            if (bit_depth, color_type) != (8, 6):
+                raise SystemExit("Expected 8-bit RGBA PNG")
+        elif typ == b"IDAT":
+            idat.extend(chunk)
+        elif typ == b"IEND":
+            break
+
+    if w is None or h is None:
+        raise SystemExit("Missing IHDR in PNG")
+
+    raw = zlib.decompress(idat)
+    stride = w * 4
+    prev = [0] * stride
+    pos = 0
+    rows: List[List[int]] = []
+    for _ in range(h):
+        ftype = raw[pos]; pos += 1
+        row = list(raw[pos:pos + stride]); pos += stride
+        if ftype == 1:  # Sub
+            for i in range(stride):
+                row[i] = (row[i] + (row[i - 4] if i >= 4 else 0)) & 0xFF
+        elif ftype == 2:  # Up
+            for i in range(stride):
+                row[i] = (row[i] + prev[i]) & 0xFF
+        elif ftype == 3:  # Average
+            for i in range(stride):
+                row[i] = (row[i] + ((row[i - 4] if i >= 4 else 0) + prev[i]) // 2) & 0xFF
+        elif ftype == 4:  # Paeth
+            for i in range(stride):
+                a = row[i - 4] if i >= 4 else 0
+                b = prev[i]
+                c = prev[i - 4] if i >= 4 else 0
+                row[i] = (row[i] + paeth(a, b, c)) & 0xFF
+        elif ftype != 0:
+            raise SystemExit(f"Unsupported filter {ftype}")
+        rows.append(row)
+        prev = row
+
+    return rows  # rows[y][4*x:4*(x+1)] = RGBA
+
+
+def is_ink(px: Sequence[int]) -> bool:
+    r, g, b, a = px
+    # Treat the bright pixels as “on” so the tiles appear filled.
+    return a > 0 and (r + g + b) >= (128 * 3)
+
+
+def extract_block(img: List[List[int]], x0: int, y0: int, size: int) -> List[int]:
+    rows: List[int] = []
+    for yy in range(size):
+        row_bits = 0
+        for xx in range(size):
+            px = img[y0 + yy][4 * (x0 + xx):4 * (x0 + xx + 1)]
+            if is_ink(px):
+                row_bits |= 1 << (size - 1 - xx)
+        rows.append(row_bits)
+    return rows
+
+
+def fmt_rows(rows: Sequence[int], width: int) -> List[str]:
+    hex_digits = (width + 3) // 4
+    fmt = "0x{{:0{}X}}".format(hex_digits)
+    return [fmt.format(v) for v in rows]
+
+
+def main() -> None:
+    img = decode_png(PNG_PATH)
+    h = len(img)
+    w = len(img[0]) // 4
+    if (w, h) != (57, 64):
+        raise SystemExit(f"Unexpected PNG size {(w, h)}, expected (57, 64)")
+
+    tiles_png: List[List[int]] = []
+    for row in range(4):
+        for col in range(4):
+            tiles_png.append(extract_block(img, col * STEP, row * STEP, TILE_SIZE))
+
+    tiles: List[List[int]] = [None] * TILE_COUNT  # type: ignore
+    for src_idx, val in enumerate(PNG_TILE_VALUES):
+        try:
+            dst_idx = TILE_VALUES.index(val)
+        except ValueError:
+            raise SystemExit(f"Unexpected tile value {val} in PNG")
+        tiles[dst_idx] = tiles_png[src_idx]
+
+    arrow_y = h - 1 - ARROW_SIZE
+    arrows: List[List[int]] = []
+    for i in range(ARROW_COUNT):
+        x0 = ARROW_X0 + i * ARROW_SPACING
+        arrows.append(extract_block(img, x0, arrow_y, ARROW_SIZE))
+
+    lines: List[str] = []
+    lines.append("#pragma once")
+    lines.append("#include <stdint.h>")
+    lines.append("")
+    lines.append("// Auto-generated by gen_sprites.py from 2048.png; do not edit by hand.")
+    lines.append(f"#define T48_TILE_SIZE {TILE_SIZE}")
+    lines.append(f"#define T48_TILE_COUNT {TILE_COUNT}")
+    lines.append(f"#define T48_ARROW_SIZE {ARROW_SIZE}")
+    lines.append(f"#define T48_ARROW_COUNT {ARROW_COUNT}")
+    lines.append("")
+    lines.append("static const uint16_t t48_tiles_15[T48_TILE_COUNT][T48_TILE_SIZE] = {")
+    for idx, rows in enumerate(tiles):
+        lines.append(f"    {{{', '.join(fmt_rows(rows, TILE_SIZE))}}}, // {TILE_VALUES[idx]}")
+    lines.append("};")
+    lines.append("")
+    lines.append("static const uint8_t t48_arrows_5[T48_ARROW_COUNT][T48_ARROW_SIZE] = {")
+    for name, rows in zip(ARROW_ORDER, arrows):
+        lines.append(f"    {{{', '.join(fmt_rows(rows, ARROW_SIZE))}}}, // {name}")
+    lines.append("};")
+    lines.append("")
+
+    os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
+    with open(OUT_PATH, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    print(f"Wrote {OUT_PATH}")
+
+
+if __name__ == "__main__":
+    main()

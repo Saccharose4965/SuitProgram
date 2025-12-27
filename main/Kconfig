@@ -1,0 +1,24 @@
+menu "Link settings"
+
+config LINK_WIFI_SSID
+    string "Wi-Fi SSID for link fallback"
+    default "TERRIER_24"
+
+config LINK_WIFI_PASS
+    string "Wi-Fi password for link fallback"
+    default "L@P3st3#"
+
+config LINK_WIFI_PC_IP
+    string "PC IP for telemetry/UDP"
+    default "192.168.1.10"
+
+config LINK_WIFI_PC_PORT
+    int "PC UDP port"
+    default 9000
+    range 1 65535
+
+config LINK_ESPNOW_PEER_MAC
+    string "ESP-NOW peer MAC (optional, colon or plain hex)"
+    default ""
+
+endmenu

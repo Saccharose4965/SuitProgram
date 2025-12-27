@@ -1,0 +1,28 @@
+#pragma once
+#include <stdint.h>
+#include "esp_err.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Start the LED modes task (idempotent). Initializes the strip driver.
+esp_err_t led_modes_start(void);
+
+// Mode selection helpers
+int         led_modes_count(void);
+const char *led_modes_name(int idx);
+void        led_modes_set(int idx);
+int         led_modes_current(void);
+
+// Sync control: when disabled, beat-reactive modes fall back to free-run.
+void led_modes_set_sync(bool enabled);
+bool led_modes_sync_enabled(void);
+
+// Global brightness scale (0–255). Default 255.
+void led_modes_set_brightness(uint8_t level);
+uint8_t led_modes_get_brightness(void);
+
+#ifdef __cplusplus
+}
+#endif

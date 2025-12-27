@@ -1,0 +1,23 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "app_shell.c"
+        "app_menu.c"
+        "app_status.c"
+        "app_volume.c"
+        "app_settings.c"
+        "app_leds.c"
+        "app_fft.c"
+        "app_music.c"
+        "app_flappy.c"
+        "app_t2048.c"
+        "app_tetris.c"
+        "app_keyboard.c"
+        "app_snake.c"
+        "app_pong.c"
+        "app_threedee.c"
+        "app_fluid.c"
+        "shell_audio.c"
+    INCLUDE_DIRS "."
+    REQUIRES state input oled hw ui_shell flappy twenty48 tetris audio audio_player fft keyboard storage_sd gps led_modes power link audio_rx bt_audio snake pong threedee fluid orientation
+)

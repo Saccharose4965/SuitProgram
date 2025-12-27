@@ -1,0 +1,6 @@
+idf_component_register(
+  SRCS "mpu6500.c"
+  INCLUDE_DIRS "include"
+  PRIV_REQUIRES esp_driver_spi freertos esp_timer
+)
+
