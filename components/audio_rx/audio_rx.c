@@ -136,6 +136,19 @@ static void audio_rx_sync_file_index(void)
             if (idx > max_idx) {
                 max_idx = idx;
             }
+            if (strcmp(ext, "part") == 0) {
+                char wav_path[64];
+                snprintf(wav_path, sizeof(wav_path), "/sdcard/rx_rec_%05d.wav", idx);
+                struct stat st = {0};
+                if (stat(wav_path, &st) == 0) {
+                    // Finished file exists; drop stale part
+                    char part_path[64];
+                    snprintf(part_path, sizeof(part_path), "/sdcard/%s", ent->d_name);
+                    if (unlink(part_path) == 0) {
+                        ESP_LOGI(TAG, "Removed stale part file '%s'", part_path);
+                    }
+                }
+            }
         }
     }
     closedir(d);
