@@ -6,7 +6,7 @@
 #include <errno.h>
 #include <sys/unistd.h>   // fsync
 #include <sys/stat.h>
-#include <dirent.h>
+#include <inttypes.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -50,7 +50,7 @@ static const char *TAG = "audio_rx";
 // Progress log cadence
 #define AUDIO_RX_LOG_BYTES     (128 * 1024)
 // RX rate limit (bytes/sec). Set to 0 to disable.
-#define AUDIO_RX_RATE_LIMIT_BPS (0 * 1024)  // no throttle; set to limit bytes/sec
+#define AUDIO_RX_RATE_LIMIT_BPS (100 * 1024)  // throttle to ~100 KB/s
 
 // Task priority (keep below the UI / main loop)
 #define AUDIO_RX_TASK_PRIO     1
@@ -78,7 +78,7 @@ static const char *TAG = "audio_rx";
 static TaskHandle_t  s_rx_task     = NULL;
 static int           s_listen_sock = -1;
 static bool          s_stop_flag   = false;
-static int           s_file_index  = 0;
+static uint32_t      s_file_index  = 0;
 static uint8_t       s_rx_chunk_buf[AUDIO_RX_CHUNK_SIZE];
 
 // -----------------------------------------------------------------------------
@@ -117,45 +117,51 @@ static int create_listen_socket(int port)
     return sock;
 }
 
-// Find the highest existing rx_rec_<idx>.wav/.part on the SD card so we don't
-// overwrite prior recordings after reboot.
-static void audio_rx_sync_file_index(void)
+// Persist last received file path so other parts of the app can pick it up.
+static void audio_rx_store_last(const char *path)
 {
-    DIR *d = opendir("/sdcard");
-    if (!d) {
-        ESP_LOGW(TAG, "opendir(/sdcard) failed; using in-memory file index");
+    if (!path) return;
+    FILE *f = fopen("/sdcard/rx_rec_last.txt", "w");
+    if (!f) {
+        ESP_LOGW(TAG, "audio_rx: failed to write last path");
         return;
     }
+    fprintf(f, "%s\n", path);
+    fclose(f);
+}
 
-    int max_idx = s_file_index;
-    struct dirent *ent;
-    while ((ent = readdir(d)) != NULL) {
-        int idx = 0;
-        char ext[8] = {0};
-        if (sscanf(ent->d_name, "rx_rec_%d.%7s", &idx, ext) == 2) {
-            if (idx > max_idx) {
-                max_idx = idx;
-            }
-            if (strcmp(ext, "part") == 0) {
-                char wav_path[64];
-                snprintf(wav_path, sizeof(wav_path), "/sdcard/rx_rec_%05d.wav", idx);
-                struct stat st = {0};
-                if (stat(wav_path, &st) == 0) {
-                    // Finished file exists; drop stale part
-                    char part_path[64];
-                    snprintf(part_path, sizeof(part_path), "/sdcard/rx_rec_%05d.part", idx);
-                    if (unlink(part_path) == 0) {
-                        ESP_LOGI(TAG, "Removed stale part file '%s'", part_path);
-                    }
-                }
-            }
-        }
+// Load/save monotonically increasing recording index.
+static void audio_rx_load_index(void)
+{
+    FILE *f = fopen("/sdcard/rx_rec_index.txt", "r");
+    if (!f) return;
+    uint32_t idx = 0;
+    if (fscanf(f, "%" PRIu32, &idx) == 1) {
+        s_file_index = idx;
+        ESP_LOGI(TAG, "audio_rx: restored index %u", (unsigned)s_file_index);
     }
-    closedir(d);
-    if (max_idx != s_file_index) {
-        s_file_index = max_idx;
-        ESP_LOGI(TAG, "audio_rx: resumed file index at %d", s_file_index);
+    fclose(f);
+}
+
+static void audio_rx_store_index(uint32_t idx)
+{
+    FILE *f = fopen("/sdcard/rx_rec_index.txt", "w");
+    if (!f) {
+        ESP_LOGW(TAG, "audio_rx: failed to persist index %u", (unsigned)idx);
+        return;
     }
+    fprintf(f, "%u\n", (unsigned)idx);
+    fclose(f);
+}
+
+// Build paths for the next recording (counter only, no directory scan).
+static uint32_t audio_rx_make_paths(char *path_final, size_t final_len,
+                                    char *path_tmp, size_t tmp_len)
+{
+    uint32_t idx = s_file_index + 1;
+    snprintf(path_final, final_len, "/sdcard/rx_rec_%05u.wav", (unsigned)idx);
+    snprintf(path_tmp,   tmp_len,   "/sdcard/rx_rec_%05u.part", (unsigned)idx);
+    return idx;
 }
 
 typedef struct {
@@ -245,51 +251,51 @@ static void audio_rx_writer_task(void *arg)
     unsigned int yield_count = 0;
 
     while (1) {
+        // Exit ASAP once asked to stop and ring is empty.
+        if (w->stop && xRingbufferGetCurFreeSize(w->ring) == w->ring_bytes) {
+            ESP_LOGI(TAG, "Writer: ring drained, finishing");
+            break;
+        }
+
         size_t item_size = 0;
         uint8_t *item = (uint8_t *)xRingbufferReceiveUpTo(
             w->ring, &item_size, AUDIO_RX_WRITE_CHUNK, pdMS_TO_TICKS(200));
 
-        if (item) {
-            bool write_failed = false;
-            size_t off = 0;
-            while (off < item_size) {
-                size_t chunk = item_size - off;
-                if (chunk > AUDIO_RX_SD_SLICE_BYTES) {
-                    chunk = AUDIO_RX_SD_SLICE_BYTES;
-                }
-                size_t written = fwrite(item + off, 1, chunk, w->file);
-                if (written != chunk) {
-                    ESP_LOGE(TAG, "writer fwrite error (wrote %u of %u, errno=%d)",
-                             (unsigned)written, (unsigned)chunk, errno);
-                    write_failed = true;
-                    break;
-                }
-                off += written;
-                w->total_written += written;
-                w->since_flush += written;
-                if (w->since_flush >= log_bytes) {
-                    ESP_LOGI(TAG, "Writer progress: %u bytes", (unsigned)w->total_written);
-                    w->since_flush = 0;
-                }
-                if (++yield_count >= AUDIO_RX_WRITER_YIELD_EVERY) {
-                    audio_rx_yield_soft();
-                    yield_count = 0;
-                }
-            }
-            vRingbufferReturnItem(w->ring, item);
-
-            if (write_failed) {
-                w->error = true;
-                w->stop = true;
-                break;
-            }
+        if (!item) {
             continue;
         }
 
-        if (w->stop) {
-            if (xRingbufferGetCurFreeSize(w->ring) == w->ring_bytes) {
+        bool write_failed = false;
+        size_t off = 0;
+        while (off < item_size) {
+            size_t chunk = item_size - off;
+            if (chunk > AUDIO_RX_SD_SLICE_BYTES) {
+                chunk = AUDIO_RX_SD_SLICE_BYTES;
+            }
+            size_t written = fwrite(item + off, 1, chunk, w->file);
+            if (written != chunk) {
+                ESP_LOGE(TAG, "writer fwrite error (wrote %u of %u, errno=%d)",
+                         (unsigned)written, (unsigned)chunk, errno);
+                write_failed = true;
                 break;
             }
+            off += written;
+            w->total_written += written;
+            w->since_flush += written;
+            if (w->since_flush >= log_bytes) {
+                ESP_LOGI(TAG, "Writer progress: %u bytes", (unsigned)w->total_written);
+                w->since_flush = 0;
+            }
+            if (++yield_count >= AUDIO_RX_WRITER_YIELD_EVERY) {
+                audio_rx_yield_soft();
+                yield_count = 0;
+            }
+        }
+        vRingbufferReturnItem(w->ring, item);
+
+        if (write_failed) {
+            w->error = true;
+            break;
         }
     }
 
@@ -315,6 +321,9 @@ static void audio_rx_task(void *arg)
 
     s_stop_flag = false;
 
+    // Resume numbering from last successful recording if present.
+    audio_rx_load_index();
+
     s_listen_sock = create_listen_socket(port);
     if (s_listen_sock < 0) {
         ESP_LOGE(TAG, "Failed to create listen socket on port %d", port);
@@ -322,8 +331,6 @@ static void audio_rx_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
-
-    audio_rx_sync_file_index();
 
     ESP_LOGI(TAG, "audio_rx listening on port %d", port);
 
@@ -346,9 +353,8 @@ static void audio_rx_task(void *arg)
         // Build file name (write to .part then rename on success)
         char path_final[64];
         char path_tmp[64];
-        s_file_index++;
-        snprintf(path_final, sizeof(path_final), "/sdcard/rx_rec_%05d.wav", s_file_index);
-        snprintf(path_tmp, sizeof(path_tmp), "/sdcard/rx_rec_%05d.part", s_file_index);
+        uint32_t idx = audio_rx_make_paths(path_final, sizeof(path_final),
+                                           path_tmp, sizeof(path_tmp));
         ESP_LOGI(TAG, "Recording will be written to '%s' (tmp '%s')", path_final, path_tmp);
 
         FILE *f = fopen(path_tmp, "wb");
@@ -422,6 +428,7 @@ static void audio_rx_task(void *arg)
         uint8_t *buf = s_rx_chunk_buf;
         size_t  total_written = 0;
         size_t  since_flush   = 0;
+        bool write_failed_direct = false;
         unsigned int yield_count = 0;
         bool rx_paused = false;
         TickType_t last_pause_log = xTaskGetTickCount();
@@ -476,7 +483,7 @@ static void audio_rx_task(void *arg)
                 break;
             } else if (r == 0) {
                 // client closed
-                ESP_LOGI(TAG, "Client finished sending '%s'", path_final);
+                ESP_LOGI(TAG, "Client finished sending '%s'", path_tmp);
                 break;
             }
 
@@ -554,6 +561,7 @@ static void audio_rx_task(void *arg)
                     }
                 }
                 if (write_failed) {
+                    write_failed_direct = true;
                     break;
                 }
                 audio_rx_rate_limit((size_t)r);
@@ -565,24 +573,46 @@ static void audio_rx_task(void *arg)
             }
         }
 
+        bool had_error = false;
+
         if (writer && ring) {
             writer->stop = true;
-            while (!writer->done) {
+            int waited_ms = 0;
+            while (!writer->done && waited_ms < 10000) {
                 vTaskDelay(pdMS_TO_TICKS(10));
+                waited_ms += 10;
             }
-            bool writer_had_error = writer->error;
-            size_t writer_total    = writer->total_written;
-            vRingbufferDeleteWithCaps(ring);
-            free(writer);
-            writer = NULL;
+            if (!writer->done) {
+                ESP_LOGE(TAG, "RX: writer did not finish in time; forcing close of '%s'", path_tmp);
+                had_error = true;
+                // Best effort: flush/close the writer file to keep FS consistent.
+                if (writer->file) {
+                    fflush(writer->file);
+                    int fd = fileno(writer->file);
+                    if (fd >= 0) fsync(fd);
+                    fclose(writer->file);
+                    writer->file = NULL;
+                }
+            } else {
+                had_error |= writer->error;
 
-            ESP_LOGI(TAG, "Finished '%s' (%u bytes)",
-                     path_tmp, (unsigned)writer_total);
-            if (writer_had_error) {
-                // Abort on writer error to avoid wedging RX
-                (void)unlink(path_tmp);
-                break;
+                ESP_LOGI(TAG, "Finished '%s' (%u bytes)%s",
+                         path_tmp,
+                         (unsigned)writer->total_written,
+                         writer->error ? " [WRITER ERROR]" : "");
             }
+
+            vRingbufferDeleteWithCaps(ring);
+            ring = NULL;
+            if (writer) {
+                free(writer->filebuf);
+                writer->filebuf = NULL;
+                free(writer);
+                writer = NULL;
+            }
+
+            f = NULL;
+            filebuf = NULL;
         } else {
             // Final flush and fsync
             fflush(f);
@@ -594,19 +624,28 @@ static void audio_rx_task(void *arg)
             ESP_LOGI(TAG, "Finished '%s' (%u bytes)",
                      path_tmp, (unsigned)total_written);
             free(filebuf);
+            had_error = write_failed_direct;
         }
 
         shutdown(client_sock, SHUT_RDWR);
         close(client_sock);
 
         // If writer completed without error, rename .part → .wav; otherwise remove temp.
-        if (!writer || !writer->error) {
+        if (!had_error) {
+            // Replace any existing file so rename succeeds on FATFS
+            (void)unlink(path_final);
             if (rename(path_tmp, path_final) != 0) {
                 ESP_LOGE(TAG, "Failed to rename '%s' -> '%s' (errno=%d)",
                          path_tmp, path_final, errno);
+                (void)unlink(path_tmp);
+            } else {
+                s_file_index = idx;
+                audio_rx_store_index(idx);
+                audio_rx_store_last(path_final);
+                ESP_LOGI(TAG, "Saved recording '%s' (idx=%u)", path_final, (unsigned)idx);
             }
         } else {
-            (void)unlink(path_tmp);
+            ESP_LOGW(TAG, "Transfer failed; keeping temp file '%s' for inspection", path_tmp);
         }
     }
 
