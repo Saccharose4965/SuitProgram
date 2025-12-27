@@ -143,7 +143,7 @@ static void audio_rx_sync_file_index(void)
                 if (stat(wav_path, &st) == 0) {
                     // Finished file exists; drop stale part
                     char part_path[64];
-                    snprintf(part_path, sizeof(part_path), "/sdcard/%s", ent->d_name);
+                    snprintf(part_path, sizeof(part_path), "/sdcard/rx_rec_%05d.part", idx);
                     if (unlink(part_path) == 0) {
                         ESP_LOGI(TAG, "Removed stale part file '%s'", part_path);
                     }
