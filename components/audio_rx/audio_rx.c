@@ -42,19 +42,19 @@ static const char *TAG = "audio_rx";
 #define AUDIO_RX_RING_RESUME_BYTES    (256 * 1024)
 // Writer chunk size (limits SD write bursts)
 #define AUDIO_RX_WRITE_CHUNK   (16 * 1024)
-// File buffering to reduce SD write overhead
+// File buffering to reduce SD write overhead (DMA-capable, keep small)
 #define AUDIO_RX_FILEBUF_BYTES (16 * 1024)
 // Slice SD writes so other SPI devices can interleave
-#define AUDIO_RX_SD_SLICE_BYTES (8 * 1024)
+#define AUDIO_RX_SD_SLICE_BYTES (4 * 1024)
 // Progress log cadence
-#define AUDIO_RX_LOG_BYTES     (1024 * 1024)
+#define AUDIO_RX_LOG_BYTES     (128 * 1024)
 // RX rate limit (bytes/sec). Set to 0 to disable.
-#define AUDIO_RX_RATE_LIMIT_BPS (250 * 1024)
+#define AUDIO_RX_RATE_LIMIT_BPS (0 * 1024)
 
 // Task priority (keep below the UI / main loop)
 #define AUDIO_RX_TASK_PRIO     1
 #define AUDIO_RX_TASK_STACK    8192
-#define AUDIO_RX_WRITER_PRIO   2
+#define AUDIO_RX_WRITER_PRIO   3
 #define AUDIO_RX_WRITER_STACK  4096
 
 // Yield occasionally to keep UI responsive during sustained transfers
@@ -65,8 +65,9 @@ static const char *TAG = "audio_rx";
 #define AUDIO_RX_TASK_CORE      0
 #define AUDIO_RX_WRITER_CORE    0
 #else
-#define AUDIO_RX_TASK_CORE      0
-#define AUDIO_RX_WRITER_CORE    1
+// Keep RX on core1, let writer run on core0 to drain ring promptly
+#define AUDIO_RX_TASK_CORE      1
+#define AUDIO_RX_WRITER_CORE    0
 #endif
 
 // -----------------------------------------------------------------------------
@@ -130,9 +131,13 @@ typedef struct {
 static uint8_t *audio_rx_alloc_filebuf(FILE *f, size_t size)
 {
     if (!f || size == 0) return NULL;
-    uint8_t *buf = (uint8_t *)heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    // Prefer DMA-capable internal buffer; fall back as needed.
+    uint8_t *buf = (uint8_t *)heap_caps_malloc(size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!buf) {
         buf = (uint8_t *)heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!buf) {
+        buf = (uint8_t *)heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     }
     if (!buf) {
         buf = (uint8_t *)malloc(size);
@@ -294,15 +299,17 @@ static void audio_rx_task(void *arg)
                   addr_str, sizeof(addr_str));
         ESP_LOGI(TAG, "New client from %s", addr_str);
 
-        // Build file name
-        char path[64];
+        // Build file name (write to .part then rename on success)
+        char path_final[64];
+        char path_tmp[64];
         s_file_index++;
-        snprintf(path, sizeof(path), "/sdcard/rx_rec_%05d.wav", s_file_index);
-        ESP_LOGI(TAG, "Recording will be written to '%s'", path);
+        snprintf(path_final, sizeof(path_final), "/sdcard/rx_rec_%05d.wav", s_file_index);
+        snprintf(path_tmp, sizeof(path_tmp), "/sdcard/rx_rec_%05d.part", s_file_index);
+        ESP_LOGI(TAG, "Recording will be written to '%s' (tmp '%s')", path_final, path_tmp);
 
-        FILE *f = fopen(path, "wb");
+        FILE *f = fopen(path_tmp, "wb");
         if (!f) {
-            ESP_LOGE(TAG, "Failed to open '%s' for writing (errno=%d)", path, errno);
+            ESP_LOGE(TAG, "Failed to open '%s' for writing (errno=%d)", path_tmp, errno);
 
             // Drain client and close
             uint8_t tmp[256];
@@ -320,7 +327,7 @@ static void audio_rx_task(void *arg)
                      (unsigned)(AUDIO_RX_FILEBUF_BYTES / 1024));
         }
 
-        ESP_LOGI(TAG, "Writer: receiving into '%s'", path);
+        ESP_LOGI(TAG, "Writer: receiving into '%s'", path_tmp);
 #if AUDIO_RX_RATE_LIMIT_BPS > 0
         ESP_LOGI(TAG, "audio_rx: rate limit %u KB/s",
                  (unsigned)(AUDIO_RX_RATE_LIMIT_BPS / 1024));
@@ -373,20 +380,42 @@ static void audio_rx_task(void *arg)
         size_t  since_flush   = 0;
         unsigned int yield_count = 0;
         bool rx_paused = false;
+        TickType_t last_pause_log = xTaskGetTickCount();
+        TickType_t last_stat_log  = xTaskGetTickCount();
 
         TickType_t last_backpressure_log = xTaskGetTickCount();
         while (!s_stop_flag) {
+            TickType_t now = xTaskGetTickCount();
+
+            // Periodic status to observe ring usage and writer state when stalled
+            if ((now - last_stat_log) > pdMS_TO_TICKS(1000)) {
+                size_t free_bytes = writer && ring ? xRingbufferGetCurFreeSize(ring) : 0;
+                size_t writer_written = writer ? writer->total_written : total_written;
+                ESP_LOGI(TAG, "RX stat: ring free %u, written %u, writer %s%s",
+                         (unsigned)free_bytes,
+                         (unsigned)writer_written,
+                         (writer && writer->done) ? "done" : "active",
+                         (writer && writer->error) ? " ERROR" : "");
+                last_stat_log = now;
+            }
+
             if (writer && ring) {
                 size_t free_bytes = xRingbufferGetCurFreeSize(ring);
                 if (rx_paused) {
                     if (free_bytes >= AUDIO_RX_RING_RESUME_BYTES) {
                         rx_paused = false;
                     } else {
+                        TickType_t now = xTaskGetTickCount();
+                        if ((now - last_pause_log) > pdMS_TO_TICKS(1000)) {
+                            ESP_LOGW(TAG, "RX paused: ring free %u bytes", (unsigned)free_bytes);
+                            last_pause_log = now;
+                        }
                         audio_rx_yield_wait();
                         continue;
                     }
                 } else if (free_bytes <= AUDIO_RX_RING_LOW_WATER_BYTES) {
                     rx_paused = true;
+                    last_pause_log = xTaskGetTickCount();
                     audio_rx_yield_wait();
                     continue;
                 }
@@ -403,7 +432,7 @@ static void audio_rx_task(void *arg)
                 break;
             } else if (r == 0) {
                 // client closed
-                ESP_LOGI(TAG, "Client finished sending '%s'", path);
+                ESP_LOGI(TAG, "Client finished sending '%s'", path_final);
                 break;
             }
 
@@ -462,7 +491,7 @@ static void audio_rx_task(void *arg)
                     size_t written = fwrite(buf + off, 1, chunk, f);
                     if (written != chunk) {
                         ESP_LOGE(TAG, "fwrite error on '%s' (wrote %u of %u, errno=%d)",
-                                 path, (unsigned)written, (unsigned)chunk, errno);
+                                 path_tmp, (unsigned)written, (unsigned)chunk, errno);
                         write_failed = true;
                         break;
                     }
@@ -472,7 +501,7 @@ static void audio_rx_task(void *arg)
 
                     if (since_flush >= AUDIO_RX_LOG_BYTES) {
                         ESP_LOGI(TAG, "Writer progress '%s': %u bytes",
-                                 path, (unsigned)total_written);
+                                 path_tmp, (unsigned)total_written);
                         since_flush = 0;
                     }
                     if (++yield_count >= AUDIO_RX_YIELD_EVERY) {
@@ -497,10 +526,19 @@ static void audio_rx_task(void *arg)
             while (!writer->done) {
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
-            ESP_LOGI(TAG, "Finished '%s' (%u bytes)",
-                     path, (unsigned)writer->total_written);
+            bool writer_had_error = writer->error;
+            size_t writer_total    = writer->total_written;
             vRingbufferDeleteWithCaps(ring);
             free(writer);
+            writer = NULL;
+
+            ESP_LOGI(TAG, "Finished '%s' (%u bytes)",
+                     path_tmp, (unsigned)writer_total);
+            if (writer_had_error) {
+                // Abort on writer error to avoid wedging RX
+                (void)unlink(path_tmp);
+                break;
+            }
         } else {
             // Final flush and fsync
             fflush(f);
@@ -510,12 +548,22 @@ static void audio_rx_task(void *arg)
             }
             fclose(f);
             ESP_LOGI(TAG, "Finished '%s' (%u bytes)",
-                     path, (unsigned)total_written);
+                     path_tmp, (unsigned)total_written);
             free(filebuf);
         }
 
         shutdown(client_sock, SHUT_RDWR);
         close(client_sock);
+
+        // If writer completed without error, rename .part → .wav; otherwise remove temp.
+        if (!writer || !writer->error) {
+            if (rename(path_tmp, path_final) != 0) {
+                ESP_LOGE(TAG, "Failed to rename '%s' -> '%s' (errno=%d)",
+                         path_tmp, path_final, errno);
+            }
+        } else {
+            (void)unlink(path_tmp);
+        }
     }
 
     if (s_listen_sock >= 0) {
