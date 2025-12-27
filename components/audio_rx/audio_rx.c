@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <sys/unistd.h>   // fsync
 #include <sys/stat.h>
+#include <dirent.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -114,6 +115,34 @@ static int create_listen_socket(int port)
     }
 
     return sock;
+}
+
+// Find the highest existing rx_rec_<idx>.wav/.part on the SD card so we don't
+// overwrite prior recordings after reboot.
+static void audio_rx_sync_file_index(void)
+{
+    DIR *d = opendir("/sdcard");
+    if (!d) {
+        ESP_LOGW(TAG, "opendir(/sdcard) failed; using in-memory file index");
+        return;
+    }
+
+    int max_idx = s_file_index;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        int idx = 0;
+        char ext[8] = {0};
+        if (sscanf(ent->d_name, "rx_rec_%d.%7s", &idx, ext) == 2) {
+            if (idx > max_idx) {
+                max_idx = idx;
+            }
+        }
+    }
+    closedir(d);
+    if (max_idx != s_file_index) {
+        s_file_index = max_idx;
+        ESP_LOGI(TAG, "audio_rx: resumed file index at %d", s_file_index);
+    }
 }
 
 typedef struct {
@@ -280,6 +309,8 @@ static void audio_rx_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
+
+    audio_rx_sync_file_index();
 
     ESP_LOGI(TAG, "audio_rx listening on port %d", port);
 
