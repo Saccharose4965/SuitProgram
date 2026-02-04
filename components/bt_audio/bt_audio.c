@@ -564,6 +564,10 @@ static void gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param){
         case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:{
             if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STARTED) {
                 s_scanning = true;
+                // Keep state/UI synchronized even if another callback briefly
+                // forced us back to IDLE while inquiry is still active.
+                set_state(BT_AUDIO_STATE_DISCOVERING);
+                set_connection(SYS_CONN_CONNECTING);
             } else if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STOPPED){
                 s_scanning = false;
                 esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
@@ -615,6 +619,10 @@ static esp_err_t start_discovery(void){
     }
     if (s_scanning) {
         ESP_LOGI(TAG, "start_discovery: already scanning");
+        // Re-assert discovery state so UI/HUD do not remain in IDLE while
+        // inquiry is active.
+        set_state(BT_AUDIO_STATE_DISCOVERING);
+        set_connection(SYS_CONN_CONNECTING);
         return ESP_OK;
     }
     s_scanning = true;
@@ -625,7 +633,9 @@ static esp_err_t start_discovery(void){
     esp_err_t err = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 5, 0);
     if (err != ESP_OK){
         ESP_LOGE(TAG, "discovery start err %s", esp_err_to_name(err));
+        s_scanning = false;
         set_state(BT_AUDIO_STATE_FAILED);
+        set_connection(SYS_CONN_DISCONNECTED);
     }
     return err;
 }
