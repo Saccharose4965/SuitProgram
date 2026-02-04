@@ -36,7 +36,7 @@ Apps and key bindings
 - Status: shows LED label, three battery bars, link path/state, and clock; long A -> menu.
 - Volume: B louder, C quieter, D mute/unmute (syncs BT and local audio gains); long top-combo -> menu.
 - LEDs: B/C = prev/next mode, D = apply; D long toggles beat sync; B/C long raise/lower brightness; A long -> menu. Modes: idle/off, breathe, rainbow, beatwave (uses FFT beat queue when sync on), planes (placeholder layout).
-- Music: mounts `/sdcard`, lists up to 100 WAV (PCM16 mono); A/B move selection, C toggles play/pause on current, D (re)starts selection, D long = stop, A long -> menu. Streams to BT sink if connected else local amp.
+- Music: mounts `/sdcard`, lists up to 100 WAV (PCM16 mono); A/B move selection, C toggles play/pause on current, D (re)starts selection, D long = stop, A long -> menu. Streams to BT sink if connected else local amp. BT pause/disconnect captures a resume offset so the same track can continue later.
 - Bluetooth: A up, B down, C = rescan, D = connect/disconnect (disconnect if current peer), D long = force disconnect; list includes current peer even if not discovered.
 - FFT viewer: B/C cycle views (BPM text, spectrum, spectrogram, novelty peaks, flux, tempo raw/comb, phase comb); A long -> menu.
 - Fluid: accel-driven 2D fluid; A/B/C/D move emitter, B+C dumps ink, D long resets, long A -> menu.
@@ -62,7 +62,7 @@ Storage / audio / sensing
 - Storage: SDSPI mount retries 20/10/5/2/0.4 MHz; helper to list directories; boot counter stored at `/sdcard/.rec_counter`.
 - Audio core: shared I2S0 for amp + mic; `audio_set_rate` retimes TX/RX; playback supports PCM16 mono WAV from file/memory, tones, and an embedded sample. Volume is Q1.15 gain. TX mute pin optional via config.
 - Audio capture: PSRAM-backed mono ring buffer at 48 kHz (default ~0.5 s) with `audio_capture_read_latest` helper and stats export.
-- Audio player + BT: `audio_player` streams WAVs to A2DP sinks via `bt_audio` when available, else plays locally; BT device scan/list UI exposed in shell.
+- Audio player + BT: `audio_player` streams WAVs to A2DP sinks via `bt_audio` when available, else plays locally; BT device scan/list UI exposed in shell. Tracks BT playback progress for resume on pause/disconnect and exposes a small in-RAM queue API (play now/next/last).
 - Microphone: recorder writes 16-bit mono WAV to `/sdcard/rec_XXXXX.wav` at 44.1 kHz (slot auto-picked by energy), handles zero-checks, and exposes last path for telemetry send.
 - FFT: continuous mic sampler + beat/BPM detector, novelty history, multiple OLED views; exports beat events for LED beatwave mode and lets callers zero novelty (`fft_punch_novelty_hole`).
 - Power: pack voltage sensing only; current sensing TODO. Divider ratio and cell thresholds configurable (menuconfig) or hardcoded fallback (6.0x, 3.30-4.15 V).
@@ -84,6 +84,7 @@ Power / thermal notes
 
 Open TODO / wishlist
 --------------------
+- separate the volume settings between volume for the imbeded speaker and the bluetooth volume
 - games sfx
 - Menu/UI: replace placeholder icons, measure real ladder voltages and tighten combo thresholds; optionally show GPS time status flag and link quality.
 - Shell plumbing: wire GPS/message/call menu items to real apps or hide them; surface audio_rx status/controls.
@@ -94,6 +95,7 @@ Open TODO / wishlist
 - Extras: costume/LED/audio preset randomizer, Tournai map on OLED, IMU fusion for limb pose to drive LEDs/stick, task priority/core pinning guidance for FreeRTOS.
 - fix audio recording and calls
 - fix fft postprocessing, for now the selected BPM is flickering, we need to have a more robust BPM identification.
+- create audio file that when displayed on the spectrogram, spell out words, as hidden messages
 
 Task core pinning / priorities (FreeRTOS)
 -----------------------------------------

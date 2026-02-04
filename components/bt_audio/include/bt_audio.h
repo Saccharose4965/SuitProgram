@@ -72,6 +72,9 @@ esp_err_t bt_audio_feed_pcm(const int16_t *stereo, size_t frames);
 // Quick check: true when stack is ready and a peer is connected/streamable.
 bool bt_audio_can_stream(void);
 bool bt_audio_media_cmd_pending(void);
+// Playback progress for the current BT WAV stream (bytes in data chunk).
+// Returns false if no BT file-backed playback is active.
+bool bt_audio_get_playback_progress(uint32_t *out_total_bytes, uint32_t *out_bytes_left);
 
 // Stream a WAV file directly from FILE* via the A2DP data callback (16-bit PCM).
 esp_err_t bt_audio_play_wav(FILE *fp,

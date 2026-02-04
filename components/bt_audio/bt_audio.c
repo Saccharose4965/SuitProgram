@@ -147,6 +147,7 @@ static void avrc_tg_cb(esp_avrc_tg_cb_event_t event,
 // ============================ File-backed source ============================
 static FILE    *s_bt_fp             = NULL;
 static uint32_t s_bt_bytes_left     = 0;
+static uint32_t s_bt_bytes_total    = 0;
 static uint16_t s_bt_channels       = 2;
 static uint16_t s_bt_bits_per_sample= 16;
 static uint32_t s_bt_sample_rate    = 44100;
@@ -227,6 +228,7 @@ static void close_bt_file_locked(void){
         s_bt_fp = NULL;
     }
     s_bt_bytes_left = 0;
+    s_bt_bytes_total = 0;
 }
 
 static void close_bt_file(void){
@@ -666,6 +668,7 @@ esp_err_t bt_audio_play_wav(FILE *fp,
 
     s_bt_fp             = fp;
     s_bt_bytes_left     = data_size;
+    s_bt_bytes_total    = data_size;
     s_bt_channels       = num_channels;
     s_bt_bits_per_sample= bits_per_sample;
     s_bt_sample_rate    = sample_rate;
@@ -1055,6 +1058,19 @@ bool bt_audio_can_stream(void){
 bool bt_audio_media_cmd_pending(void)
 {
     return s_media_cmd_pending;
+}
+
+bool bt_audio_get_playback_progress(uint32_t *out_total_bytes, uint32_t *out_bytes_left)
+{
+    if (!out_total_bytes || !out_bytes_left) return false;
+    if (!s_bt_fp || s_bt_bytes_total == 0) {
+        *out_total_bytes = 0;
+        *out_bytes_left = 0;
+        return false;
+    }
+    *out_total_bytes = s_bt_bytes_total;
+    *out_bytes_left = s_bt_bytes_left;
+    return true;
 }
 
 void bt_audio_volume_set_percent(int percent)
