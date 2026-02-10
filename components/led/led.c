@@ -24,12 +24,7 @@
 #define LED_MAX_FPS 30
 #endif
 
-#define LED_ACTIVE_COUNT   LED_STRIP_LENGTH
-#define LED_PHYSICAL_COUNT LED_STRIP_PHYSICAL_LENGTH
-
-#if LED_ACTIVE_COUNT > LED_PHYSICAL_COUNT
-#error "LED_STRIP_LENGTH must be <= LED_STRIP_PHYSICAL_LENGTH"
-#endif
+#define LED_COUNT LED_STRIP_LENGTH
 
 #define LED_ON_INTENSITY 32
 
@@ -38,7 +33,7 @@
 #endif
 
 #ifndef LED_TEST_PIXELS
-#define LED_TEST_PIXELS 144
+#define LED_TEST_PIXELS 300
 #endif
 
 #ifndef LED_TEST_STEP_MS
@@ -213,7 +208,7 @@ typedef struct {
 } led_pulse_t;
 
 static led_pulse_t s_pulses[4];
-static uint8_t *s_frame = NULL;        // Packed data for entire strip (LED_COLOR_ORDER)
+static uint8_t *s_frame = NULL;        // Packed data for entire strip (RGB)
 static StaticSemaphore_t s_pulse_lock_buf;
 static SemaphoreHandle_t s_pulse_lock = NULL;
 static TaskHandle_t s_pulse_task = NULL;
@@ -284,7 +279,7 @@ static esp_err_t led_flush_locked(const uint8_t *grb, size_t len_bytes, bool loc
 static esp_err_t led_submit_async_locked(const uint8_t *grb, size_t len_bytes){
     if (!grb) return ESP_ERR_INVALID_ARG;
     if (!s_inited || !s_frame) return ESP_ERR_INVALID_STATE;
-    size_t max_bytes = LED_PHYSICAL_COUNT * 3;
+    size_t max_bytes = LED_COUNT * 3;
     if (len_bytes < 3) len_bytes = 3;
     if (len_bytes > max_bytes) len_bytes = max_bytes;
 
@@ -309,7 +304,7 @@ static esp_err_t led_submit_async(const uint8_t *grb, size_t len_bytes){
 
 static void led_tx_task(void *arg){
     (void)arg;
-    const int64_t wire_frame_us = ((int64_t)LED_PHYSICAL_COUNT * 30LL) + 300LL; // 24 bits @1.25us + reset
+    const int64_t wire_frame_us = ((int64_t)LED_COUNT * 30LL) + 300LL; // 24 bits @1.25us + reset
     const int64_t fps_frame_us = 1000000LL / (int64_t)LED_MAX_FPS;
     const int64_t min_frame_us = (wire_frame_us > fps_frame_us) ? wire_frame_us : fps_frame_us;
     int64_t next_tx_us = 0;
@@ -335,7 +330,7 @@ static void led_tx_task(void *arg){
         if (led_lock() == ESP_OK){
             len_bytes = s_tx_len_bytes;
             if (len_bytes < 3) len_bytes = 3;
-            if (len_bytes > LED_PHYSICAL_COUNT * 3) len_bytes = LED_PHYSICAL_COUNT * 3;
+            if (len_bytes > LED_COUNT * 3) len_bytes = LED_COUNT * 3;
             memcpy(s_tx_shadow, s_frame, len_bytes);
             led_unlock();
         } else {
@@ -356,26 +351,26 @@ static void led_test_delay_ms(uint32_t ms){
 }
 
 static esp_err_t led_test_show_prefix(uint8_t r, uint8_t g, uint8_t b, size_t lit_count){
-    if (lit_count > LED_ACTIVE_COUNT) lit_count = LED_ACTIVE_COUNT;
+    if (lit_count > LED_COUNT) lit_count = LED_COUNT;
     ESP_RETURN_ON_ERROR(led_lock(), "led", "lock");
-    memset(s_frame, 0, LED_PHYSICAL_COUNT * 3);
+    memset(s_frame, 0, LED_COUNT * 3);
     for (size_t i = 0; i < lit_count; ++i){
         led_set_pixel_rgb(s_frame, i, r, g, b);
     }
-    esp_err_t err = led_flush_locked(s_frame, LED_PHYSICAL_COUNT * 3, true);
+    esp_err_t err = led_flush_locked(s_frame, LED_COUNT * 3, true);
     led_unlock();
     return err;
 }
 
 static esp_err_t led_test_show_chase(uint8_t r, uint8_t g, uint8_t b, size_t span, size_t pos){
-    if (span > LED_ACTIVE_COUNT) span = LED_ACTIVE_COUNT;
+    if (span > LED_COUNT) span = LED_COUNT;
     ESP_RETURN_ON_ERROR(led_lock(), "led", "lock");
-    memset(s_frame, 0, LED_PHYSICAL_COUNT * 3);
+    memset(s_frame, 0, LED_COUNT * 3);
     if (span > 0){
         size_t p = pos % span;
         led_set_pixel_rgb(s_frame, p, r, g, b);
     }
-    esp_err_t err = led_flush_locked(s_frame, LED_PHYSICAL_COUNT * 3, true);
+    esp_err_t err = led_flush_locked(s_frame, LED_COUNT * 3, true);
     led_unlock();
     return err;
 }
@@ -388,7 +383,7 @@ esp_err_t led_run_test_pattern(void){
 
     size_t test_pixels = LED_TEST_PIXELS;
     if (test_pixels < 1) test_pixels = 1;
-    if (test_pixels > LED_ACTIVE_COUNT) test_pixels = LED_ACTIVE_COUNT;
+    if (test_pixels > LED_COUNT) test_pixels = LED_COUNT;
     uint8_t v = LED_TEST_BRIGHTNESS;
 
     ESP_RETURN_ON_ERROR(led_test_show_prefix(v, 0, 0, test_pixels), "led", "test red");
@@ -405,7 +400,7 @@ esp_err_t led_run_test_pattern(void){
         led_test_delay_ms(LED_TEST_CHASE_STEP_MS);
     }
 
-    ESP_RETURN_ON_ERROR(led_test_show_prefix(0, 0, 0, LED_ACTIVE_COUNT), "led", "test off");
+    ESP_RETURN_ON_ERROR(led_test_show_prefix(0, 0, 0, LED_COUNT), "led", "test off");
     return ESP_OK;
 }
 
@@ -447,22 +442,22 @@ esp_err_t led_init(void){
     (void)gpio_set_drive_capability((gpio_num_t)PIN_LED_STRIP_A, GPIO_DRIVE_CAP_3);
 
     if (!s_frame) {
-        s_frame = heap_caps_malloc(LED_PHYSICAL_COUNT * 3, MALLOC_CAP_DEFAULT);
+        s_frame = heap_caps_malloc(LED_COUNT * 3, MALLOC_CAP_DEFAULT);
     }
     if (!s_frame) {
         led_unlock();
         return ESP_ERR_NO_MEM;
     }
     if (!s_tx_shadow){
-        s_tx_shadow = heap_caps_malloc(LED_PHYSICAL_COUNT * 3, MALLOC_CAP_DEFAULT);
+        s_tx_shadow = heap_caps_malloc(LED_COUNT * 3, MALLOC_CAP_DEFAULT);
         if (!s_tx_shadow){
             led_unlock();
             return ESP_ERR_NO_MEM;
         }
     }
     // Clear strip
-    memset(s_frame, 0, LED_PHYSICAL_COUNT * 3);
-    err = led_flush_locked(s_frame, LED_PHYSICAL_COUNT * 3, true);
+    memset(s_frame, 0, LED_COUNT * 3);
+    err = led_flush_locked(s_frame, LED_COUNT * 3, true);
     if (err != ESP_OK) {
         // Don't hard-fail init on clear timeout: allow later pulses to run with
         // shorter frames for bring-up diagnostics.
@@ -487,7 +482,7 @@ esp_err_t led_init(void){
         }
     }
     if (!s_pulse_frame) {
-        s_pulse_frame = heap_caps_malloc(LED_PHYSICAL_COUNT * 3, MALLOC_CAP_DEFAULT);
+        s_pulse_frame = heap_caps_malloc(LED_COUNT * 3, MALLOC_CAP_DEFAULT);
         if (!s_pulse_frame) {
             led_unlock();
             return ESP_ERR_NO_MEM;
@@ -501,19 +496,19 @@ esp_err_t led_init(void){
             return ESP_ERR_NO_MEM;
         }
     }
-    ESP_LOGI(TAG, "LED lengths: active=%u physical=%u",
-             (unsigned)LED_ACTIVE_COUNT, (unsigned)LED_PHYSICAL_COUNT);
+    ESP_LOGI(TAG, "LED count: %u", (unsigned)LED_COUNT);
+    ESP_LOGI(TAG, "LED color order: RGB");
     led_unlock();
     return ESP_OK;
 }
 
 static esp_err_t led_send_all(uint8_t r, uint8_t g, uint8_t b){
     ESP_RETURN_ON_ERROR(led_lock(), "led", "lock");
-    memset(s_frame, 0, LED_PHYSICAL_COUNT * 3);
-    for (int i = 0; i < LED_ACTIVE_COUNT; ++i){
+    memset(s_frame, 0, LED_COUNT * 3);
+    for (int i = 0; i < LED_COUNT; ++i){
         led_set_pixel_rgb(s_frame, (size_t)i, r, g, b);
     }
-    esp_err_t err = led_submit_async_locked(s_frame, LED_PHYSICAL_COUNT * 3);
+    esp_err_t err = led_submit_async_locked(s_frame, LED_COUNT * 3);
     led_unlock();
     return err;
 }
@@ -534,7 +529,7 @@ esp_err_t led_toggle(void){
 
 esp_err_t led_show_pixels(const uint8_t *frame, size_t count){
     if (!frame) return ESP_ERR_INVALID_ARG;
-    if (count > LED_ACTIVE_COUNT) count = LED_ACTIVE_COUNT;
+    if (count > LED_COUNT) count = LED_COUNT;
     return led_submit_async(frame, count * 3);
 }
  
@@ -579,18 +574,18 @@ static void led_pulse_spawn(uint8_t r, uint8_t g, uint8_t b){
 
 static bool led_pulse_step_locked(void){
     bool any_active = false;
-    memset(s_pulse_frame, 0, LED_PHYSICAL_COUNT * 3);
+    memset(s_pulse_frame, 0, LED_COUNT * 3);
     for (size_t i = 0; i < sizeof(s_pulses)/sizeof(s_pulses[0]); ++i){
         led_pulse_t *p = &s_pulses[i];
         if (!p->active) continue;
         p->pos += kLedPulseSpeed * kLedPulseDt;
         p->amp *= kLedPulseDecay;
-        if (p->pos > (float)LED_ACTIVE_COUNT + kLedPulseWidth || p->amp < kLedPulseFloor){
+        if (p->pos > (float)LED_COUNT + kLedPulseWidth || p->amp < kLedPulseFloor){
             p->active = false;
             continue;
         }
         any_active = true;
-        for (int led = 0; led < LED_ACTIVE_COUNT; ++led){
+        for (int led = 0; led < LED_COUNT; ++led){
             float d = fabsf((float)led - p->pos);
             float w = expf(-d / kLedPulseWidth);
             float v = p->amp * w;
@@ -615,7 +610,7 @@ static bool led_pulse_step_locked(void){
         }
     }
     if (s_flash_ticks > 0){
-        for (int led = 0; led < LED_ACTIVE_COUNT; ++led){
+        for (int led = 0; led < LED_COUNT; ++led){
             led_set_pixel_rgb(s_pulse_frame, (size_t)led, s_flash_r, s_flash_g, s_flash_b);
         }
         s_flash_ticks--;
@@ -635,12 +630,12 @@ static void led_pulse_task(void *arg){
         }
         if (active){
             // Push the pulse frame directly (no intermediate memcpy path).
-            if (led_submit_async(s_pulse_frame, LED_PHYSICAL_COUNT * 3) == ESP_OK){
+            if (led_submit_async(s_pulse_frame, LED_COUNT * 3) == ESP_OK){
                 s_pulse_was_on = true;
             }
         } else if (s_pulse_was_on){
-            memset(s_pulse_frame, 0, LED_PHYSICAL_COUNT * 3);
-            if (led_submit_async(s_pulse_frame, LED_PHYSICAL_COUNT * 3) == ESP_OK){
+            memset(s_pulse_frame, 0, LED_COUNT * 3);
+            if (led_submit_async(s_pulse_frame, LED_COUNT * 3) == ESP_OK){
                 s_pulse_was_on = false;
             }
         }

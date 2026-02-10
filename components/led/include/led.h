@@ -11,24 +11,12 @@ extern "C" {
 // Initialize the WS2812B strip on PIN_LED_STRIP_A / GPIO32.
 esp_err_t led_init(void);
 
-// Active LEDs used by effects/rendering.
-// This is the range you typically tune during bring-up (e.g. 144).
+// LED strip length used by effects/rendering and transmission.
 #ifndef LED_STRIP_LENGTH
-#define LED_STRIP_LENGTH 1400
+#define LED_STRIP_LENGTH 300
 #endif
 
-// Total physical LEDs in the chain.
-// Driver will always transmit/clear this many to keep tail LEDs latched off.
-#ifndef LED_STRIP_PHYSICAL_LENGTH
-#define LED_STRIP_PHYSICAL_LENGTH LED_STRIP_LENGTH
-#endif
-
-// Strip byte order on the data line.
-#define LED_COLOR_ORDER_GRB 0
-#define LED_COLOR_ORDER_RGB 1
-#ifndef LED_COLOR_ORDER
-#define LED_COLOR_ORDER LED_COLOR_ORDER_GRB
-#endif
+// Strip byte order is fixed to RGB for this hardware.
 
 static inline size_t led_pixel_offset(size_t pixel_index)
 {
@@ -37,30 +25,18 @@ static inline size_t led_pixel_offset(size_t pixel_index)
 
 // Canonical color-order adapter. All LED writers should go through this.
 static inline void led_pack_rgb(uint8_t *buf, size_t idx, uint8_t r, uint8_t g, uint8_t b){
-#if LED_COLOR_ORDER == LED_COLOR_ORDER_GRB
-    buf[idx + 0] = g;
-    buf[idx + 1] = r;
-    buf[idx + 2] = b;
-#else
     buf[idx + 0] = r;
     buf[idx + 1] = g;
     buf[idx + 2] = b;
-#endif
 }
 
 // Inverse mapping from the strip order back to RGB.
 static inline void led_unpack_rgb(const uint8_t *buf, size_t idx,
                                   uint8_t *r, uint8_t *g, uint8_t *b)
 {
-#if LED_COLOR_ORDER == LED_COLOR_ORDER_GRB
-    if (g) *g = buf[idx + 0];
-    if (r) *r = buf[idx + 1];
-    if (b) *b = buf[idx + 2];
-#else
     if (r) *r = buf[idx + 0];
     if (g) *g = buf[idx + 1];
     if (b) *b = buf[idx + 2];
-#endif
 }
 
 static inline void led_set_pixel_rgb(uint8_t *buf, size_t pixel_index,
@@ -78,7 +54,7 @@ static inline void led_get_pixel_rgb(const uint8_t *buf, size_t pixel_index,
 // Drive the LED on (true) or off (false).
 esp_err_t led_set(bool on);
 
-// Push a full frame in configured strip byte order (LED_COLOR_ORDER).
+// Push a full frame in strip byte order (fixed RGB).
 // Missing pixels will be cleared; excess is ignored.
 esp_err_t led_show_pixels(const uint8_t *frame, size_t count);
 

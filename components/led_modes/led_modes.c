@@ -36,7 +36,7 @@ static bool s_sync_enabled = true;
 static uint8_t s_brightness = 96;
 
 #ifndef LED_CUSTOM_RENDER_PIXELS
-#define LED_CUSTOM_RENDER_PIXELS 144
+#define LED_CUSTOM_RENDER_PIXELS LED_STRIP_LENGTH
 #endif
 
 #ifndef LED_MODES_BASE_PERIOD_MS
@@ -75,7 +75,7 @@ static size_t custom_render_pixels(void)
 static TickType_t custom_period_ticks(void)
 {
     uint32_t period_ms = LED_MODES_BASE_PERIOD_MS;
-    uint32_t wire_us = (uint32_t)LED_STRIP_PHYSICAL_LENGTH * 30u + 300u;
+    uint32_t wire_us = (uint32_t)LED_STRIP_LENGTH * 30u + 300u;
     uint32_t wire_ms = (wire_us + 2000u + 999u) / 1000u; // include a small margin
     if (period_ms < wire_ms) period_ms = wire_ms;
     TickType_t ticks = pdMS_TO_TICKS(period_ms);
