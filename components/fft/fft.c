@@ -28,18 +28,14 @@ static const int   kFlashFrames   = 5;      // frames to hold beat flash
 static const float kNoveltyMeanOffset = 0.02f; // lifts rolling mean slightly to gate quiet peaks
 static const float kHopRate_nominal = (float)SAMPLE_RATE_HZ / (float)HOP_SAMPLES; // nominal hop rate (62.5 Hz)
 static const int   kTempoUpdateIntervalFrames = FPS/2; // update tempo estimate twice per second
+#define BPM_SCORE_WINDOW_UPDATES 8 // ~4s at 2 tempo updates/sec
 
 // ------------------- DSP tuning -------------------
 static const float kGlobalCombMin        = 0.01f;
-static const float kPeakFracOfGlobal     = 0.25f;
-static const float kHarmonicRatioTol     = 0.08f;
-static const float kSpecialRatioTol      = 0.15f;
 static const float kNoveltyZeroThreshold = 400.0f;
-static const float kEnterConf            = 0.30f;
-static const float kExitConf             = 0.18f;
 static const float kOverallMinConf       = 0.25f;
-static const float kPeakAvgMultiplier    = 10.0f; // peaks must be >= this × average comb energy
-//static const float kPhaseSteerGain       = 0.01f; // small nudge toward phase=0.5
+static const float kFamilyTauUpSec       = 0.35f;
+static const float kFamilyTauDownSec     = 1.20f;
 
 // ------------------- FFT core -------------------
 static void fft_radix2(float re[], float im[], int n){
@@ -110,15 +106,12 @@ static QueueHandle_t s_beat_queue = NULL;
 static int      g_nov_hole_frames = 0;  // number of upcoming frames to zero novelty
 
 // ------------------- BPM export and smoothing -------------------
-#define MAX_BPM_PEAKS   8      // internal peaks we consider from comb
 #define MAX_BPM_EXPORT  3      // export at most 3 BPMs (fundamental, double, special)
 #define BPM_AVG_FRAMES  6      // rolling average length for main BPM
 #define PHASE_SLOTS     32     // downsampled phase bins for display
 static float g_bpm_list[MAX_BPM_EXPORT];
 static float g_bpm_conf_list[MAX_BPM_EXPORT];
 static int   g_bpm_list_count = 0;
-static float g_prev_export_bpm[MAX_BPM_EXPORT];
-static int   g_prev_export_count = 0;
 
 // history of the fundamental BPM per tempo-update frame
 static EXT_RAM_BSS_ATTR float g_fund_hist[BPM_AVG_FRAMES];
@@ -126,6 +119,11 @@ static int   g_fund_hist_pos   = 0;
 static int   g_fund_hist_count = 0;
 static EXT_RAM_BSS_ATTR float   g_phase_curve[PHASE_SLOTS];
 static uint8_t g_phase_curve_len = 0;
+static EXT_RAM_BSS_ATTR float g_family_spec_smooth[BPM_MAX - BPM_MIN + 1];
+static EXT_RAM_BSS_ATTR float g_bpm_score_hist[BPM_SCORE_WINDOW_UPDATES][BPM_MAX - BPM_MIN + 1];
+static EXT_RAM_BSS_ATTR float g_bpm_score_sum[BPM_MAX - BPM_MIN + 1];
+static int g_bpm_score_hist_idx = 0;
+static int g_bpm_score_hist_count = 0;
 
 // Rolling average of recent fundamental estimates
 static float update_fund_history(float bpm_inst){
@@ -149,11 +147,14 @@ static void bpm_soft_decay_and_reset(void){
     g_bpm_stable_frames = 0;
     g_fund_hist_count = 0;
     g_fund_hist_pos   = 0;
-    g_prev_export_count = 0;
     g_bpm_list_count = 0;
     g_bpm_hz    = 0.0f;
     g_bpm_phase = 0.0f;
     g_phase_curve_len = 0;
+    g_bpm_score_hist_idx = 0;
+    g_bpm_score_hist_count = 0;
+    memset(g_bpm_score_hist, 0, sizeof(g_bpm_score_hist));
+    memset(g_bpm_score_sum, 0, sizeof(g_bpm_score_sum));
 }
 
 // Public hook: zero novelty for the next `frames` updates to ignore button-induced spikes
@@ -205,18 +206,6 @@ static float novelty_local_mean(float v){
     g_local_idx = (g_local_idx + 1) % NOVELTY_WIN;
     return g_local_sum / (float)NOVELTY_WIN + kNoveltyMeanOffset;
 }
-
-typedef struct {
-    float bpm;
-    float val;   // raw comb value
-} bpm_peak_t;
-
-typedef struct {
-    float base_bpm;     // fundamental candidate (lowest in family)
-    float energy;       // accumulated comb energy
-    float best_double;  // best 2× bpm found, 0 if none
-    float best_special; // best special-ratio bpm found, 0 if none
-} bpm_family_t;
 
 // ------------------- Novelty history + display -------------------
 static void push_novelty(float raw, float local_mean){
@@ -309,6 +298,60 @@ static void comb_bpm_from_novelty(const float *nov, int N, float frameRate, floa
     }
 }
 
+static inline float bpm_bc_at(const float *bc, float bpm){
+    if (bpm < (float)BPM_MIN || bpm > (float)BPM_MAX) return 0.0f;
+
+    float idx = bpm - (float)BPM_MIN;
+    int i0 = (int)floorf(idx);
+    int i1 = i0 + 1;
+    int maxIdx = BPM_MAX - BPM_MIN;
+
+    if (i0 < 0) i0 = 0;
+    if (i0 > maxIdx) i0 = maxIdx;
+    if (i1 < 0) i1 = 0;
+    if (i1 > maxIdx) i1 = maxIdx;
+
+    float t = idx - (float)i0;
+    return bc[i0] * (1.0f - t) + bc[i1] * t;
+}
+
+static void bpm_family_spectrum_from_bc(const float *bc, int bpmCount, float *famOut){
+    const float wHalf = 0.50f; // requested 1/2 BPM gather term
+    const float w1    = 1.00f;
+    const float w2    = 0.65f;
+    const float w4    = 0.45f;
+
+    for (int i = 0; i < bpmCount; ++i){
+        float F = (float)(BPM_MIN + i);
+        float s = 0.0f;
+
+        s += wHalf * bpm_bc_at(bc, 0.5f * F);
+        s += w1    * bpm_bc_at(bc, F);
+        s += w2    * bpm_bc_at(bc, 2.0f * F);
+        s += w4    * bpm_bc_at(bc, 4.0f * F);
+
+        famOut[i] = s;
+    }
+}
+
+static inline float alpha_from_tau(float dt, float tau){
+    if (tau <= 1e-6f) return 1.0f;
+    return 1.0f - expf(-dt / tau);
+}
+
+static void smooth_spectrum_asym_tau(const float *in, float *state, int n,
+                                     float dt, float tauUp, float tauDown){
+    float aUp = alpha_from_tau(dt, tauUp);
+    float aDown = alpha_from_tau(dt, tauDown);
+
+    for (int i = 0; i < n; ++i){
+        float x = in[i];
+        float y = state[i];
+        float a = (x > y) ? aUp : aDown;
+        state[i] = (1.0f - a) * y + a * x;
+    }
+}
+
 static void compute_phase_curve_for_bpm(const float *nov, int N,
                                         float frameRate, float bpm,
                                         float *outSlots, uint8_t *outCount)
@@ -398,6 +441,8 @@ static void update_bpm_from_novelty(void){
     static EXT_RAM_BSS_ATTR float bpmSpec[BPM_MAX - BPM_MIN + 1];
     static EXT_RAM_BSS_ATTR float bpmPhase[BPM_MAX - BPM_MIN + 1];
     static EXT_RAM_BSS_ATTR float bpmSpecBC[BPM_MAX - BPM_MIN + 1];
+    static EXT_RAM_BSS_ATTR float bpmFamily[BPM_MAX - BPM_MIN + 1];
+    static EXT_RAM_BSS_ATTR float bpmWindowAvg[BPM_MAX - BPM_MIN + 1];
 
     comb_bpm_from_novelty(nov_history, history_len, frameRate,
                               bpmSpec, bpmPhase);
@@ -425,211 +470,68 @@ static void update_bpm_from_novelty(void){
         bpmSpecBC[i] = v;
     }
 
-    // 5) Map baseline-corrected BPM spectrum → display arrays (30..286 BPM across PANEL_W)
-    fft_render_update_tempo_spectrum(bpmSpecBC);
+    bpm_family_spectrum_from_bc(bpmSpecBC, bpmCount, bpmFamily);
 
-    // ------------------- Peak extraction from comb spectrum -------------------
-    float globalMax = 0.0f;
-    float sumSpec   = 0.0f;
+    float dt = 1.0f / frameRate;
+    smooth_spectrum_asym_tau(bpmFamily, g_family_spec_smooth, bpmCount,
+                             dt, kFamilyTauUpSec, kFamilyTauDownSec);
+
+    int next_count = (g_bpm_score_hist_count < BPM_SCORE_WINDOW_UPDATES)
+                        ? (g_bpm_score_hist_count + 1)
+                        : BPM_SCORE_WINDOW_UPDATES;
     for (int i = 0; i < bpmCount; ++i){
-        float v = bpmSpecBC[i];
-        sumSpec += v;
-        if (v > globalMax) globalMax = v;
+        float v = bpmFamily[i];
+        if (v < 0.0f) v = 0.0f;
+        float old = (g_bpm_score_hist_count < BPM_SCORE_WINDOW_UPDATES)
+                    ? 0.0f
+                    : g_bpm_score_hist[g_bpm_score_hist_idx][i];
+        g_bpm_score_hist[g_bpm_score_hist_idx][i] = v;
+        g_bpm_score_sum[i] += v - old;
+        bpmWindowAvg[i] = g_bpm_score_sum[i] / (float)next_count;
     }
-    float avgSpec = (bpmCount > 0) ? (sumSpec / (float)bpmCount) : 0.0f;
+    g_bpm_score_hist_idx = (g_bpm_score_hist_idx + 1) % BPM_SCORE_WINDOW_UPDATES;
+    g_bpm_score_hist_count = next_count;
 
-    g_bpm_list_count = 0;
+    // Render the same windowed score map used by BPM picking.
+    fft_render_update_tempo_spectrum(bpmWindowAvg);
 
-    // If there's basically no energy, bail out early (too quiet / no beat)
-    if (globalMax < kGlobalCombMin){
+    int targetMinIdx = TARGET_BPM_MIN - BPM_MIN;
+    int targetMaxIdx = TARGET_BPM_MAX - BPM_MIN;
+    if (targetMinIdx < 0) targetMinIdx = 0;
+    if (targetMaxIdx >= bpmCount) targetMaxIdx = bpmCount - 1;
+    if (targetMaxIdx < targetMinIdx){
         bpm_soft_decay_and_reset();
         return;
     }
 
-    // 1) Extract local peaks in baseline-corrected comb
-    bpm_peak_t peaks[MAX_BPM_PEAKS];
-    int        peakCount = 0;
+    int bestIdx = targetMinIdx;
+    float bestScore = 0.0f;
+    float targetSum = 0.0f;
+    int targetCount = 0;
 
-    for (int i = 1; i < bpmCount - 1; ++i){
-        float v = bpmSpecBC[i];
-        if (v <= 0.0f) continue;
-        if (v < kPeakFracOfGlobal * globalMax) continue;
-        if (avgSpec > 0.0f && v < kPeakAvgMultiplier * avgSpec) continue;
-        if (v <= bpmSpecBC[i - 1]) continue;
-        if (v <= bpmSpecBC[i + 1]) continue;
-
-        if (peakCount < MAX_BPM_PEAKS){
-            peaks[peakCount].bpm = (float)(BPM_MIN + i);
-            peaks[peakCount].val = v;
-            peakCount++;
+    for (int i = targetMinIdx; i <= targetMaxIdx; ++i){
+        float v = g_bpm_score_sum[i];
+        targetSum += v;
+        targetCount++;
+        if (v > bestScore){
+            bestScore = v;
+            bestIdx = i;
         }
     }
 
-    if (peakCount == 0){
+    if (bestScore < kGlobalCombMin){
         bpm_soft_decay_and_reset();
         return;
     }
 
-    // 2) Sort peaks by BPM ascending
-    for (int i = 0; i < peakCount; ++i){
-        int best = i;
-        for (int j = i + 1; j < peakCount; ++j){
-            if (peaks[j].bpm < peaks[best].bpm) best = j;
-        }
-        if (best != i){
-            bpm_peak_t tmp = peaks[i];
-            peaks[i] = peaks[best];
-            peaks[best] = tmp;
-        }
-    }
-
-    // 3) Choose fundamental by halving the strongest peak until <=130 BPM
-    int strongest = 0;
-    for (int i = 1; i < peakCount; ++i){
-        if (peaks[i].val > peaks[strongest].val) strongest = i;
-    }
-    float fund_inst = peaks[strongest].bpm;
-    while (fund_inst > 130.0f) fund_inst *= 0.5f;
-    if (fund_inst < (float)BPM_MIN) fund_inst = (float)BPM_MIN;
-
-    // 4) Attach peaks as harmonics/specials of the chosen fundamental
-    bpm_family_t fam;
-    memset(&fam, 0, sizeof(fam));
-    fam.base_bpm = fund_inst;
-
-    const float ratios[] = {1.5f, 4.0f/3.0f, 5.0f/4.0f, 3.0f};
-    const int   numRatios = sizeof(ratios)/sizeof(ratios[0]);
-
-    for (int p = 0; p < peakCount; ++p){
-        float bpm = peaks[p].bpm;
-        float val = peaks[p].val;
-
-        float r = bpm / fam.base_bpm;
-        float r_abs = (r < 0.0f) ? -r : r;
-        if (r_abs < 1.0f) r_abs = 1.0f / r_abs; // allow subharmonics treated as multiples
-
-        bool attached = false;
-        float n = floorf(r_abs + 0.5f);
-        if (n >= 1.0f && n <= 8.0f && fabsf(r_abs - n) <= kHarmonicRatioTol){
-            attached = true;
-        } else {
-            for (int k = 0; k < numRatios; ++k){
-                if (fabsf(r_abs - ratios[k]) <= kSpecialRatioTol){
-                    attached = true;
-                    if (fam.best_special == 0.0f) fam.best_special = bpm;
-                    break;
-                }
-            }
-        }
-
-        if (!attached) continue;
-
-        fam.energy += val;
-
-        if (fabsf(r_abs - 2.0f) < 0.25f){
-            if (fam.best_double == 0.0f || val > fam.energy * 0.5f) {
-                fam.best_double = bpm;
-            }
-        }
-
-        for (int k = 0; k < numRatios; ++k){
-            if (fabsf(r_abs - ratios[k]) <= kSpecialRatioTol){
-                if (fam.best_special == 0.0f) {
-                    fam.best_special = bpm;
-                }
-                break;
-            }
-        }
-    }
+    float fund_inst = (float)(BPM_MIN + bestIdx);
     float fund_avg  = update_fund_history(fund_inst);
     if (fund_avg <= 0.0f){
         bpm_soft_decay_and_reset();
         return;
     }
 
-    // 5) Fill export list (max 3 entries) with explicit ordering:
-    // [0] fundamental, [1..] harmonics, [last] special ratios.
-    int exportCount = 0;
-
-    // Fundamental always first
-    float fund_conf = fam.energy / (globalMax + 1e-6f);
-    if (fund_conf > 1.0f) fund_conf = 1.0f;
-
-    if (exportCount < MAX_BPM_EXPORT) {
-        g_bpm_list[exportCount]      = fund_avg;
-        g_bpm_conf_list[exportCount] = fund_conf;
-        exportCount++;
-    }
-
-    // Higher-frequency harmonics (currently just best_double)
-    if (fam.best_double > 0.0f && exportCount < MAX_BPM_EXPORT) {
-        g_bpm_list[exportCount]      = fam.best_double;
-        g_bpm_conf_list[exportCount] = 0.8f * fund_conf;
-        exportCount++;
-    }
-
-    // Special-ratio BPMs always come after harmonics
-    if (fam.best_special > 0.0f && exportCount < MAX_BPM_EXPORT) {
-        g_bpm_list[exportCount]      = fam.best_special;
-        g_bpm_conf_list[exportCount] = 0.7f * fund_conf;
-        exportCount++;
-    }
-
-
-    float new_bpm[MAX_BPM_EXPORT];
-    float new_conf[MAX_BPM_EXPORT];
-    int   new_count = 0;
-
-    for (int i = 0; i < exportCount; ++i){
-        float bpm  = g_bpm_list[i];
-        float conf = g_bpm_conf_list[i];
-
-        bool wasActive = false;
-        for (int j = 0; j < g_prev_export_count; ++j){
-            if (fabsf(g_prev_export_bpm[j] - bpm) < 1.0f){
-                wasActive = true;
-                break;
-            }
-        }
-
-        if ((!wasActive && conf >= kEnterConf) || (wasActive && conf >= kExitConf)){
-            if (new_count < MAX_BPM_EXPORT){
-                new_bpm[new_count]  = bpm;
-                new_conf[new_count] = conf;
-                new_count++;
-            }
-        }
-    }
-
-    memcpy(g_bpm_list, new_bpm, new_count * sizeof(float));
-    memcpy(g_bpm_conf_list, new_conf, new_count * sizeof(float));
-    g_bpm_list_count = new_count;
-
-    memcpy(g_prev_export_bpm, g_bpm_list, new_count * sizeof(float));
-    g_prev_export_count = g_bpm_list_count;
-
-    if (g_bpm_list_count == 0){
-        bpm_soft_decay_and_reset();
-        return;
-    }
-
-    float maxConf = 0.0f;
-    for (int i = 0; i < g_bpm_list_count; ++i){
-        if (g_bpm_conf_list[i] > maxConf) maxConf = g_bpm_conf_list[i];
-    }
-
-    if (maxConf < kOverallMinConf){
-        bpm_soft_decay_and_reset();
-        return;
-    }
-
-    // Confidence and stability tracking for headline BPM
-    int bestIdx = (int)lroundf(fund_inst - (float)BPM_MIN);
-    if (bestIdx < 0) bestIdx = 0;
-    if (bestIdx >= bpmCount) bestIdx = bpmCount - 1;
-
-    float bestScore = bpmSpecBC[bestIdx];
-    float avgSpecForConf = (bpmCount > 0) ? (sumSpec / (float)bpmCount) : 0.0f;
+    float avgSpecForConf = (targetCount > 0) ? (targetSum / (float)targetCount) : 0.0f;
     float spectral_conf = 0.0f;
     if (avgSpecForConf > 0.0f){
         spectral_conf = bestScore / (avgSpecForConf + 1e-6f);
@@ -639,12 +541,12 @@ static void update_bpm_from_novelty(void){
 
     const float kBpmTol = 3.0f;
     float diff = fabsf(fund_avg - g_last_cand_bpm);
-    if (g_last_cand_bpm > 0.0f && diff < kBpmTol) {
+    if (g_last_cand_bpm > 0.0f && diff < kBpmTol){
         g_bpm_stable_frames++;
     } else {
         g_bpm_stable_frames = 1;
-        g_last_cand_bpm     = fund_avg;
     }
+    g_last_cand_bpm = fund_avg;
 
     float target_stable_frames = kHopRate_nominal * 4.0f;
     if (target_stable_frames < 1.0f) target_stable_frames = 1.0f;
@@ -657,7 +559,13 @@ static void update_bpm_from_novelty(void){
     g_bpm_hz    = fund_avg / 60.0f;
     g_bpm_phase = bpmPhase[bestIdx];
 
-    // Phase curve display for the chosen fundamental (compute only for it)
+    g_bpm_list_count = 0;
+    if (g_bpm_conf >= kOverallMinConf){
+        g_bpm_list[0] = fund_avg;
+        g_bpm_conf_list[0] = g_bpm_conf;
+        g_bpm_list_count = 1;
+    }
+
     if (fund_avg > 0.0f) {
         compute_phase_curve_for_bpm(nov_history, history_len,
                                     frameRate, fund_avg,
@@ -674,12 +582,14 @@ static void update_bpm_from_novelty(void){
 // ------------------- Processing per FFT frame -------------------
 static void process_fft_frame(void){
     int64_t t0 = esp_timer_get_time();
+    float frame_dt_sec = 1.0f / kHopRate_nominal;
     // Update hop rate estimate using high-resolution timer
     if (g_last_frame_time_us != 0){
         int64_t dt_us = t0 - g_last_frame_time_us;
         if (dt_us > 500 && dt_us < 500000){ // clamp to reasonable range
             float inst_rate = 1e6f / (float)dt_us;
             g_hop_rate_hz_est = 0.9f * g_hop_rate_hz_est + 0.1f * inst_rate;
+            frame_dt_sec = (float)dt_us * 1e-6f;
         }
     }
     g_last_frame_time_us = t0;
@@ -725,26 +635,19 @@ static void process_fft_frame(void){
     }
 
     // --------- Beat blinker ---------
-    float fps_used = kHopRate_nominal;
-
-    const float kConfUse = 0.65f;
-    float target_bpm_hz = (g_bpm_conf > kConfUse && g_bpm_hz > 0.5f) ? g_bpm_hz : 0.0f;
+    // Match blinker to the currently found BPM shown to the user.
+    float target_bpm_hz = (g_last_cand_bpm > 0.5f) ? (g_last_cand_bpm / 60.0f) : 0.0f;
     bool beat_triggered = false;
 
     if (target_bpm_hz > 0.5f) {
-        if (g_blink_bpm_hz <= 0.0f) {
-            g_blink_bpm_hz = target_bpm_hz;
-        }
-
-        g_blink_rate_hz = g_blink_bpm_hz;
+        g_blink_bpm_hz = target_bpm_hz;
+        g_blink_rate_hz = target_bpm_hz;
         if (g_blink_rate_hz < 0.1f) g_blink_rate_hz = 0.1f;
 
-        g_beat_phase += g_blink_rate_hz / fps_used;
+        g_beat_phase += g_blink_rate_hz * frame_dt_sec;
         if (g_beat_phase >= 1.0f) {
-            g_beat_phase -= 1.0f;
+            g_beat_phase -= floorf(g_beat_phase);
             fft_render_trigger_flash(kFlashFrames);
-
-            g_blink_bpm_hz = target_bpm_hz;
             beat_triggered = true;
         }
     } else {
@@ -759,6 +662,12 @@ static void process_fft_frame(void){
             .confidence = g_bpm_conf
         };
         xQueueSendToBack(s_beat_queue, &evt, 0);
+    }
+    if (beat_triggered){
+        // Fixed orange pulse avoids hue flicker when confidence jitters.
+        uint8_t red   = 255;
+        uint8_t green = 96;
+        led_trigger_beat(red, green, 0);
     }
 
     fft_render_packet_t pkt = {
@@ -785,21 +694,39 @@ static void process_fft_frame(void){
 
 // ------------------- Task -------------------
 static TaskHandle_t s_task=NULL;
+static volatile bool s_stop_requested = false;
+
+#if CONFIG_FREERTOS_UNICORE
+#define FFT_TASK_CORE 0
+#else
+#define FFT_TASK_CORE 1
+#endif
+#define FFT_TASK_PRIO 4
 
 static void fft_task(void *arg){
     i2s_chan_handle_t rx = audio_rx_handle();
-    if (!rx){ ESP_LOGE(TAG,"No RX handle"); vTaskDelete(NULL); return; }
+    if (!rx){
+        ESP_LOGE(TAG,"No RX handle");
+        s_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
 
     for(int n=0;n<FFT_SIZE;++n){
         g_window[n]=0.5f*(1.0f - cosf((2.0f*(float)M_PI*n)/(float)(FFT_SIZE-1)));
     }
     const size_t in_bytes = HOP_SAMPLES * sizeof(int32_t) * 2;
     int32_t *rx32 = (int32_t*)malloc(in_bytes);
-    if (!rx32){ ESP_LOGE(TAG,"OOM"); vTaskDelete(NULL); return; }
+    if (!rx32){
+        ESP_LOGE(TAG,"OOM");
+        s_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
 
     int slot_index=0; bool slot_decided=false;
 
-    while(1){
+    while(!s_stop_requested){
         size_t nread=0;
         esp_err_t e = i2s_channel_read(rx, rx32, in_bytes, &nread, pdMS_TO_TICKS(200));
         if (e!=ESP_OK || nread==0){ vTaskDelay(pdMS_TO_TICKS(10)); continue; }
@@ -833,20 +760,39 @@ static void fft_task(void *arg){
             }
         }
     }
+    free(rx32);
+    s_task = NULL;
+    vTaskDelete(NULL);
 }
 
 esp_err_t fft_visualizer_start(void){
     if (s_task) return ESP_OK;
+    s_stop_requested = false;
     ESP_RETURN_ON_ERROR(audio_set_rate(SAMPLE_RATE_HZ), TAG, "set fs");
     ESP_RETURN_ON_ERROR(audio_enable_rx(), TAG, "enable rx");
-    led_init();
+    ESP_RETURN_ON_ERROR(led_init(), TAG, "led init");
     ESP_RETURN_ON_ERROR(fft_render_init(), TAG, "render init");
     if (!s_beat_queue){
         s_beat_queue = xQueueCreate(4, sizeof(fft_beat_event_t));
         if (!s_beat_queue) return ESP_ERR_NO_MEM;
     }
-    BaseType_t ok = xTaskCreatePinnedToCore(fft_task, "fft_vis", 12288, NULL, 5, &s_task, 1);
+    BaseType_t ok = xTaskCreatePinnedToCore(fft_task, "fft_vis", 12288, NULL,
+                                            FFT_TASK_PRIO, &s_task, FFT_TASK_CORE);
     return ok==pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+void fft_visualizer_stop(void){
+    if (!s_task) return;
+    s_stop_requested = true;
+    for (int i = 0; i < 60 && s_task; ++i){
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    if (s_task){
+        ESP_LOGW(TAG, "forcing fft task stop");
+        vTaskDelete(s_task);
+        s_task = NULL;
+    }
+    s_stop_requested = false;
 }
 
 void fft_visualizer_set_view(fft_view_t view){
