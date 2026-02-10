@@ -24,19 +24,21 @@
 #define SIM_H 64
 #define SIM_PIXELS (SIM_W * SIM_H)
 
-// Main sim constants from goatedfluidsim.txt.
-#define PARTICLE_COUNT 600
+// Tuned down for ESP32 runtime to avoid watchdog stalls.
+#define PARTICLE_COUNT 420
 #define SIM_DT 0.12f
-#define SUBSTEPS 3
-#define RELAX_ITERS 2
+#define SUBSTEPS 2
+#define RELAX_ITERS 1
 
 #define INTERACTION_RADIUS 4.0f
 #define INTERACTION_RADIUS2 (INTERACTION_RADIUS * INTERACTION_RADIUS)
+#define INV_INTERACTION_RADIUS (1.0f / INTERACTION_RADIUS)
 #define CELL_SIZE 4
 #define INV_CELL_SIZE (1.0f / (float)CELL_SIZE)
 #define GRID_W (((SIM_W) + CELL_SIZE - 1) / CELL_SIZE + 1)
 #define GRID_H (((SIM_H) + CELL_SIZE - 1) / CELL_SIZE + 1)
 #define GRID_CELLS (GRID_W * GRID_H)
+#define MAX_NEIGHBORS_PER_PARTICLE 48
 
 #define REST_DENSITY 5.0f
 #define PRESSURE_K 0.07f
@@ -115,6 +117,20 @@ static inline float frand_unit(void)
     return (float)(esp_random() & 0xFFFFu) / 65535.0f;
 }
 
+// Fast inverse sqrt to reduce expensive libm sqrtf calls in DDR hot loops.
+static inline float fast_rsqrtf(float x)
+{
+    union {
+        float f;
+        uint32_t i;
+    } u;
+    u.f = x;
+    u.i = 0x5f3759dfu - (u.i >> 1);
+    float y = u.f;
+    y = y * (1.5f - 0.5f * x * y * y);
+    return y;
+}
+
 static inline void clamp_xy(float *x, float *y)
 {
     *x = clampf(*x, 1.0f, (float)(SIM_W - 1));
@@ -175,6 +191,7 @@ static void double_density_relaxation(void)
             float dens_near = 0.0f;
             int gx = clampi((int)(s_x[i] * INV_CELL_SIZE), 0, GRID_W - 1);
             int gy = clampi((int)(s_y[i] * INV_CELL_SIZE), 0, GRID_H - 1);
+            int density_neighbors = 0;
 
             for (int yy = -1; yy <= 1; ++yy) {
                 int ny = gy + yy;
@@ -194,19 +211,24 @@ static void double_density_relaxation(void)
                         float d2 = dx * dx + dy * dy;
                         if (d2 >= INTERACTION_RADIUS2) continue;
 
-                        float d = sqrtf(d2);
-                        float q = d / INTERACTION_RADIUS;
+                        float inv_d = fast_rsqrtf(d2);
+                        float q = (d2 * inv_d) * INV_INTERACTION_RADIUS;
                         float omq = 1.0f - q;
                         dens += omq * omq;
                         dens_near += omq * omq * omq;
+                        density_neighbors++;
+                        if (density_neighbors >= MAX_NEIGHBORS_PER_PARTICLE) goto density_done;
                     }
                 }
             }
+density_done:
+            ;
 
             float pressure = PRESSURE_K * (dens - REST_DENSITY);
             float near_pressure = PRESSURE_K_NEAR * dens_near;
             float dx_sum = 0.0f;
             float dy_sum = 0.0f;
+            int disp_neighbors = 0;
 
             for (int yy = -1; yy <= 1; ++yy) {
                 int ny = gy + yy;
@@ -226,12 +248,11 @@ static void double_density_relaxation(void)
                         float d2 = dx * dx + dy * dy;
                         if (d2 >= INTERACTION_RADIUS2 || d2 == 0.0f) continue;
 
-                        float d = sqrtf(d2);
-                        float q = d / INTERACTION_RADIUS;
+                        float inv_d = fast_rsqrtf(d2);
+                        float q = (d2 * inv_d) * INV_INTERACTION_RADIUS;
                         float omq = 1.0f - q;
                         float D = (pressure * omq + near_pressure * omq * omq) * 0.5f;
 
-                        float inv_d = 1.0f / d;
                         float disp_x = dx * inv_d * D;
                         float disp_y = dy * inv_d * D;
 
@@ -239,9 +260,13 @@ static void double_density_relaxation(void)
                         s_y[j] += disp_y;
                         dx_sum -= disp_x;
                         dy_sum -= disp_y;
+                        disp_neighbors++;
+                        if (disp_neighbors >= MAX_NEIGHBORS_PER_PARTICLE) goto disp_done;
                     }
                 }
             }
+disp_done:
+            ;
 
             s_x[i] += dx_sum;
             s_y[i] += dy_sum;
