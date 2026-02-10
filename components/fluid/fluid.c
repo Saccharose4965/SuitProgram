@@ -1,73 +1,88 @@
-// Accel-driven 2D fluid sim for the 128x64 OLED.
+// Accel-driven particle fluid sim for the OLED using
+// double density relaxation (DDR), kept close to goatedfluidsim.txt.
 #include "fluid.h"
 
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "esp_err.h"
-#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_timer.h"
+#include "esp_attr.h"
 
 #include "hw.h"
 #include "mpu6500.h"
 #include "oled.h"
 
-#define W 64
-#define H 32
-#define N (W * H)
+#define SIM_W 128
+#define SIM_H 64
+#define SIM_PIXELS (SIM_W * SIM_H)
 
-#define Q8             256
-#define MAX_VEL        (4 * Q8) // ±4 cells/frame (Q8.8)
-#define GRAVITY_SCALE  6
-#define PRESSURE_ITERS 10
+// Main sim constants from goatedfluidsim.txt.
+#define PARTICLE_COUNT 600
+#define SIM_DT 0.12f
+#define SUBSTEPS 3
+#define RELAX_ITERS 2
 
-#define PSRAM_CAPS (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#define INTERACTION_RADIUS 4.0f
+#define INTERACTION_RADIUS2 (INTERACTION_RADIUS * INTERACTION_RADIUS)
+#define CELL_SIZE 4
+#define INV_CELL_SIZE (1.0f / (float)CELL_SIZE)
+#define GRID_W (((SIM_W) + CELL_SIZE - 1) / CELL_SIZE + 1)
+#define GRID_H (((SIM_H) + CELL_SIZE - 1) / CELL_SIZE + 1)
+#define GRID_CELLS (GRID_W * GRID_H)
 
-// Axes can be flipped/swapped here if the board orientation differs.
-#define GRAVITY_SIGN_X 1.0f
-#define GRAVITY_SIGN_Y 1.0f
+#define REST_DENSITY 5.0f
+#define PRESSURE_K 0.07f
+#define PRESSURE_K_NEAR 0.22f
+
+// Board axes:
+// - x points toward the bottom of the screen
+// - y points toward the right of the screen
+// Internally we simulate screen coordinates (x=right, y=down), so we map:
+//   screen_right <- board_y, screen_down <- board_x
+#define GRAVITY_SIGN_X -1.0f
+#define GRAVITY_SIGN_Y -1.0f
+#define GRAVITY_ACCEL 20.0f
 
 static const char *TAG = "fluid";
 
-// Simulation fields (PSRAM)
-static uint8_t *dens  = NULL;
-static uint8_t *dens0 = NULL;
-static int16_t *u     = NULL;
-static int16_t *v     = NULL;
-static int16_t *u0    = NULL;
-static int16_t *v0    = NULL;
-static int16_t *p     = NULL;
-static int16_t *divv  = NULL;
+// Particle state
+static float s_x[PARTICLE_COUNT];
+static float s_y[PARTICLE_COUNT];
+static float s_px[PARTICLE_COUNT];
+static float s_py[PARTICLE_COUNT];
+static float s_vx[PARTICLE_COUNT];
+static float s_vy[PARTICLE_COUNT];
 
-// Framebuffer for shell-managed blits
+// Uniform grid for neighbor search
+static int s_head[GRID_CELLS];
+static int s_next[PARTICLE_COUNT];
+
+// 1-bit liquid mask (with one-pass connectivity blur)
+static EXT_RAM_BSS_ATTR uint8_t s_mask_a[SIM_PIXELS];
+static EXT_RAM_BSS_ATTR uint8_t s_mask_b[SIM_PIXELS];
+static uint8_t *s_mask = s_mask_a;
+static uint8_t *s_mask_tmp = s_mask_b;
+
+// Framebuffer for standalone runner blits
 static uint8_t s_fb[PANEL_W * PANEL_H / 8];
 
 // IMU
 static bool s_mpu_ready = false;
 static mpu6500_t s_mpu = { .mux = portMUX_INITIALIZER_UNLOCKED };
 
-// Input / UI state
-static int s_emit_x = W / 2;
-static int s_emit_y = H / 4;
-static float s_emit_accum = 0.0f;
-static float s_step_accum = 0.0f;
-static uint64_t s_hint_until_us = 0;
-
-// Gravity low-pass (float -> Q8.8)
-static float s_gx_f = 0.0f;
-static float s_gy_f = 0.0f;
-
 // ------------------------------------------------------------------------
 // Utilities
 // ------------------------------------------------------------------------
-static inline int idx(int x, int y) { return x + y * W; }
+static inline int sim_idx(int x, int y) { return x + y * SIM_W; }
+static inline int grid_idx(int gx, int gy) { return gx + gy * GRID_W; }
 
 static inline int clampi(int v, int lo, int hi)
 {
@@ -76,16 +91,11 @@ static inline int clampi(int v, int lo, int hi)
     return v;
 }
 
-static inline int16_t clamp_q8(int32_t v)
+static inline float clampf(float v, float lo, float hi)
 {
-    if (v > MAX_VEL) return MAX_VEL;
-    if (v < -MAX_VEL) return -MAX_VEL;
-    return (int16_t)v;
-}
-
-static inline int16_t lerp16(int16_t a, int16_t b, int16_t t)
-{
-    return (int16_t)(a + ((int32_t)(b - a) * t >> 8));
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
 }
 
 static inline void fb_clear(uint8_t *fb)
@@ -100,274 +110,236 @@ static inline void fb_pset(uint8_t *fb, int x, int y)
     fb[i >> 3] |= (uint8_t)(1u << (7 - (i & 7)));
 }
 
-// ------------------------------------------------------------------------
-// Allocation / reset
-// ------------------------------------------------------------------------
-static bool alloc_fields(void)
+static inline float frand_unit(void)
 {
-    if (dens) return true; // already allocated
-
-    dens  = (uint8_t *)heap_caps_malloc(N * sizeof(uint8_t), PSRAM_CAPS);
-    dens0 = (uint8_t *)heap_caps_malloc(N * sizeof(uint8_t), PSRAM_CAPS);
-    u     = (int16_t *)heap_caps_malloc(N * sizeof(int16_t), PSRAM_CAPS);
-    v     = (int16_t *)heap_caps_malloc(N * sizeof(int16_t), PSRAM_CAPS);
-    u0    = (int16_t *)heap_caps_malloc(N * sizeof(int16_t), PSRAM_CAPS);
-    v0    = (int16_t *)heap_caps_malloc(N * sizeof(int16_t), PSRAM_CAPS);
-    p     = (int16_t *)heap_caps_malloc(N * sizeof(int16_t), PSRAM_CAPS);
-    divv  = (int16_t *)heap_caps_malloc(N * sizeof(int16_t), PSRAM_CAPS);
-
-    if (!dens || !dens0 || !u || !v || !u0 || !v0 || !p || !divv) {
-        ESP_LOGE(TAG, "PSRAM alloc failed");
-        heap_caps_free(dens);  heap_caps_free(dens0);
-        heap_caps_free(u);     heap_caps_free(v);
-        heap_caps_free(u0);    heap_caps_free(v0);
-        heap_caps_free(p);     heap_caps_free(divv);
-        dens = dens0 = NULL;
-        u = v = u0 = v0 = NULL;
-        p = divv = NULL;
-        return false;
-    }
-    return true;
+    return (float)(esp_random() & 0xFFFFu) / 65535.0f;
 }
 
-static void zero_fields(void)
+static inline void clamp_xy(float *x, float *y)
 {
-    if (!dens) return;
-    memset(dens,  0, N);
-    memset(dens0, 0, N);
-    memset(u,     0, N * sizeof(int16_t));
-    memset(v,     0, N * sizeof(int16_t));
-    memset(u0,    0, N * sizeof(int16_t));
-    memset(v0,    0, N * sizeof(int16_t));
-    memset(p,     0, N * sizeof(int16_t));
-    memset(divv,  0, N * sizeof(int16_t));
+    *x = clampf(*x, 1.0f, (float)(SIM_W - 1));
+    *y = clampf(*y, 1.0f, (float)(SIM_H - 1));
+}
+
+// ------------------------------------------------------------------------
+// Particle setup / injection
+// ------------------------------------------------------------------------
+static void seed_blob(float cx, float cy, float radius)
+{
+    for (int i = 0; i < PARTICLE_COUNT; ++i) {
+        float a = frand_unit() * 6.28318530718f;
+        float r = sqrtf(frand_unit()) * radius;
+        float x = cx + cosf(a) * r;
+        float y = cy + sinf(a) * r;
+        clamp_xy(&x, &y);
+        s_x[i] = s_px[i] = x;
+        s_y[i] = s_py[i] = y;
+        s_vx[i] = 0.0f;
+        s_vy[i] = 0.0f;
+    }
 }
 
 static void reset_sim(void)
 {
-    zero_fields();
-    s_emit_x = W / 2;
-    s_emit_y = H / 4;
-    s_emit_accum = 0.0f;
-    s_step_accum = 0.0f;
-    s_gx_f = s_gy_f = 0.0f;
+    memset(s_mask_a, 0, sizeof(s_mask_a));
+    memset(s_mask_b, 0, sizeof(s_mask_b));
+    s_mask = s_mask_a;
+    s_mask_tmp = s_mask_b;
+
+    seed_blob((float)(SIM_W / 2), (float)(SIM_H / 2), 16.0f);
 }
 
 // ------------------------------------------------------------------------
-// Sources / injection
+// Neighbor grid / DDR
 // ------------------------------------------------------------------------
-static void clamp_velocity_field(void)
+static void build_grid(void)
 {
-    for (int i = 0; i < N; ++i) {
-        u[i] = clamp_q8(u[i]);
-        v[i] = clamp_q8(v[i]);
+    for (int i = 0; i < GRID_CELLS; ++i) s_head[i] = -1;
+
+    for (int i = 0; i < PARTICLE_COUNT; ++i) {
+        int gx = clampi((int)(s_x[i] * INV_CELL_SIZE), 0, GRID_W - 1);
+        int gy = clampi((int)(s_y[i] * INV_CELL_SIZE), 0, GRID_H - 1);
+        int g = grid_idx(gx, gy);
+        s_next[i] = s_head[g];
+        s_head[g] = i;
     }
 }
 
-static void zero_boundaries(void)
+static void double_density_relaxation(void)
 {
-    for (int x = 0; x < W; ++x) {
-        int it = idx(x, 0);
-        int ib = idx(x, H - 1);
-        u[it] = v[it] = 0;
-        u[ib] = v[ib] = 0;
-        dens[it] = dens[ib] = 0;
-    }
-    for (int y = 1; y < H - 1; ++y) {
-        int il = idx(0, y);
-        int ir = idx(W - 1, y);
-        u[il] = v[il] = 0;
-        u[ir] = v[ir] = 0;
-        dens[il] = dens[ir] = 0;
-    }
-}
+    for (int iter = 0; iter < RELAX_ITERS; ++iter) {
+        build_grid();
 
-static void add_splat(int cx, int cy, int radius, int amount, int16_t push_x, int16_t push_y)
-{
-    if (!dens) return;
-    int r2 = radius * radius;
-    int x0 = clampi(cx - radius, 1, W - 2);
-    int x1 = clampi(cx + radius, 1, W - 2);
-    int y0 = clampi(cy - radius, 1, H - 2);
-    int y1 = clampi(cy + radius, 1, H - 2);
+        for (int i = 0; i < PARTICLE_COUNT; ++i) {
+            float dens = 0.0f;
+            float dens_near = 0.0f;
+            int gx = clampi((int)(s_x[i] * INV_CELL_SIZE), 0, GRID_W - 1);
+            int gy = clampi((int)(s_y[i] * INV_CELL_SIZE), 0, GRID_H - 1);
 
-    for (int y = y0; y <= y1; ++y) {
-        int dy = y - cy;
-        for (int x = x0; x <= x1; ++x) {
-            int dx = x - cx;
-            int d2 = dx * dx + dy * dy;
-            if (d2 > r2) continue;
+            for (int yy = -1; yy <= 1; ++yy) {
+                int ny = gy + yy;
+                if ((unsigned)ny >= GRID_H) continue;
+                for (int xx = -1; xx <= 1; ++xx) {
+                    int nx = gx + xx;
+                    if ((unsigned)nx >= GRID_W) continue;
 
-            int i = idx(x, y);
-            int strength = amount;
-            if (r2 > 0) {
-                strength = (amount * (r2 - d2)) / r2; // taper toward edge
+                    int h = s_head[grid_idx(nx, ny)];
+                    while (h != -1) {
+                        int j = h;
+                        h = s_next[h];
+                        if (j == i) continue;
+
+                        float dx = s_x[j] - s_x[i];
+                        float dy = s_y[j] - s_y[i];
+                        float d2 = dx * dx + dy * dy;
+                        if (d2 >= INTERACTION_RADIUS2) continue;
+
+                        float d = sqrtf(d2);
+                        float q = d / INTERACTION_RADIUS;
+                        float omq = 1.0f - q;
+                        dens += omq * omq;
+                        dens_near += omq * omq * omq;
+                    }
+                }
             }
-            int val = dens[i] + strength;
-            dens[i] = (uint8_t)(val > 255 ? 255 : val);
 
-            u[i] = clamp_q8(u[i] + push_x);
-            v[i] = clamp_q8(v[i] + push_y);
+            float pressure = PRESSURE_K * (dens - REST_DENSITY);
+            float near_pressure = PRESSURE_K_NEAR * dens_near;
+            float dx_sum = 0.0f;
+            float dy_sum = 0.0f;
+
+            for (int yy = -1; yy <= 1; ++yy) {
+                int ny = gy + yy;
+                if ((unsigned)ny >= GRID_H) continue;
+                for (int xx = -1; xx <= 1; ++xx) {
+                    int nx = gx + xx;
+                    if ((unsigned)nx >= GRID_W) continue;
+
+                    int h = s_head[grid_idx(nx, ny)];
+                    while (h != -1) {
+                        int j = h;
+                        h = s_next[h];
+                        if (j == i) continue;
+
+                        float dx = s_x[j] - s_x[i];
+                        float dy = s_y[j] - s_y[i];
+                        float d2 = dx * dx + dy * dy;
+                        if (d2 >= INTERACTION_RADIUS2 || d2 == 0.0f) continue;
+
+                        float d = sqrtf(d2);
+                        float q = d / INTERACTION_RADIUS;
+                        float omq = 1.0f - q;
+                        float D = (pressure * omq + near_pressure * omq * omq) * 0.5f;
+
+                        float inv_d = 1.0f / d;
+                        float disp_x = dx * inv_d * D;
+                        float disp_y = dy * inv_d * D;
+
+                        s_x[j] += disp_x;
+                        s_y[j] += disp_y;
+                        dx_sum -= disp_x;
+                        dy_sum -= disp_y;
+                    }
+                }
+            }
+
+            s_x[i] += dx_sum;
+            s_y[i] += dy_sum;
+            clamp_xy(&s_x[i], &s_y[i]);
         }
+
+    }
+}
+
+static void step_sub(float hdt, float gx, float gy)
+{
+    float ax = gx * GRAVITY_ACCEL;
+    float ay = gy * GRAVITY_ACCEL;
+
+    for (int i = 0; i < PARTICLE_COUNT; ++i) {
+        s_vx[i] += ax * hdt;
+        s_vy[i] += ay * hdt;
+
+        s_px[i] = s_x[i];
+        s_py[i] = s_y[i];
+
+        s_x[i] += s_vx[i] * hdt;
+        s_y[i] += s_vy[i] * hdt;
+        clamp_xy(&s_x[i], &s_y[i]);
+    }
+
+    double_density_relaxation();
+
+    float inv = 1.0f / hdt;
+    for (int i = 0; i < PARTICLE_COUNT; ++i) {
+        s_vx[i] = (s_x[i] - s_px[i]) * inv;
+        s_vy[i] = (s_y[i] - s_py[i]) * inv;
     }
 }
 
 // ------------------------------------------------------------------------
-// Core simulation steps
+// Rasterization
 // ------------------------------------------------------------------------
-static void add_gravity(int16_t gx, int16_t gy)
+static void rasterize_particles(void)
 {
-    for (int i = 0; i < N; ++i) {
-        u[i] = clamp_q8(u[i] + gx * GRAVITY_SCALE);
-        v[i] = clamp_q8(v[i] + gy * GRAVITY_SCALE);
+    memset(s_mask, 0, SIM_PIXELS);
+
+    for (int i = 0; i < PARTICLE_COUNT; ++i) {
+        int ix = clampi((int)s_x[i], 0, SIM_W - 1);
+        int iy = clampi((int)s_y[i], 0, SIM_H - 1);
+        s_mask[sim_idx(ix, iy)] = 1;
     }
-}
 
-static void advect_velocity(void)
-{
-    for (int y = 1; y < H - 1; ++y) {
-        for (int x = 1; x < W - 1; ++x) {
-            int i = idx(x, y);
-
-            int16_t ux = u0[i];
-            int16_t vy = v0[i];
-
-            int16_t x0 = (int16_t)((x << 8) - ux);
-            int16_t y0 = (int16_t)((y << 8) - vy);
-
-            int xi = x0 >> 8;
-            int yi = y0 >> 8;
-
-            xi = clampi(xi, 0, W - 2);
-            yi = clampi(yi, 0, H - 2);
-
-            int16_t fx = (int16_t)(x0 & 0xFF);
-            int16_t fy = (int16_t)(y0 & 0xFF);
-
-            int i00 = idx(xi,     yi);
-            int i10 = idx(xi + 1, yi);
-            int i01 = idx(xi,     yi + 1);
-            int i11 = idx(xi + 1, yi + 1);
-
-            int16_t u0x = lerp16(u0[i00], u0[i10], fx);
-            int16_t u1x = lerp16(u0[i01], u0[i11], fx);
-            u[i] = clamp_q8(lerp16(u0x, u1x, fy));
-
-            int16_t v0x = lerp16(v0[i00], v0[i10], fx);
-            int16_t v1x = lerp16(v0[i01], v0[i11], fx);
-            v[i] = clamp_q8(lerp16(v0x, v1x, fy));
+    memset(s_mask_tmp, 0, SIM_PIXELS);
+    for (int y = 0; y < SIM_H; ++y) {
+        for (int x = 0; x < SIM_W; ++x) {
+            int sum = 0;
+            for (int yy = -1; yy <= 1; ++yy) {
+                int ny = y + yy;
+                if ((unsigned)ny >= SIM_H) continue;
+                for (int xx = -1; xx <= 1; ++xx) {
+                    int nx = x + xx;
+                    if ((unsigned)nx >= SIM_W) continue;
+                    if (s_mask[sim_idx(nx, ny)]) ++sum;
+                }
+            }
+            s_mask_tmp[sim_idx(x, y)] = (sum >= 2) ? 1 : 0;
         }
     }
-    zero_boundaries();
+
+    uint8_t *tmp = s_mask;
+    s_mask = s_mask_tmp;
+    s_mask_tmp = tmp;
 }
 
-static void advect_density(void)
+static bool view_transform(int x, int y, int w, int h, int *out_ox, int *out_oy, int *out_scale)
 {
-    for (int y = 1; y < H - 1; ++y) {
-        for (int x = 1; x < W - 1; ++x) {
-            int i = idx(x, y);
+    int sx = w / SIM_W;
+    int sy = h / SIM_H;
+    int scale = (sx < sy) ? sx : sy;
+    if (scale <= 0) return false;
 
-            int16_t ux = u[i];
-            int16_t vy = v[i];
-
-            int16_t x0 = (int16_t)((x << 8) - ux);
-            int16_t y0 = (int16_t)((y << 8) - vy);
-
-            int xi = x0 >> 8;
-            int yi = y0 >> 8;
-
-            xi = clampi(xi, 0, W - 2);
-            yi = clampi(yi, 0, H - 2);
-
-            int16_t fx = (int16_t)(x0 & 0xFF);
-            int16_t fy = (int16_t)(y0 & 0xFF);
-
-            int i00 = idx(xi,     yi);
-            int i10 = idx(xi + 1, yi);
-            int i01 = idx(xi,     yi + 1);
-            int i11 = idx(xi + 1, yi + 1);
-
-            int d00 = dens0[i00];
-            int d10 = dens0[i10];
-            int d01 = dens0[i01];
-            int d11 = dens0[i11];
-
-            int d0x = d00 + ((d10 - d00) * fx >> 8);
-            int d1x = d01 + ((d11 - d01) * fx >> 8);
-            int dxy = d0x + ((d1x - d0x) * fy >> 8);
-            dens[i] = (uint8_t)clampi(dxy, 0, 255);
-        }
-    }
-    zero_boundaries();
+    if (out_ox) *out_ox = x + (w - SIM_W * scale) / 2;
+    if (out_oy) *out_oy = y + (h - SIM_H * scale) / 2;
+    if (out_scale) *out_scale = scale;
+    return true;
 }
 
-static void compute_divergence(void)
+static void draw_mask(uint8_t *fb, int ox, int oy, int scale)
 {
-    for (int y = 1; y < H - 1; ++y) {
-        for (int x = 1; x < W - 1; ++x) {
-            int i = idx(x, y);
-            divv[i] = (int16_t)(
-                (u[idx(x + 1, y)] - u[idx(x - 1, y)] +
-                 v[idx(x, y + 1)] - v[idx(x, y - 1)])
-                >> 1);
-            p[i] = 0;
-        }
-    }
-}
-
-static void solve_pressure(void)
-{
-    for (int k = 0; k < PRESSURE_ITERS; ++k) {
-        for (int y = 1; y < H - 1; ++y) {
-            for (int x = 1; x < W - 1; ++x) {
-                int i = idx(x, y);
-                p[i] = (int16_t)(
-                    (divv[i] +
-                     p[idx(x - 1, y)] + p[idx(x + 1, y)] +
-                     p[idx(x, y - 1)] + p[idx(x, y + 1)]) >> 2);
+    for (int y = 0; y < SIM_H; ++y) {
+        for (int x = 0; x < SIM_W; ++x) {
+            if (!s_mask[sim_idx(x, y)]) continue;
+            int px0 = ox + x * scale;
+            int py0 = oy + y * scale;
+            for (int yy = 0; yy < scale; ++yy) {
+                int py = py0 + yy;
+                for (int xx = 0; xx < scale; ++xx) {
+                    fb_pset(fb, px0 + xx, py);
+                }
             }
         }
     }
-}
-
-static void project_velocity(void)
-{
-    for (int y = 1; y < H - 1; ++y) {
-        for (int x = 1; x < W - 1; ++x) {
-            int i = idx(x, y);
-            u[i] = clamp_q8(u[i] - ((p[idx(x + 1, y)] - p[idx(x - 1, y)]) >> 1));
-            v[i] = clamp_q8(v[i] - ((p[idx(x, y + 1)] - p[idx(x, y - 1)]) >> 1));
-        }
-    }
-    zero_boundaries();
-}
-
-static void fade_density(void)
-{
-    for (int i = 0; i < N; ++i) {
-        dens[i] = (uint8_t)((dens[i] * 250) >> 8); // ~2-3% decay
-    }
-}
-
-static void fluid_step(int16_t gx, int16_t gy)
-{
-    add_gravity(gx, gy);
-    clamp_velocity_field();
-
-    memcpy(u0, u, N * sizeof(int16_t));
-    memcpy(v0, v, N * sizeof(int16_t));
-
-    advect_velocity();
-    clamp_velocity_field();
-
-    compute_divergence();
-    solve_pressure();
-    project_velocity();
-    clamp_velocity_field();
-
-    memcpy(dens0, dens, N * sizeof(uint8_t));
-    advect_density();
-    fade_density();
 }
 
 // ------------------------------------------------------------------------
@@ -398,75 +370,22 @@ static void ensure_mpu(void)
         ESP_LOGW(TAG, "MPU init failed");
         return;
     }
-    (void)mpu6500_start_sampler(&s_mpu, 120, 2, 1, 0);
+    (void)mpu6500_start_sampler(&s_mpu, 160, 2, 1, 0);
     ESP_LOGI(TAG, "MPU online for fluid sim");
 }
 
-static void sample_gravity_q8(int16_t *out_gx, int16_t *out_gy)
+static void sample_gravity_xy(float *out_gx, float *out_gy)
 {
-    if (out_gx) *out_gx = 0;
-    if (out_gy) *out_gy = 0;
-    if (!s_mpu_ready || !out_gx || !out_gy) return;
+    if (out_gx) *out_gx = 0.0f;
+    if (out_gy) *out_gy = 0.0f;
+    if (!out_gx || !out_gy || !s_mpu_ready) return;
 
     mpu6500_sample_t s = mpu6500_latest(&s_mpu);
-    float gx = s.ax_g * GRAVITY_SIGN_X;
-    float gy = s.ay_g * GRAVITY_SIGN_Y;
-    float gz = s.az_g;
-
-    float mag = sqrtf(gx * gx + gy * gy + gz * gz);
-    if (mag > 0.01f) {
-        gx /= mag;
-        gy /= mag;
-    }
-
-    const float alpha = 0.18f; // low-pass gravity to keep things smooth
-    s_gx_f = (1.0f - alpha) * s_gx_f + alpha * gx;
-    s_gy_f = (1.0f - alpha) * s_gy_f + alpha * gy;
-
-    int gxi = (int)lroundf(s_gx_f * Q8);
-    int gyi = (int)lroundf(s_gy_f * Q8);
-
-    *out_gx = (int16_t)clampi(gxi, -Q8 * 4, Q8 * 4);
-    *out_gy = (int16_t)clampi(gyi, -Q8 * 4, Q8 * 4);
-}
-
-// ------------------------------------------------------------------------
-// Rendering
-// ------------------------------------------------------------------------
-static const uint8_t BAYER4[4][4] = {
-    { 0,  8,  2, 10},
-    {12,  4, 14,  6},
-    { 3, 11,  1,  9},
-    {15,  7, 13,  5},
-};
-
-static void draw_density(uint8_t *fb, int x, int y, int w, int h)
-{
-    int scale_x = w / W;
-    int scale_y = h / H;
-    int scale = scale_x < scale_y ? scale_x : scale_y;
-    if (scale <= 0) return;
-
-    int ox = x + (w - W * scale) / 2;
-    int oy = y + (h - H * scale) / 2;
-
-    for (int cy = 0; cy < H; ++cy) {
-        for (int cx = 0; cx < W; ++cx) {
-            uint8_t d = dens[idx(cx, cy)];
-            int px0 = ox + cx * scale;
-            int py0 = oy + cy * scale;
-            for (int yy = 0; yy < scale; ++yy) {
-                int py = py0 + yy;
-                for (int xx = 0; xx < scale; ++xx) {
-                    int px = px0 + xx;
-                    int thresh = BAYER4[py & 3][px & 3] << 4; // 0..240
-                    if (d > thresh) {
-                        fb_pset(fb, px, py);
-                    }
-                }
-            }
-        }
-    }
+    // Map board axes (x=down, y=right) to screen axes (x=right, y=down).
+    float gx = s.ay_g * GRAVITY_SIGN_Y; // screen-right acceleration
+    float gy = s.ax_g * GRAVITY_SIGN_X; // screen-down acceleration
+    *out_gx = gx;
+    *out_gy = gy;
 }
 
 // ------------------------------------------------------------------------
@@ -474,18 +393,12 @@ static void draw_density(uint8_t *fb, int x, int y, int w, int h)
 // ------------------------------------------------------------------------
 void fluid_app_init(void)
 {
-    if (!alloc_fields()) return;
     reset_sim();
     ensure_mpu();
-    s_hint_until_us = esp_timer_get_time() + 4000000; // show hint for ~4 s
-
-    // Seed a small blob so the screen isn't empty on entry.
-    add_splat(W / 2, H / 2, 4, 140, 0, 0);
 }
 
 void fluid_app_deinit(void)
 {
-    // Keep allocations alive for quick re-entry; just quiet the sim.
     reset_sim();
 }
 
@@ -493,67 +406,35 @@ void fluid_app_handle_input(const input_event_t *ev)
 {
     if (!ev) return;
 
-    if (ev->type == INPUT_EVENT_LONG_PRESS) {
-        if (ev->button == INPUT_BTN_D) {
-            reset_sim();
-            return;
-        }
-    }
-
-    if (ev->type == INPUT_EVENT_PRESS) {
-        switch (ev->button) {
-            case INPUT_BTN_A: s_emit_x = clampi(s_emit_x - 1, 1, W - 2); break;
-            case INPUT_BTN_B: s_emit_y = clampi(s_emit_y - 1, 1, H - 2); break;
-            case INPUT_BTN_C: s_emit_x = clampi(s_emit_x + 1, 1, W - 2); break;
-            case INPUT_BTN_D: s_emit_y = clampi(s_emit_y + 1, 1, H - 2); break;
-            case INPUT_BTN_FAST_FALL:
-                add_splat(s_emit_x, s_emit_y, 3, 220, 0, 0);
-                break;
-            default: break;
-        }
-        // Tiny dab so moving the emitter paints.
-        if (ev->button == INPUT_BTN_A || ev->button == INPUT_BTN_B ||
-            ev->button == INPUT_BTN_C || ev->button == INPUT_BTN_D) {
-            add_splat(s_emit_x, s_emit_y, 2, 70, 0, 0);
-        }
+    if (ev->type == INPUT_EVENT_LONG_PRESS && ev->button == INPUT_BTN_D) {
+        reset_sim();
+        return;
     }
 }
 
 void fluid_app_tick(float dt_sec)
 {
-    if (!dens) return;
+    (void)dt_sec;
+    float gx = 0.0f;
+    float gy = 0.0f;
+    sample_gravity_xy(&gx, &gy);
 
-    const float STEP_DT = 1.0f / 30.0f; // target 30 Hz sim step
-    if (dt_sec <= 0.0f) dt_sec = STEP_DT;
-    s_step_accum += dt_sec;
-
-    // Regular emitter drip to keep the field alive.
-    s_emit_accum += dt_sec;
-    const float EMIT_PERIOD = 0.10f; // seconds
-    while (s_emit_accum >= EMIT_PERIOD) {
-        s_emit_accum -= EMIT_PERIOD;
-        add_splat(s_emit_x, s_emit_y, 2, 80, 0, 0);
+    float hdt = SIM_DT / (float)SUBSTEPS;
+    for (int s = 0; s < SUBSTEPS; ++s) {
+        step_sub(hdt, gx, gy);
     }
 
-    int16_t gx = 0, gy = 0;
-    sample_gravity_q8(&gx, &gy);
-
-    while (s_step_accum >= STEP_DT) {
-        fluid_step(gx, gy);
-        s_step_accum -= STEP_DT;
-    }
+    rasterize_particles();
 }
 
 void fluid_app_draw(uint8_t *fb, int x, int y, int w, int h)
 {
-    if (!fb || !dens) return;
+    if (!fb) return;
     fb_clear(fb);
-    draw_density(fb, x, y, w, h);
 
-    // Brief hint so users know the controls.
-    uint64_t now = esp_timer_get_time();
-    if (now < s_hint_until_us) {
-        oled_draw_text3x5(fb, 2, 2, "A/B/C/D move, B+C ink, D long reset");
+    int ox = 0, oy = 0, scale = 0;
+    if (view_transform(x, y, w, h, &ox, &oy, &scale)) {
+        draw_mask(fb, ox, oy, scale);
     }
 }
 
@@ -566,7 +447,6 @@ void fluid_run(void)
     uint64_t last = esp_timer_get_time();
 
     for (;;) {
-        // Simple exit: any press of button A leaves.
         hw_button_id_t b = HW_BTN_NONE;
         if (hw_buttons_read(&b) == ESP_OK && b == HW_BTN_A) {
             break;
