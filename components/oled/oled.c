@@ -16,6 +16,7 @@
 // ==== SSD130x low-level ====
 static spi_device_handle_t s_oled;
 static SemaphoreHandle_t s_oled_lock = NULL;
+static bool s_oled_inited = false;
 
 static inline void dc_cmd(void){
     gpio_set_level(PIN_DC_OLED, 0);
@@ -64,6 +65,8 @@ static inline void begin_window(int x0, int x1, int page0, int page1){
 // ==== Public API ====
 void oled_init(void)
 {
+    if (s_oled_inited) return;
+
     // Shared SPI2 bus
     ESP_ERROR_CHECK(hw_spi2_init_once());
     vTaskDelay(pdMS_TO_TICKS(100));  // power-on settle
@@ -107,6 +110,7 @@ void oled_init(void)
     cmd1(0xA6);                  // normal display
     cmd1(0xAF);                  // display ON
     vTaskDelay(pdMS_TO_TICKS(50)); // let panel wake up
+    s_oled_inited = true;
 }
 
 

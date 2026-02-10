@@ -224,8 +224,7 @@ static bool bird_hits_pipe(int bird_x, int bird_y, int pipe_x, int gap_y, bool f
 void flappy_run(void)
 {
     g_stop = false;
-    // Make sure OLED is up; safe even if already inited
-    oled_init();
+    // Shell owns OLED initialization; this app only renders.
     oled_clear();
 
     // --- splash screen ---
