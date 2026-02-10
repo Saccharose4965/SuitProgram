@@ -29,6 +29,7 @@ static const float kNoveltyMeanOffset = 0.02f; // lifts rolling mean slightly to
 static const float kHopRate_nominal = (float)SAMPLE_RATE_HZ / (float)HOP_SAMPLES; // nominal hop rate (62.5 Hz)
 static const int   kTempoUpdateIntervalFrames = FPS/2; // update tempo estimate twice per second
 #define BPM_SCORE_WINDOW_UPDATES 8 // ~4s at 2 tempo updates/sec
+#define PHASE_SLOTS     32     // downsampled phase bins for display
 
 // ------------------- DSP tuning -------------------
 static const float kGlobalCombMin        = 0.01f;
@@ -36,6 +37,38 @@ static const float kNoveltyZeroThreshold = 400.0f;
 static const float kOverallMinConf       = 0.25f;
 static const float kFamilyTauUpSec       = 0.35f;
 static const float kFamilyTauDownSec     = 1.20f;
+#define MAX_PHASE_EVAL 256
+
+static inline float wrap_phase01(float phase){
+    phase -= floorf(phase);
+    if (phase < 0.0f) phase += 1.0f;
+    return phase;
+}
+
+static void shift_phase_curve_circular(float *vals, uint8_t count, float shift_norm){
+    if (!vals || count < 2) return;
+
+    shift_norm = wrap_phase01(shift_norm);
+    float shift = shift_norm * (float)count;
+    float tmp[PHASE_SLOTS];
+
+    for (int i = 0; i < count; ++i){
+        float src = (float)i - shift;
+        while (src < 0.0f) src += (float)count;
+        while (src >= (float)count) src -= (float)count;
+
+        int i0 = (int)floorf(src);
+        int i1 = i0 + 1;
+        if (i1 >= count) i1 = 0;
+        float frac = src - (float)i0;
+
+        float v0 = vals[i0];
+        float v1 = vals[i1];
+        tmp[i] = v0 * (1.0f - frac) + v1 * frac;
+    }
+
+    memcpy(vals, tmp, (size_t)count * sizeof(float));
+}
 
 // ------------------- FFT core -------------------
 static void fft_radix2(float re[], float im[], int n){
@@ -103,12 +136,12 @@ static float    g_blink_rate_hz = 0.0f; // actual blink rate used for display
 static float    g_beat_phase = 0.0f;    // phase accumulator for main beat blinker
 static int      g_tempo_update_countdown = 0;
 static QueueHandle_t s_beat_queue = NULL;
-static int      g_nov_hole_frames = 0;  // number of upcoming frames to zero novelty
+static volatile int g_nov_hole_backfill_frames = 0;  // recent frames to retroactively clear
+static volatile int g_nov_hole_future_frames = 0;    // upcoming frames to clear (timing jitter guard)
 
 // ------------------- BPM export and smoothing -------------------
 #define MAX_BPM_EXPORT  3      // export at most 3 BPMs (fundamental, double, special)
 #define BPM_AVG_FRAMES  6      // rolling average length for main BPM
-#define PHASE_SLOTS     32     // downsampled phase bins for display
 static float g_bpm_list[MAX_BPM_EXPORT];
 static float g_bpm_conf_list[MAX_BPM_EXPORT];
 static int   g_bpm_list_count = 0;
@@ -157,10 +190,38 @@ static void bpm_soft_decay_and_reset(void){
     memset(g_bpm_score_sum, 0, sizeof(g_bpm_score_sum));
 }
 
-// Public hook: zero novelty for the next `frames` updates to ignore button-induced spikes
+static void apply_novelty_backfill_hole(void){
+    int frames = g_nov_hole_backfill_frames;
+    if (frames <= 0) return;
+    g_nov_hole_backfill_frames = 0;
+
+    int history_len = (g_nov_total_frames < (uint64_t)NOV_RING_FRAMES)
+                        ? (int)g_nov_total_frames
+                        : NOV_RING_FRAMES;
+    if (history_len <= 0) return;
+    int shift = frames / 2; // move hole back by ~half its width
+    int max_erasable = history_len - shift;
+    if (max_erasable <= 0) return;
+    if (frames > max_erasable) frames = max_erasable;
+
+    // Clear a same-width window shifted older by `shift`.
+    for (int i = 0; i < frames; ++i){
+        int idx = g_nov_write_pos - 1 - (shift + i);
+        while (idx < 0) idx += NOV_RING_FRAMES;
+        g_novelty_ring[idx] = 0.0f;
+    }
+}
+
+// Public hook: clear a recent novelty window (retroactive) for button-induced spikes.
 void fft_punch_novelty_hole(int frames){
     if (frames < 1) frames = 1;
-    g_nov_hole_frames = frames;
+    if (frames > NOV_RING_FRAMES) frames = NOV_RING_FRAMES;
+    if (frames > g_nov_hole_backfill_frames){
+        g_nov_hole_backfill_frames = frames;
+    }
+    if (frames > g_nov_hole_future_frames){
+        g_nov_hole_future_frames = frames;
+    }
 }
 
 // ------------------- Novelty computation -------------------
@@ -224,14 +285,14 @@ static void push_novelty(float raw, float local_mean){
 }
 
 // ------------------- Comb-based BPM spectrum from novelty -------------------
-static void comb_bpm_from_novelty(const float *nov, int N, float frameRate, float *bpmSpec, float *bpmPhase){
+static void comb_bpm_from_novelty(const float *nov, int N, float frameRate,
+                                  float *bpmSpec){
     const int bpmCount = BPM_MAX - BPM_MIN + 1;
     const float minSamplesPerBpm = 2.0f;
 
     if (N <= 1){
         for (int i = 0; i < bpmCount; ++i){
             bpmSpec[i]  = 0.0f;
-            bpmPhase[i] = 0.0f;
         }
         return;
     }
@@ -244,9 +305,6 @@ static void comb_bpm_from_novelty(const float *nov, int N, float frameRate, floa
         if (maxPhase < 1) maxPhase = 1;
 
         float bestScore = 0.0f;
-        int   bestPhaseIdx = 0;
-        float phaseSlots[PHASE_SLOTS];
-        for (int s = 0; s < PHASE_SLOTS; ++s) phaseSlots[s] = 0.0f;
 
         for (int phase = 0; phase < maxPhase; ++phase){
             float pos = (float)phase;
@@ -278,24 +336,99 @@ static void comb_bpm_from_novelty(const float *nov, int N, float frameRate, floa
 
             if (score > bestScore){
                 bestScore = score;
-                bestPhaseIdx = phase;
             }
-
-            int slot = (maxPhase > 1) ? (int)((float)phase * (float)(PHASE_SLOTS - 1) / (float)(maxPhase - 1)) : 0;
-            if (slot < 0) slot = 0;
-            if (slot >= PHASE_SLOTS) slot = PHASE_SLOTS - 1;
-            if (score > phaseSlots[slot]) phaseSlots[slot] = score;
         }
 
         bpmSpec[idx] = bestScore;
-
-        float phaseNorm = 0.0f;
-        if (bestScore > 0.0f && maxPhase > 1){
-            phaseNorm = (float)bestPhaseIdx / (float)(maxPhase - 1);
-        }
-        bpmPhase[idx] = phaseNorm;
-
     }
+}
+
+// Recompute comb phase using the exact selected BPM spacing.
+static void recompute_phase_for_bpm(const float *nov, int N, float frameRate, float bpm,
+                                    float *phaseNormOut, float *phaseCurveOut, uint8_t *phaseCurveLenOut){
+    if (phaseNormOut) *phaseNormOut = 0.0f;
+    if (phaseCurveLenOut) *phaseCurveLenOut = 0;
+    if (!nov || N <= 1 || frameRate <= 0.0f || bpm <= 0.0f){
+        return;
+    }
+
+    float step = frameRate * 60.0f / bpm;
+    int phaseCount = (int)floorf(step);
+    if (phaseCount < 1) phaseCount = 1;
+    if (phaseCount > MAX_PHASE_EVAL) phaseCount = MAX_PHASE_EVAL;
+
+    const float minSamplesPerPhase = 2.0f;
+    float phaseScores[MAX_PHASE_EVAL];
+    for (int i = 0; i < phaseCount; ++i){
+        phaseScores[i] = 0.0f;
+    }
+
+    float bestScore = 0.0f;
+    int bestPhaseIdx = 0;
+
+    for (int phase = 0; phase < phaseCount; ++phase){
+        float pos = (float)phase;
+        float sum = 0.0f;
+        int count = 0;
+
+        while (pos < (float)(N - 1)){
+            int j = (int)floorf(pos);
+            float t = pos - (float)j;
+            float v;
+            if (j >= 0 && j + 1 < N){
+                v = nov[j] * (1.0f - t) + nov[j + 1] * t;
+            } else if (j >= 0 && j < N){
+                v = nov[j];
+            } else {
+                v = 0.0f;
+            }
+            sum += v;
+            count += 1;
+            pos += step;
+        }
+
+        if ((float)count < minSamplesPerPhase){
+            phaseScores[phase] = 0.0f;
+            continue;
+        }
+
+        phaseScores[phase] = sum;
+        if (sum > bestScore){
+            bestScore = sum;
+            bestPhaseIdx = phase;
+        }
+    }
+
+    if (phaseNormOut && bestScore > 0.0f && phaseCount > 1){
+        *phaseNormOut = (float)bestPhaseIdx / (float)(phaseCount - 1);
+    }
+
+    if (!phaseCurveOut || !phaseCurveLenOut || bestScore <= 0.0f){
+        return;
+    }
+
+    if (phaseCount == 1){
+        for (int s = 0; s < PHASE_SLOTS; ++s){
+            phaseCurveOut[s] = phaseScores[0];
+        }
+        *phaseCurveLenOut = PHASE_SLOTS;
+        return;
+    }
+
+    for (int s = 0; s < PHASE_SLOTS; ++s){
+        float p = ((float)s / (float)PHASE_SLOTS) * (float)phaseCount;
+        while (p >= (float)phaseCount) p -= (float)phaseCount;
+
+        int i0 = (int)floorf(p);
+        int i1 = i0 + 1;
+        if (i1 >= phaseCount) i1 = 0;
+        float frac = p - (float)i0;
+
+        float v0 = phaseScores[i0];
+        float v1 = phaseScores[i1];
+        phaseCurveOut[s] = v0 * (1.0f - frac) + v1 * frac;
+    }
+    *phaseCurveLenOut = PHASE_SLOTS;
 }
 
 static inline float bpm_bc_at(const float *bc, float bpm){
@@ -352,68 +485,6 @@ static void smooth_spectrum_asym_tau(const float *in, float *state, int n,
     }
 }
 
-static void compute_phase_curve_for_bpm(const float *nov, int N,
-                                        float frameRate, float bpm,
-                                        float *outSlots, uint8_t *outCount)
-{
-    if (!outSlots || !outCount || N <= 1 || bpm <= 0.0f) {
-        if (outCount) *outCount = 0;
-        return;
-    }
-
-    float step = frameRate * 60.0f / bpm;
-    int   maxPhase = (int)floorf(step);
-    if (maxPhase < 1) maxPhase = 1;
-
-    for (int s = 0; s < PHASE_SLOTS; ++s) {
-        outSlots[s] = 0.0f;
-    }
-
-    const float minSamplesPerBpm = 2.0f;
-
-    for (int phase = 0; phase < maxPhase; ++phase){
-        float pos = (float)phase;
-        float sum = 0.0f;
-        int   count = 0;
-
-        while (pos < (float)(N - 1)){
-            int   j = (int)floorf(pos);
-            float t = pos - (float)j;
-
-            float v;
-            if (j >= 0 && j + 1 < N){
-                v = nov[j] * (1.0f - t) + nov[j + 1] * t;
-            } else if (j >= 0 && j < N){
-                v = nov[j];
-            } else {
-                v = 0.0f;
-            }
-
-            sum   += v;
-            count += 1;
-            pos   += step;
-        }
-
-        if ((float)count < minSamplesPerBpm) continue;
-
-        float avg   = sum / (float)count;
-        float score = avg * (float)count;
-
-        int slot = (maxPhase > 1)
-                    ? (int)((float)phase * (float)(PHASE_SLOTS - 1) /
-                            (float)(maxPhase - 1))
-                    : 0;
-        if (slot < 0) slot = 0;
-        if (slot >= PHASE_SLOTS) slot = PHASE_SLOTS - 1;
-
-        if (score > outSlots[slot]) {
-            outSlots[slot] = score;
-        }
-    }
-
-    *outCount = PHASE_SLOTS;
-}
-
 // ------------------- BPM update from novelty -------------------
 static void update_bpm_from_novelty(void){
     const int bpmCount = BPM_MAX - BPM_MIN + 1;
@@ -439,13 +510,11 @@ static void update_bpm_from_novelty(void){
     // 3) Run comb BPM search (use nominal hop rate to match desktop logic)
     const float frameRate = kHopRate_nominal;
     static EXT_RAM_BSS_ATTR float bpmSpec[BPM_MAX - BPM_MIN + 1];
-    static EXT_RAM_BSS_ATTR float bpmPhase[BPM_MAX - BPM_MIN + 1];
     static EXT_RAM_BSS_ATTR float bpmSpecBC[BPM_MAX - BPM_MIN + 1];
     static EXT_RAM_BSS_ATTR float bpmFamily[BPM_MAX - BPM_MIN + 1];
     static EXT_RAM_BSS_ATTR float bpmWindowAvg[BPM_MAX - BPM_MIN + 1];
 
-    comb_bpm_from_novelty(nov_history, history_len, frameRate,
-                              bpmSpec, bpmPhase);
+    comb_bpm_from_novelty(nov_history, history_len, frameRate, bpmSpec);
 
     // 4) Baseline-correct comb spectrum (like desktop bpm panel)
     int mid = bpmCount / 2;
@@ -504,39 +573,93 @@ static void update_bpm_from_novelty(void){
         return;
     }
 
-    int bestIdx = targetMinIdx;
-    float bestScore = 0.0f;
-    float targetSum = 0.0f;
-    int targetCount = 0;
-
+    float target_energy = 0.0f;
     for (int i = targetMinIdx; i <= targetMaxIdx; ++i){
         float v = g_bpm_score_sum[i];
-        targetSum += v;
-        targetCount++;
-        if (v > bestScore){
-            bestScore = v;
-            bestIdx = i;
-        }
+        if (v > 0.0f) target_energy += v;
     }
-
-    if (bestScore < kGlobalCombMin){
+    if (target_energy <= 1e-6f){
         bpm_soft_decay_and_reset();
         return;
     }
 
-    float fund_inst = (float)(BPM_MIN + bestIdx);
+    // Pick BPM from maximum adjacent-bin pair to handle true tempo between bins.
+    int pair_best_idx = targetMinIdx;
+    float pair_best_score = 0.0f;
+
+    if (targetMaxIdx > targetMinIdx){
+        for (int i = targetMinIdx; i < targetMaxIdx; ++i){
+            float s0 = g_bpm_score_sum[i];
+            float s1 = g_bpm_score_sum[i + 1];
+            if (s0 < 0.0f) s0 = 0.0f;
+            if (s1 < 0.0f) s1 = 0.0f;
+            float pair_score = s0 + s1;
+            if (pair_score > pair_best_score){
+                pair_best_score = pair_score;
+                pair_best_idx = i;
+            }
+        }
+    } else {
+        float s0 = g_bpm_score_sum[targetMinIdx];
+        if (s0 < 0.0f) s0 = 0.0f;
+        pair_best_score = s0;
+    }
+
+    if (pair_best_score < kGlobalCombMin){
+        bpm_soft_decay_and_reset();
+        return;
+    }
+
+    float s_pair_0 = g_bpm_score_sum[pair_best_idx];
+    float s_pair_1 = (pair_best_idx + 1 <= targetMaxIdx) ? g_bpm_score_sum[pair_best_idx + 1] : 0.0f;
+    if (s_pair_0 < 0.0f) s_pair_0 = 0.0f;
+    if (s_pair_1 < 0.0f) s_pair_1 = 0.0f;
+    float pair_mass = s_pair_0 + s_pair_1;
+
+    float bpm0 = (float)(BPM_MIN + pair_best_idx);
+    float bpm1 = (float)(BPM_MIN + pair_best_idx + 1);
+    float fund_inst = bpm0;
+    if (pair_best_idx + 1 <= targetMaxIdx && pair_mass > 1e-6f){
+        fund_inst = (bpm0 * s_pair_0 + bpm1 * s_pair_1) / pair_mass;
+    }
+
+    // Cluster energy: expand from winning pair while scores strictly decrease outward.
+    int cluster_l = pair_best_idx;
+    int cluster_r = (pair_best_idx + 1 <= targetMaxIdx) ? (pair_best_idx + 1) : pair_best_idx;
+
+    while (cluster_l > targetMinIdx){
+        float inner = g_bpm_score_sum[cluster_l];
+        float outer = g_bpm_score_sum[cluster_l - 1];
+        if (inner < 0.0f) inner = 0.0f;
+        if (outer < 0.0f) outer = 0.0f;
+        if (outer < inner){
+            cluster_l--;
+        } else {
+            break;
+        }
+    }
+    while (cluster_r < targetMaxIdx){
+        float inner = g_bpm_score_sum[cluster_r];
+        float outer = g_bpm_score_sum[cluster_r + 1];
+        if (inner < 0.0f) inner = 0.0f;
+        if (outer < 0.0f) outer = 0.0f;
+        if (outer < inner){
+            cluster_r++;
+        } else {
+            break;
+        }
+    }
+
+    float cluster_energy = 0.0f;
+    for (int i = cluster_l; i <= cluster_r; ++i){
+        float v = g_bpm_score_sum[i];
+        if (v > 0.0f) cluster_energy += v;
+    }
+
     float fund_avg  = update_fund_history(fund_inst);
     if (fund_avg <= 0.0f){
         bpm_soft_decay_and_reset();
         return;
-    }
-
-    float avgSpecForConf = (targetCount > 0) ? (targetSum / (float)targetCount) : 0.0f;
-    float spectral_conf = 0.0f;
-    if (avgSpecForConf > 0.0f){
-        spectral_conf = bestScore / (avgSpecForConf + 1e-6f);
-        if (spectral_conf > 4.0f) spectral_conf = 4.0f;
-        spectral_conf /= 4.0f;
     }
 
     const float kBpmTol = 3.0f;
@@ -548,16 +671,25 @@ static void update_bpm_from_novelty(void){
     }
     g_last_cand_bpm = fund_avg;
 
-    float target_stable_frames = kHopRate_nominal * 4.0f;
-    if (target_stable_frames < 1.0f) target_stable_frames = 1.0f;
-    float stable_conf = (float)g_bpm_stable_frames / target_stable_frames;
-    if (stable_conf > 1.0f) stable_conf = 1.0f;
-
-    float combined_raw_conf = 0.7f * spectral_conf + 0.3f * stable_conf;
+    // Confidence is mass ratio of winning monotonic cluster vs all target-bin energy.
+    float combined_raw_conf = cluster_energy / (target_energy + 1e-6f);
+    if (combined_raw_conf < 0.0f) combined_raw_conf = 0.0f;
+    if (combined_raw_conf > 1.0f) combined_raw_conf = 1.0f;
     g_bpm_conf = 0.9f * g_bpm_conf + 0.1f * combined_raw_conf;
 
-    g_bpm_hz    = fund_avg / 60.0f;
-    g_bpm_phase = bpmPhase[bestIdx];
+    g_bpm_hz = fund_avg / 60.0f;
+
+    // Recompute phase from comb offsets at the exact BPM selected for blink driving.
+    float base_phase = 0.0f;
+    g_phase_curve_len = 0;
+    recompute_phase_for_bpm(nov_history, history_len, frameRate, fund_avg,
+                            &base_phase, g_phase_curve, &g_phase_curve_len);
+
+    double elapsed_sec = (frameRate > 0.0f)
+                            ? ((double)g_nov_total_frames / (double)frameRate)
+                            : 0.0;
+    float phase_shift = (float)fmod(elapsed_sec * (double)g_bpm_hz, 1.0);
+    g_bpm_phase = wrap_phase01(base_phase + phase_shift);
 
     g_bpm_list_count = 0;
     if (g_bpm_conf >= kOverallMinConf){
@@ -566,17 +698,13 @@ static void update_bpm_from_novelty(void){
         g_bpm_list_count = 1;
     }
 
-    if (fund_avg > 0.0f) {
-        compute_phase_curve_for_bpm(nov_history, history_len,
-                                    frameRate, fund_avg,
-                                    g_phase_curve, &g_phase_curve_len);
-        fft_render_update_phase_curve(
-            (g_phase_curve_len > 0) ? g_phase_curve : NULL,
-            g_phase_curve_len);
-    } else {
-        g_phase_curve_len = 0;
-        fft_render_update_phase_curve(NULL, 0);
+    if (g_phase_curve_len > 0){
+        // Keep phase-comb view aligned with the exported compensated phase.
+        shift_phase_curve_circular(g_phase_curve, g_phase_curve_len, phase_shift);
     }
+    fft_render_update_phase_curve(
+        (g_phase_curve_len > 0) ? g_phase_curve : NULL,
+        g_phase_curve_len);
 }
 
 // ------------------- Processing per FFT frame -------------------
@@ -618,10 +746,10 @@ static void process_fft_frame(void){
     if (nov > kNoveltyZeroThreshold) {
         nov = 0.0f;
     }
-    // Requested hole: zero novelty for N frames after button voltage changes
-    if (g_nov_hole_frames > 0){
+    apply_novelty_backfill_hole();
+    if (g_nov_hole_future_frames > 0){
         nov = 0.0f;
-        g_nov_hole_frames--;
+        g_nov_hole_future_frames--;
     }
 
     float local = novelty_local_mean(nov);

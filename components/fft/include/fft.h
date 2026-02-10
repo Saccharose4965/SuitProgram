@@ -16,6 +16,7 @@ extern "C" {
  * - oled_init() must have been called
  */
 esp_err_t fft_visualizer_start(void);
+void fft_visualizer_stop(void);
 
 typedef enum {
     FFT_VIEW_BPM_TEXT = 0,   // existing 3-line BPM/delta/flash view
@@ -45,7 +46,8 @@ int fft_get_confident_bpms(float *bpm_out, float *conf_out, int max_out);
 // Enable or disable OLED rendering; beat detection and sampling keep running.
 void fft_set_display_enabled(bool enabled);
 
-// Request novelty be zeroed for the next N frames (e.g., to ignore button voltage changes)
+// Request a retroactive novelty hole over the most recent N frames
+// (e.g., to ignore button voltage changes).
 void fft_punch_novelty_hole(int frames);
 
 #ifdef __cplusplus
