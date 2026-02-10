@@ -8,6 +8,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/timers.h"
+#include "freertos/task.h"
 
 #include "esp_log.h"
 #include "esp_check.h"
@@ -69,9 +70,22 @@ static bool              s_pending_connect = false;
 static esp_bd_addr_t     s_pending_bda = {0};
 static int               s_pending_attempts = 0;
 static TimerHandle_t     s_pending_timer = NULL;
+static TaskHandle_t      s_health_task = NULL;
+
+#if CONFIG_FREERTOS_UNICORE
+#define BT_HEALTH_CORE 0
+#else
+#define BT_HEALTH_CORE 0
+#endif
+#define BT_HEALTH_TASK_PRIO 2
+#define BT_HEALTH_TASK_STACK 3072
+#define BT_HEALTH_INTERVAL_MS 250
+#define BT_STALL_DETECT_MS 2500
+#define BT_RECOVERY_COOLDOWN_MS 3000
 static bool bda_is_zero(const esp_bd_addr_t bda);
 static esp_err_t start_connect(esp_bd_addr_t bda);
 static esp_err_t start_discovery(void);
+static void bt_stream_health_task(void *arg);
 static void clear_pending_connect(void)
 {
     s_pending_connect = false;
@@ -118,6 +132,77 @@ static void schedule_pending_connect_retry(uint32_t delay_ms)
         xTimerStop(s_pending_timer, 0);
         xTimerChangePeriod(s_pending_timer, pdMS_TO_TICKS(delay_ms), 0);
         xTimerStart(s_pending_timer, 0);
+    }
+}
+
+static void bt_stream_health_task(void *arg)
+{
+    (void)arg;
+    size_t last_frames = 0;
+    TickType_t last_progress_tick = xTaskGetTickCount();
+    TickType_t last_recovery_tick = 0;
+
+    while (1) {
+        TickType_t now = xTaskGetTickCount();
+        bool monitoring = s_stack_ready &&
+                          s_user_streaming &&
+                          s_streaming &&
+                          (s_state == BT_AUDIO_STATE_STREAMING);
+
+        if (!monitoring) {
+            last_frames = 0;
+            last_progress_tick = now;
+            vTaskDelay(pdMS_TO_TICKS(BT_HEALTH_INTERVAL_MS));
+            continue;
+        }
+
+        size_t frames = bt_audio_stream_queued_frames();
+        if (frames == 0) {
+            last_frames = 0;
+            last_progress_tick = now;
+            vTaskDelay(pdMS_TO_TICKS(BT_HEALTH_INTERVAL_MS));
+            continue;
+        }
+
+        // Progress means source frames are draining as expected.
+        if (frames != last_frames) {
+            last_frames = frames;
+            last_progress_tick = now;
+            vTaskDelay(pdMS_TO_TICKS(BT_HEALTH_INTERVAL_MS));
+            continue;
+        }
+
+        TickType_t stalled_for = now - last_progress_tick;
+        TickType_t since_last_recovery = now - last_recovery_tick;
+
+        if (stalled_for >= pdMS_TO_TICKS(BT_STALL_DETECT_MS) &&
+            since_last_recovery >= pdMS_TO_TICKS(BT_RECOVERY_COOLDOWN_MS) &&
+            !s_media_cmd_pending) {
+            ESP_LOGW(TAG,
+                     "A2DP stalled (%u frames pending), attempting media restart",
+                     (unsigned)frames);
+
+            last_recovery_tick = now;
+
+            // Soft recovery: suspend then restart stream.
+            esp_err_t p = bt_audio_pause_stream();
+            if (p != ESP_OK && p != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(TAG, "A2DP recovery pause failed: %s", esp_err_to_name(p));
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(160));
+
+            esp_err_t s = bt_audio_start_stream();
+            if (s != ESP_OK && s != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(TAG, "A2DP recovery start failed: %s", esp_err_to_name(s));
+            }
+
+            // Give the transport time to settle before re-evaluating.
+            last_progress_tick = xTaskGetTickCount();
+            last_frames = bt_audio_stream_queued_frames();
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(BT_HEALTH_INTERVAL_MS));
     }
 }
 
@@ -542,6 +627,20 @@ esp_err_t bt_audio_start(bool force_rescan){
         esp_bt_pin_code_t pin_code = { '0', '0', '0', '0' };
         esp_bt_gap_set_pin(ESP_BT_PIN_TYPE_FIXED, 4, pin_code);
         s_stack_ready = true;
+
+        if (!s_health_task) {
+            BaseType_t ok = xTaskCreatePinnedToCore(bt_stream_health_task,
+                                                    "bt_health",
+                                                    BT_HEALTH_TASK_STACK,
+                                                    NULL,
+                                                    BT_HEALTH_TASK_PRIO,
+                                                    &s_health_task,
+                                                    BT_HEALTH_CORE);
+            if (ok != pdPASS) {
+                s_health_task = NULL;
+                ESP_LOGW(TAG, "Failed to start BT health task");
+            }
+        }
     }
 
     if (force_rescan){
