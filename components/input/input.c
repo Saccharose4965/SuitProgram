@@ -8,10 +8,11 @@
 #include "freertos/task.h"
 
 #include "hw.h"
-//#include "fft.h"
+#include "fft.h"
 
 static const char *TAG = "input";
 #define INPUT_LOG_EVENTS 0
+#define INPUT_AUDIO_HOLE_FRAMES 6
 
 static input_config_t s_cfg = {
     .long_press_ms = 800,
@@ -151,8 +152,9 @@ bool input_poll(input_event_t *out_event, TickType_t now_ticks)
 
 
     if (cur != s_prev_btn) {
-        // Hole-punch novelty on any ladder voltage change (press or release)
-        //fft_punch_novelty_hole(2);
+        // Any ladder transition means press/release activity; drop a short
+        // novelty window so button noise does not pollute beat tracking.
+        fft_punch_novelty_hole(INPUT_AUDIO_HOLE_FRAMES);
 
         // On change, emit release first, then buffer new press.
         s_prev_tick = now_ticks;

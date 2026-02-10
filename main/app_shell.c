@@ -401,10 +401,11 @@ static void process_input_events(const shell_app_desc_t *app, TickType_t now_tic
             continue;
         }
         // Global escape to menu
-        if (ev.type == INPUT_EVENT_LONG_PRESS &&
-            (ev.button == INPUT_BTN_TOP_COMBO)) {
-            request_switch_cb("menu", NULL);
-            continue;
+        if (ev.type == INPUT_EVENT_LONG_PRESS) {
+            if (ev.button == INPUT_BTN_TOP_COMBO) {
+                request_switch_cb("menu", NULL);
+                continue;
+            }
         }
         if (app && app->handle_input) {
             app->handle_input(&s_ctx, &ev);
