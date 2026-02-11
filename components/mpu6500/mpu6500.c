@@ -3,6 +3,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include <string.h>
 
@@ -19,6 +20,36 @@
 #define WHO_AM_I_VAL_2  0x68
 #define WHO_AM_I_VAL_3  0x71 // some compatible parts
 
+static StaticSemaphore_t s_mpu_spi_lock_buf;
+static SemaphoreHandle_t s_mpu_spi_lock = NULL;
+static portMUX_TYPE s_mpu_spi_lock_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static inline esp_err_t mpu_spi_lock_take(void){
+    if (!s_mpu_spi_lock){
+        taskENTER_CRITICAL(&s_mpu_spi_lock_mux);
+        if (!s_mpu_spi_lock){
+            s_mpu_spi_lock = xSemaphoreCreateMutexStatic(&s_mpu_spi_lock_buf);
+        }
+        taskEXIT_CRITICAL(&s_mpu_spi_lock_mux);
+        if (!s_mpu_spi_lock) return ESP_ERR_NO_MEM;
+    }
+    return xSemaphoreTake(s_mpu_spi_lock, portMAX_DELAY) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static inline void mpu_spi_lock_give(void){
+    if (s_mpu_spi_lock){
+        xSemaphoreGive(s_mpu_spi_lock);
+    }
+}
+
+static inline esp_err_t mpu_spi_transmit_locked(mpu6500_t *imu, spi_transaction_t *t){
+    if (!imu || !imu->dev || !t) return ESP_ERR_INVALID_ARG;
+    esp_err_t err = mpu_spi_lock_take();
+    if (err != ESP_OK) return err;
+    err = spi_device_transmit(imu->dev, t);
+    mpu_spi_lock_give();
+    return err;
+}
 
 /* ---- low-level SPI helpers ---- */
 
@@ -29,7 +60,7 @@ static inline esp_err_t reg_write(mpu6500_t *imu, uint8_t reg, uint8_t val){
     t.flags    = SPI_TRANS_USE_TXDATA;
     t.tx_data[0] = (uint8_t)(reg & 0x7F);
     t.tx_data[1] = val;
-    return spi_device_transmit(imu->dev, &t);
+    return mpu_spi_transmit_locked(imu, &t);
 }
 
 static inline esp_err_t reg_read(mpu6500_t *imu, uint8_t reg, uint8_t *out){
@@ -40,7 +71,7 @@ static inline esp_err_t reg_read(mpu6500_t *imu, uint8_t reg, uint8_t *out){
     t.flags    = SPI_TRANS_USE_TXDATA | SPI_TRANS_USE_RXDATA;
     t.tx_data[0] = (uint8_t)(reg | 0x80);
     t.tx_data[1] = 0x00;
-    esp_err_t err = spi_device_transmit(imu->dev, &t);
+    esp_err_t err = mpu_spi_transmit_locked(imu, &t);
     if (err != ESP_OK) return err;
     *out = t.rx_data[1];
     return ESP_OK;
@@ -62,7 +93,7 @@ static inline esp_err_t burst_read(mpu6500_t *imu, uint8_t start_reg, uint8_t *o
     t.tx_buffer = tx;
     t.rx_buffer = rx;
 
-    esp_err_t err = spi_device_transmit(imu->dev, &t);
+    esp_err_t err = mpu_spi_transmit_locked(imu, &t);
     if (err == ESP_OK) {
         memcpy(out, &rx[1], n); // skip first garbage byte
     }

@@ -20,12 +20,12 @@
 #include "mpu6500.h"
 #include "oled.h"
 
-#define SIM_W 128
-#define SIM_H 64
+#define SIM_W 64
+#define SIM_H 32
 #define SIM_PIXELS (SIM_W * SIM_H)
 
 // Tuned down for ESP32 runtime to avoid watchdog stalls.
-#define PARTICLE_COUNT 420
+#define PARTICLE_COUNT 260
 #define SIM_DT 0.12f
 #define SUBSTEPS 2
 #define RELAX_ITERS 1
@@ -78,6 +78,7 @@ static uint8_t s_fb[PANEL_W * PANEL_H / 8];
 
 // IMU
 static bool s_mpu_ready = false;
+static bool s_mpu_shared = false;
 static mpu6500_t s_mpu = { .mux = portMUX_INITIALIZER_UNLOCKED };
 
 // ------------------------------------------------------------------------
@@ -162,7 +163,7 @@ static void reset_sim(void)
     s_mask = s_mask_a;
     s_mask_tmp = s_mask_b;
 
-    seed_blob((float)(SIM_W / 2), (float)(SIM_H / 2), 16.0f);
+    seed_blob((float)(SIM_W / 2), (float)(SIM_H / 2), 8.0f);
 }
 
 // ------------------------------------------------------------------------
@@ -380,6 +381,16 @@ static void ensure_mpu(void)
     }
     hw_spi2_idle_all_cs_high();
 
+    spi_device_handle_t shared_dev = NULL;
+    if (hw_spi2_find_device((gpio_num_t)PIN_CS_IMU1, &shared_dev) == ESP_OK && shared_dev) {
+        s_mpu.dev = shared_dev;
+        s_mpu.tag = "mpu_fluid_shared";
+        s_mpu_ready = true;
+        s_mpu_shared = true;
+        ESP_LOGI(TAG, "Reusing shared MPU on CS%d", (int)PIN_CS_IMU1);
+        return;
+    }
+
     const uint32_t freqs[] = { 8000000, 1000000 };
     for (size_t i = 0; i < sizeof(freqs) / sizeof(freqs[0]); ++i) {
         spi_device_handle_t dev = NULL;
@@ -395,6 +406,7 @@ static void ensure_mpu(void)
         ESP_LOGW(TAG, "MPU init failed");
         return;
     }
+    s_mpu_shared = false;
     (void)mpu6500_start_sampler(&s_mpu, 160, 2, 1, 0);
     ESP_LOGI(TAG, "MPU online for fluid sim");
 }
@@ -405,7 +417,12 @@ static void sample_gravity_xy(float *out_gx, float *out_gy)
     if (out_gy) *out_gy = 0.0f;
     if (!out_gx || !out_gy || !s_mpu_ready) return;
 
-    mpu6500_sample_t s = mpu6500_latest(&s_mpu);
+    mpu6500_sample_t s = {0};
+    if (s_mpu_shared) {
+        if (mpu6500_read_once(&s_mpu, &s) != ESP_OK) return;
+    } else {
+        s = mpu6500_latest(&s_mpu);
+    }
     // Map board axes (x=down, y=right) to screen axes (x=right, y=down).
     float gx = s.ay_g * GRAVITY_SIGN_Y; // screen-right acceleration
     float gy = s.ax_g * GRAVITY_SIGN_X; // screen-down acceleration
@@ -429,12 +446,7 @@ void fluid_app_deinit(void)
 
 void fluid_app_handle_input(const input_event_t *ev)
 {
-    if (!ev) return;
-
-    if (ev->type == INPUT_EVENT_LONG_PRESS && ev->button == INPUT_BTN_D) {
-        reset_sim();
-        return;
-    }
+    (void)ev;
 }
 
 void fluid_app_tick(float dt_sec)

@@ -10,5 +10,7 @@ enum {
     NOV_RING_FRAMES= 6 * FPS, // ~8 s of novelty history
     TEMP_FFT_SZ    = 2048,    // higher resolution temporal FFT
     BPM_MIN        = 30,
-    BPM_MAX        = 300
+    BPM_MAX        = 300,
+    TARGET_BPM_MIN = 64,
+    TARGET_BPM_MAX = 127
 };

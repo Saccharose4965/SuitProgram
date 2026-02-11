@@ -105,10 +105,6 @@ void bt_app_init(shell_app_context_t *ctx)
 void bt_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 {
     if (!ctx || !ev) return;
-    if (ev->type == INPUT_EVENT_LONG_PRESS && ev->button == INPUT_BTN_TOP_COMBO) {
-        ctx->request_switch("menu", ctx->request_user_data);
-        return;
-    }
     if (ev->type == INPUT_EVENT_PRESS) {
         if (ev->button == INPUT_BTN_A) {           // up
             if (s_bt_ui.sel > 0) s_bt_ui.sel--;
@@ -131,10 +127,6 @@ void bt_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
                 }
                 (void)bt_audio_connect_index(s_bt_ui.sel);
             }
-        }
-    } else if (ev->type == INPUT_EVENT_LONG_PRESS) {
-        if (ev->button == INPUT_BTN_D) {
-            (void)bt_audio_disconnect();
         }
     }
 

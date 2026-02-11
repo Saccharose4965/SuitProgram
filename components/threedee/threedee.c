@@ -4,8 +4,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "esp_log.h"
-
 #include "threedee.h"
 #include "hw.h"
 #include "oled.h"
@@ -18,7 +16,6 @@
 typedef struct { float w, x, y, z; } quat;
 typedef struct { float x, y, z; } vec3;
 
-static const char *TAG = "threedee";
 static imu_orientation_t *s_ori = NULL;
 // Sensor is rotated 90 deg clockwise around Z relative to the screen.
 // Apply a 90 deg CCW correction (about +Z) to align to the screen frame.
@@ -196,11 +193,6 @@ void threedee_app_deinit(void)
 void threedee_app_handle_input(const input_event_t *ev)
 {
     if (!ev) return;
-
-    if (ev->type == INPUT_EVENT_LONG_PRESS && ev->button == INPUT_BTN_A) {
-        if (s_switch_cb) s_switch_cb("menu", s_switch_user);
-        return;
-    }
 
     // Recenter (define current pose as zero)
     if (ev->type == INPUT_EVENT_PRESS && ev->button == INPUT_BTN_D) {

@@ -72,6 +72,15 @@ Networking / comms modules
 - Telemetry: Wi-Fi STA UDP client; sends lines, MPU samples, files, or raw buffers; broadcast/unicast to PC IP/port; file receiver can save to `/sdcard`.
 - Link: framing/ACK layer used by the shell and Pong (see above); ESP-NOW preferred with optional peer MAC, UDP fallback via Wi-Fi.
 - audio_rx: TCP listener (default 5000) that streams incoming audio directly to `/sdcard/rx_rec_XXXXX.wav` (one file per connection) once link + SD are up.
+- Audio transfer script location: repo root (`./transfer.sh`).
+- Audio transfer usage: `./transfer.sh <input_audio> [ip] [port]`.
+- Audio transfer defaults: `ip=192.168.0.175`, `port=5000`.
+- Audio transfer conversion/sending: converts input with `ffmpeg` to 44.1 kHz mono PCM16 WAV, writes `<input>_44100mono.wav`, then sends it to `audio_rx` using `pv | nc`.
+- Audio transfer sender dependencies: `ffmpeg`, `pv`, `nc`.
+- Audio transfer example:
+```sh
+./transfer.sh ./Beatophone.wav 192.168.0.204 5000
+```
 - Comms (standalone): duplex UDP call helper that streams mic->peer and plays peer audio on amp; button A sends last mic recording over telemetry; requires SSID/pass/IP/ports in `comms_cfg_t`.
 - Call (standalone): simpler TX/RX roles for 16 kHz mono audio over UDP with OLED status.
 - mpu6500 + stick: lightweight SPI driver and a 3-IMU stick-figure demo (exit with button A).
@@ -84,6 +93,17 @@ Power / thermal notes
 
 Open TODO / wishlist
 --------------------
+- don't blink when not confident
+- zero out audio data upon button press and release to remove parasitic spikes
+- implement blink phase tune in
+- fix fluid sim (make it as close to goatedfluidsim.txt as possible)
+- would bluetooth and fft be able to run at the same time ?
+- fix led menu, have two sub menus : music synced and not.
+- do spatial aware led animations based on limb orientation
+- add button press to reset fft on all nearby costumes, need to think of where and when.
+- allow to stop fft from running, first think how and where this should be triggered.
+- check for completion of the todos that come after this one.
+- increase and fix led framerate (might be a cabling issue, first try to do proper cabling.)
 - separate the volume settings between volume for the imbeded speaker and the bluetooth volume
 - games sfx
 - Menu/UI: replace placeholder icons, measure real ladder voltages and tighten combo thresholds; optionally show GPS time status flag and link quality.
@@ -92,9 +112,8 @@ Open TODO / wishlist
 - Link/comms: define structured bundles (leaderboard/GPS/messages/audio headers), add per-type ACK/retry, and integrate link frames into games/remote LED paint tools.
 - Power: measure divider ratio and per-cell thresholds, add current sensing/export + low-battery guardrails.
 - Games/content: polish Pong host election/ACK UI, add scores/levels to Snake, port more titles (tron/doom/pacman/etc.), add calculator and lightweight 3D renderer/virtual-plane LED effect.
-- Extras: costume/LED/audio preset randomizer, Tournai map on OLED, IMU fusion for limb pose to drive LEDs/stick, task priority/core pinning guidance for FreeRTOS.
+- Extras: Tournai map on OLED, IMU fusion for limb pose to drive LEDs/stick, task priority/core pinning guidance for FreeRTOS.
 - fix audio recording and calls
-- fix fft postprocessing, for now the selected BPM is flickering, we need to have a more robust BPM identification.
 - create audio file that when displayed on the spectrogram, spell out words, as hidden messages
 
 Task core pinning / priorities (FreeRTOS)

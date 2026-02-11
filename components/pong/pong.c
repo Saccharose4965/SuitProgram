@@ -132,12 +132,6 @@ void pong_app_init(void){
 
 void pong_app_handle_input(const input_event_t *ev){
     if (!ev) return;
-    if (ev->type == INPUT_EVENT_LONG_PRESS && ev->button == INPUT_BTN_A) {
-        if (s_switch_cb) {
-            s_switch_cb("menu", s_switch_user);
-        }
-        return;
-    }
     if (ev->type == INPUT_EVENT_PRESS) {
         if (ev->button == INPUT_BTN_A) {
             s_pong.paused = !s_pong.paused;

@@ -126,6 +126,9 @@ esp_err_t hw_spi2_add_device(gpio_num_t cs_pin,
                              int        queue_size,
                              spi_device_handle_t* out_handle);
 
+// Lookup an already-registered SPI2 device by CS pin.
+esp_err_t hw_spi2_find_device(gpio_num_t cs_pin, spi_device_handle_t *out_handle);
+
 // Convenience wrappers
 static inline esp_err_t hw_spi2_add_oled(spi_device_handle_t* h) {
     // OLED runs comfortably at 10 MHz on solid wiring; faster can risk artifacts.

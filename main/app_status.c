@@ -6,10 +6,8 @@
 
 void status_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 {
-    if (!ctx || !ev) return;
-    if (ev->type == INPUT_EVENT_LONG_PRESS && ev->button == INPUT_BTN_A) {
-        ctx->request_switch("menu", ctx->request_user_data);
-    }
+    (void)ctx;
+    (void)ev;
 }
 
 void status_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)

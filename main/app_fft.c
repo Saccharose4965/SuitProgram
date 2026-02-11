@@ -18,10 +18,6 @@ static TickType_t s_fft_next_ok_tick = 0;                // debounce window for 
 void fft_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 {
     if (!ctx || !ev) return;
-    if (ev->type == INPUT_EVENT_LONG_PRESS && ev->button == INPUT_BTN_A) {
-        ctx->request_switch("menu", ctx->request_user_data);
-        return;
-    }
 
     // B/C cycle views; require release before another change
     if (ev->button == INPUT_BTN_B || ev->button == INPUT_BTN_C) {

@@ -16,7 +16,7 @@ const shell_legend_t FLAPPY_LEGEND = {
 static void flappy_task_fn(void *arg)
 {
     (void)arg;
-    flappy_run(); // blocking; handles its own exit via long-press
+    flappy_run(); // blocking
     if (s_flappy_request_switch) {
         s_flappy_request_switch("menu", s_flappy_request_user_data);
     }
@@ -26,10 +26,8 @@ static void flappy_task_fn(void *arg)
 
 void flappy_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 {
-    if (!ctx || !ev) return;
-    if (ev->type == INPUT_EVENT_LONG_PRESS && ev->button == INPUT_BTN_A) {
-        ctx->request_switch("menu", ctx->request_user_data);
-    }
+    (void)ctx;
+    (void)ev;
 }
 
 void flappy_app_init(shell_app_context_t *ctx)

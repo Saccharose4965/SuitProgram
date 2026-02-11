@@ -26,11 +26,8 @@ static void t2048_task_fn(void *arg)
 
 void t2048_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 {
-    if (!ctx || !ev) return;
-    if (ev->type == INPUT_EVENT_LONG_PRESS && ev->button == INPUT_BTN_A) {
-        s_t2048_stop = true;
-        ctx->request_switch("menu", ctx->request_user_data);
-    }
+    (void)ctx;
+    (void)ev;
 }
 
 void t2048_app_init(shell_app_context_t *ctx)

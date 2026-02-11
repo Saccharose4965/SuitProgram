@@ -53,8 +53,14 @@ static const char *TAG = "led";
 #if CONFIG_FREERTOS_UNICORE
 #define LED_TASK_CORE 0
 #else
-#define LED_TASK_CORE 1
+// Keep LED workers off FFT's default core (core 1).
+#define LED_TASK_CORE 0
 #endif
+
+// LED TX must not be lower priority than FFT producer, otherwise frame
+// submissions can stall under sustained DSP load.
+#define LED_TX_TASK_PRIO    5
+#define LED_PULSE_TASK_PRIO 4
 
 #ifndef __containerof
 #define __containerof(ptr, type, member) ((type *)((char *)(ptr) - offsetof(type, member)))
@@ -193,6 +199,8 @@ static rmt_channel_handle_t s_chan = NULL;
 static rmt_encoder_handle_t s_encoder = NULL;
 static StaticSemaphore_t s_lock_buf;
 static SemaphoreHandle_t s_lock = NULL;
+static StaticSemaphore_t s_tx_lock_buf;
+static SemaphoreHandle_t s_tx_lock = NULL;
 static TaskHandle_t s_tx_task = NULL;
 static uint8_t *s_tx_shadow = NULL;
 static size_t s_tx_len_bytes = 0;
@@ -248,12 +256,47 @@ static inline void led_unlock(void)
     }
 }
 
+static inline esp_err_t led_tx_lock_take(void)
+{
+    if (!s_tx_lock) {
+        s_tx_lock = xSemaphoreCreateMutexStatic(&s_tx_lock_buf);
+        if (!s_tx_lock) return ESP_ERR_NO_MEM;
+    }
+    return xSemaphoreTake(s_tx_lock, pdMS_TO_TICKS(LED_RMT_TX_TIMEOUT_MS)) == pdTRUE
+           ? ESP_OK
+           : ESP_ERR_TIMEOUT;
+}
+
+static inline void led_tx_lock_give(void)
+{
+    if (s_tx_lock) {
+        xSemaphoreGive(s_tx_lock);
+    }
+}
+
+static uint8_t *led_alloc_frame(size_t bytes, const char *label)
+{
+    uint8_t *buf = (uint8_t *)heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!buf) {
+        ESP_LOGW(TAG, "%s internal RAM alloc failed, falling back", label ? label : "frame");
+        buf = (uint8_t *)heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
+    }
+    return buf;
+}
+
 static esp_err_t led_flush_locked(const uint8_t *grb, size_t len_bytes, bool lock_held){
     if (!s_chan || !s_encoder) return ESP_ERR_INVALID_STATE;
     bool locked_here = false;
     if (!lock_held) {
         ESP_RETURN_ON_ERROR(led_lock(), "led", "lock");
         locked_here = true;
+    }
+    esp_err_t lock_err = led_tx_lock_take();
+    if (lock_err != ESP_OK) {
+        if (locked_here) {
+            led_unlock();
+        }
+        return lock_err;
     }
     rmt_transmit_config_t tx_cfg = { .loop_count = 0 };
     esp_err_t err = rmt_transmit(s_chan, s_encoder, grb, len_bytes, &tx_cfg);
@@ -270,6 +313,7 @@ static esp_err_t led_flush_locked(const uint8_t *grb, size_t len_bytes, bool loc
             }
         }
     }
+    led_tx_lock_give();
     if (locked_here) {
         led_unlock();
     }
@@ -442,14 +486,14 @@ esp_err_t led_init(void){
     (void)gpio_set_drive_capability((gpio_num_t)PIN_LED_STRIP_A, GPIO_DRIVE_CAP_3);
 
     if (!s_frame) {
-        s_frame = heap_caps_malloc(LED_COUNT * 3, MALLOC_CAP_DEFAULT);
+        s_frame = led_alloc_frame(LED_COUNT * 3, "s_frame");
     }
     if (!s_frame) {
         led_unlock();
         return ESP_ERR_NO_MEM;
     }
     if (!s_tx_shadow){
-        s_tx_shadow = heap_caps_malloc(LED_COUNT * 3, MALLOC_CAP_DEFAULT);
+        s_tx_shadow = led_alloc_frame(LED_COUNT * 3, "s_tx_shadow");
         if (!s_tx_shadow){
             led_unlock();
             return ESP_ERR_NO_MEM;
@@ -482,14 +526,15 @@ esp_err_t led_init(void){
         }
     }
     if (!s_pulse_frame) {
-        s_pulse_frame = heap_caps_malloc(LED_COUNT * 3, MALLOC_CAP_DEFAULT);
+        s_pulse_frame = led_alloc_frame(LED_COUNT * 3, "s_pulse_frame");
         if (!s_pulse_frame) {
             led_unlock();
             return ESP_ERR_NO_MEM;
         }
     }
     if (!s_tx_task){
-        BaseType_t ok = xTaskCreatePinnedToCore(led_tx_task, "ledtx", 3072, NULL, 3,
+        BaseType_t ok = xTaskCreatePinnedToCore(led_tx_task, "ledtx", 3072, NULL,
+                                                LED_TX_TASK_PRIO,
                                                 &s_tx_task, LED_TASK_CORE);
         if (ok != pdPASS){
             led_unlock();
@@ -498,6 +543,8 @@ esp_err_t led_init(void){
     }
     ESP_LOGI(TAG, "LED count: %u", (unsigned)LED_COUNT);
     ESP_LOGI(TAG, "LED color order: RGB");
+    ESP_LOGI(TAG, "LED workers: core=%d tx_prio=%d pulse_prio=%d",
+             LED_TASK_CORE, LED_TX_TASK_PRIO, LED_PULSE_TASK_PRIO);
     led_unlock();
     return ESP_OK;
 }
@@ -645,7 +692,8 @@ static void led_pulse_task(void *arg){
 
 static void led_pulse_start_task(void){
     if (s_pulse_task) return;
-    xTaskCreatePinnedToCore(led_pulse_task, "ledpulse", 2048, NULL, 4,
+    xTaskCreatePinnedToCore(led_pulse_task, "ledpulse", 2048, NULL,
+                            LED_PULSE_TASK_PRIO,
                             &s_pulse_task, LED_TASK_CORE);
 }
 

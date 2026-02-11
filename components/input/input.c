@@ -30,6 +30,13 @@ static input_event_t  s_buffered;
 static bool           s_combo_pending = false;
 static TickType_t     s_combo_pending_tick = 0;
 
+static bool allow_combo_transition(input_button_t prev, input_button_t cur)
+{
+    if (prev == INPUT_BTN_A && cur == INPUT_BTN_TOP_COMBO) return true;
+    if (prev == INPUT_BTN_B && cur == INPUT_BTN_TOP_COMBO) return true;
+    return false;
+}
+
 static input_button_t decode_mv(int mv)
 {
     int combo_tol = s_cfg.combo_tol_mv > 0 ? s_cfg.combo_tol_mv : 200;
@@ -145,8 +152,12 @@ bool input_poll(input_event_t *out_event, TickType_t now_ticks)
         cur = s_prev_btn;
     }
 
-    // Require a return to NONE between distinct buttons so a held press can't trigger another
-    if (s_prev_btn != INPUT_BTN_NONE && cur != INPUT_BTN_NONE && cur != s_prev_btn) {
+    // Require a return to NONE between distinct buttons so a held press can't
+    // trigger another, except when A/B transitions into the verified top combo.
+    if (s_prev_btn != INPUT_BTN_NONE &&
+        cur != INPUT_BTN_NONE &&
+        cur != s_prev_btn &&
+        !allow_combo_transition(s_prev_btn, cur)) {
         cur = s_prev_btn;
     }
 

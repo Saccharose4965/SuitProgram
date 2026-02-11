@@ -34,6 +34,16 @@ static const char* TAG = "hw";
 // SPI
 static bool s_spi2_inited = false;
 
+#define SPI2_TRACKED_DEVICES 8
+typedef struct {
+    bool used;
+    gpio_num_t cs_pin;
+    uint32_t clock_hz;
+    uint8_t spi_mode;
+    spi_device_handle_t handle;
+} spi2_device_slot_t;
+static spi2_device_slot_t s_spi2_devices[SPI2_TRACKED_DEVICES];
+
 // I2S
 static i2s_chan_handle_t s_i2s_tx = NULL;
 static i2s_chan_handle_t s_i2s_rx = NULL;
@@ -173,6 +183,20 @@ esp_err_t hw_spi2_init_once(void)
     return ESP_OK;
 }
 
+esp_err_t hw_spi2_find_device(gpio_num_t cs_pin, spi_device_handle_t *out_handle)
+{
+    if (!out_handle) return ESP_ERR_INVALID_ARG;
+    if (!gpio_is_valid_num(cs_pin)) return ESP_ERR_INVALID_ARG;
+
+    for (size_t i = 0; i < SPI2_TRACKED_DEVICES; ++i) {
+        if (!s_spi2_devices[i].used) continue;
+        if (s_spi2_devices[i].cs_pin != cs_pin) continue;
+        *out_handle = s_spi2_devices[i].handle;
+        return ESP_OK;
+    }
+    return ESP_ERR_NOT_FOUND;
+}
+
 esp_err_t hw_spi2_add_device(gpio_num_t cs_pin, uint32_t clock_hz,
                              uint8_t spi_mode, int queue_size,
                              spi_device_handle_t* out_handle)
@@ -181,6 +205,12 @@ esp_err_t hw_spi2_add_device(gpio_num_t cs_pin, uint32_t clock_hz,
 
     if (!s_spi2_inited) {
         ESP_RETURN_ON_ERROR(hw_spi2_init_once(), TAG, "init spi2");
+    }
+
+    spi_device_handle_t existing = NULL;
+    if (hw_spi2_find_device(cs_pin, &existing) == ESP_OK && existing) {
+        *out_handle = existing;
+        return ESP_OK;
     }
 
     // Make sure the CS pin is configured as output high before attaching.
@@ -210,7 +240,21 @@ esp_err_t hw_spi2_add_device(gpio_num_t cs_pin, uint32_t clock_hz,
         .flags = SPI_DEVICE_NO_DUMMY,
         .input_delay_ns = 0
     };
-    return spi_bus_add_device(HW_SPI_HOST, &dev, out_handle);
+    esp_err_t err = spi_bus_add_device(HW_SPI_HOST, &dev, out_handle);
+    if (err != ESP_OK) return err;
+
+    for (size_t i = 0; i < SPI2_TRACKED_DEVICES; ++i) {
+        if (s_spi2_devices[i].used) continue;
+        s_spi2_devices[i].used = true;
+        s_spi2_devices[i].cs_pin = cs_pin;
+        s_spi2_devices[i].clock_hz = clock_hz;
+        s_spi2_devices[i].spi_mode = spi_mode;
+        s_spi2_devices[i].handle = *out_handle;
+        return ESP_OK;
+    }
+
+    ESP_LOGW(TAG, "SPI2 device tracking full; CS%d reuse lookup disabled for new entry", (int)cs_pin);
+    return ESP_OK;
 }
 
 

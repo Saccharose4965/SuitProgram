@@ -10,9 +10,14 @@
 #include "freertos/queue.h"
 #include "oled.h"
 #include "fft.h"   // NEW: for fft_get_confident_bpms & BPM range
+#include "esp_timer.h"
 
 static const float kDispPeakHold = 0.95f;  // decay for display peak tracking
 static const float kDispPeakMin  = 1.0f;   // minimum display peak to avoid blowing up noise
+
+#ifndef FFT_RENDER_MAX_FPS
+#define FFT_RENDER_MAX_FPS 20
+#endif
 
 // ------------------- Framebuffer helpers -------------------
 static uint8_t g_fb[PANEL_W * PANEL_H / 8];
@@ -41,12 +46,20 @@ static int     g_tempo_hist_idx = 0;
 static int     g_tempo_hist_count = 0;
 static float   g_phase_corr[PANEL_W];
 static float   g_phase_corr_peak = 1.0f;
-static uint32_t g_beat_flash_frames = 0;
+static int64_t g_beat_flash_until_us = 0;
 static volatile fft_view_t g_view_mode = FFT_VIEW_BPM_TEXT;
 static bool g_render_enabled = true; // allow disabling OLED output
+static fft_render_packet_t g_render_pkt; // avoid large per-task stack usage
 
 static QueueHandle_t s_render_queue = NULL;
 static TaskHandle_t s_render_task = NULL;
+
+#if CONFIG_FREERTOS_UNICORE
+#define FFT_RENDER_CORE 0
+#else
+#define FFT_RENDER_CORE 1
+#endif
+#define FFT_RENDER_PRIO 3
 
 // ------------------- Rendering -------------------
 static void render_log_spectrum(const float *logmag);
@@ -63,9 +76,9 @@ static void render_task(void *arg);
 static void render_beat_spectrum(const fft_render_packet_t *pkt){
     char l1[32], l2[32], l3[32];
 
-    // Beat flash marker
+    // Beat flash marker (time-based so blink timing is independent of render FPS)
     char flash = ' ';
-    if (g_beat_flash_frames > 0) { flash = '*'; g_beat_flash_frames--; }
+    if (esp_timer_get_time() <= g_beat_flash_until_us) flash = '*';
 
     // Try to get a list of confident BPMs
     float bpms[3];
@@ -146,7 +159,7 @@ static void render_active_view(const fft_render_packet_t *pkt){
 static void render_log_spectrum(const float *logmag){
     if (!logmag) return;
 
-    float cols[PANEL_W];
+    static float cols[PANEL_W];
     float maxv = 1e-3f;
     const float step = ((float)(FFT_SIZE/2 + 1)) / (float)PANEL_W;
     for (int x=0; x<PANEL_W; ++x){
@@ -336,15 +349,21 @@ static void render_phase_comb(void){
 
 static void render_task(void *arg){
     (void)arg;
-    fft_render_packet_t pkt;
+    const int64_t min_frame_us = 1000000LL / (int64_t)FFT_RENDER_MAX_FPS;
+    int64_t last_draw_us = 0;
     while (1){
         if (!s_render_queue){
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
-        if (xQueueReceive(s_render_queue, &pkt, portMAX_DELAY) == pdTRUE){
+        if (xQueueReceive(s_render_queue, &g_render_pkt, portMAX_DELAY) == pdTRUE){
+            int64_t now_us = esp_timer_get_time();
+            if (last_draw_us != 0 && (now_us - last_draw_us) < min_frame_us){
+                continue; // drop intermediate frames; queue is overwrite-based
+            }
             if (g_render_enabled){
-                render_active_view(&pkt);
+                render_active_view(&g_render_pkt);
+                last_draw_us = esp_timer_get_time();
             }
         }
     }
@@ -415,6 +434,7 @@ void fft_render_push_novelty_display(float raw, float local_mean, float cleaned)
 
 void fft_render_update_tempo_spectrum(const float *bpm_spec_bc){
     const int bpm_count = BPM_MAX - BPM_MIN + 1;
+    const int disp_bpm_count = TARGET_BPM_MAX - TARGET_BPM_MIN + 1;
 
     if (!bpm_spec_bc){
         memset(g_tempo_spec_raw, 0, sizeof(g_tempo_spec_raw));
@@ -426,16 +446,16 @@ void fft_render_update_tempo_spectrum(const float *bpm_spec_bc){
         return;
     }
 
-    const float dispMinBpm = 30.0f;
-    const float dispMaxBpm = 286.0f;
-    const float dispSpan   = dispMaxBpm - dispMinBpm;
     int next_count = (g_tempo_hist_count < 6) ? (g_tempo_hist_count + 1) : 6;
 
     for (int x=0; x < PANEL_W; ++x){
-        float norm = (PANEL_W > 1) ? ((float)x / (PANEL_W - 1)) : 0.0f;
-        float bpm  = dispMinBpm + norm * dispSpan;
+        // Display only 64..127 BPM; on 128px panels this gives exactly 2 px per BPM.
+        int disp_idx = (PANEL_W > 0) ? (x * disp_bpm_count) / PANEL_W : 0;
+        if (disp_idx < 0) disp_idx = 0;
+        if (disp_idx >= disp_bpm_count) disp_idx = disp_bpm_count - 1;
 
-        int bin = (int)lroundf(bpm - BPM_MIN);
+        int bpm = TARGET_BPM_MIN + disp_idx;
+        int bin = bpm - BPM_MIN;
 
         if (bin < 0) bin = 0;
         if (bin >= bpm_count) bin = bpm_count - 1;
@@ -484,8 +504,16 @@ void fft_render_update_phase_curve(const float *vals, int count){
 }
 
 void fft_render_trigger_flash(uint32_t flash_frames){
-    if (flash_frames > g_beat_flash_frames){
-        g_beat_flash_frames = flash_frames;
+    if (flash_frames == 0) flash_frames = 1;
+
+    int64_t now_us = esp_timer_get_time();
+    int64_t dur_us = ((int64_t)flash_frames * 1000000LL) / (int64_t)FPS;
+    // Keep marker visible long enough so render FPS jitter doesn't drop beats visually.
+    if (dur_us < 120000) dur_us = 120000;
+
+    int64_t until_us = now_us + dur_us;
+    if (until_us > g_beat_flash_until_us){
+        g_beat_flash_until_us = until_us;
     }
 }
 
@@ -503,7 +531,8 @@ esp_err_t fft_render_init(void){
         if (!s_render_queue) return ESP_ERR_NO_MEM;
     }
     if (!s_render_task){
-        BaseType_t rt = xTaskCreate(render_task, "fft_render", 4096, NULL, 4, &s_render_task);
+        BaseType_t rt = xTaskCreatePinnedToCore(render_task, "fft_render", 6144, NULL,
+                                                FFT_RENDER_PRIO, &s_render_task, FFT_RENDER_CORE);
         if (rt != pdPASS) return ESP_ERR_NO_MEM;
     }
     return ESP_OK;

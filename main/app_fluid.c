@@ -20,12 +20,6 @@ void fluid_app_deinit_wrapper(shell_app_context_t *ctx)
 
 void fluid_app_handle_input_wrapper(shell_app_context_t *ctx, const input_event_t *ev)
 {
-    if (ev && ev->type == INPUT_EVENT_LONG_PRESS && ev->button == INPUT_BTN_A) {
-        if (ctx && ctx->request_switch) {
-            ctx->request_switch("menu", ctx->request_user_data);
-        }
-        return;
-    }
     (void)ctx;
     fluid_app_handle_input(ev);
 }
