@@ -56,7 +56,11 @@ static const char *TAG = "audio_rx";
 #define AUDIO_RX_TASK_PRIO     1
 #define AUDIO_RX_TASK_STACK    8192
 #define AUDIO_RX_WRITER_PRIO   4
-#define AUDIO_RX_WRITER_STACK  4096
+#define AUDIO_RX_WRITER_STACK  6144
+#define AUDIO_RX_WRITER_WAIT_MIN_MS        10000
+#define AUDIO_RX_WRITER_WAIT_MAX_MS        60000
+#define AUDIO_RX_WRITER_IDLE_STALL_MS      15000
+#define AUDIO_RX_WRITER_IDLE_POST_DRAIN_MS 30000
 
 // Yield occasionally to keep UI responsive during sustained transfers
 #define AUDIO_RX_YIELD_EVERY    4
@@ -168,6 +172,7 @@ static uint32_t audio_rx_make_paths(char *path_final, size_t final_len,
 typedef struct {
     RingbufHandle_t ring;
     size_t          ring_bytes;
+    TaskHandle_t    task;
     FILE           *file;
     uint8_t        *filebuf;
     volatile bool   stop;
@@ -253,14 +258,20 @@ static void audio_rx_writer_task(void *arg)
 
     while (1) {
         // Exit ASAP once asked to stop and ring is empty.
-        if (w->stop && xRingbufferGetCurFreeSize(w->ring) == w->ring_bytes) {
+        RingbufHandle_t ring_local = w->ring;
+        if ((uintptr_t)ring_local < 0x3F000000u) {
+            ESP_LOGE(TAG, "Writer: invalid ring handle %p", (void *)ring_local);
+            w->error = true;
+            break;
+        }
+        if (w->stop && xRingbufferGetCurFreeSize(ring_local) == w->ring_bytes) {
             ESP_LOGI(TAG, "Writer: ring drained, finishing");
             break;
         }
 
         size_t item_size = 0;
         uint8_t *item = (uint8_t *)xRingbufferReceiveUpTo(
-            w->ring, &item_size, AUDIO_RX_WRITE_CHUNK, pdMS_TO_TICKS(200));
+            ring_local, &item_size, AUDIO_RX_WRITE_CHUNK, pdMS_TO_TICKS(200));
 
         if (!item) {
             continue;
@@ -292,7 +303,7 @@ static void audio_rx_writer_task(void *arg)
                 yield_count = 0;
             }
         }
-        vRingbufferReturnItem(w->ring, item);
+        vRingbufferReturnItem(ring_local, item);
 
         if (write_failed) {
             w->error = true;
@@ -306,7 +317,10 @@ static void audio_rx_writer_task(void *arg)
         fsync(fd);
     }
     fclose(w->file);
+    w->file = NULL;
     free(w->filebuf);
+    w->filebuf = NULL;
+    w->task = NULL;
     w->done = true;
     vTaskDelete(NULL);
 }
@@ -397,7 +411,11 @@ static void audio_rx_task(void *arg)
         if (!ring) {
             ESP_LOGW(TAG, "PSRAM ring buffer alloc failed; falling back to direct write");
         } else {
-            writer = (audio_rx_writer_t *)calloc(1, sizeof(*writer));
+            writer = (audio_rx_writer_t *)heap_caps_calloc(
+                1, sizeof(*writer), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            if (!writer) {
+                writer = (audio_rx_writer_t *)calloc(1, sizeof(*writer));
+            }
             if (!writer) {
                 ESP_LOGW(TAG, "writer alloc failed; falling back to direct write");
                 vRingbufferDeleteWithCaps(ring);
@@ -413,7 +431,7 @@ static void audio_rx_task(void *arg)
                     AUDIO_RX_WRITER_STACK,
                     writer,
                     AUDIO_RX_WRITER_PRIO,
-                    NULL,
+                    &writer->task,
                     AUDIO_RX_WRITER_CORE
                 );
                 if (wok != pdPASS) {
@@ -428,6 +446,7 @@ static void audio_rx_task(void *arg)
 
         uint8_t *buf = s_rx_chunk_buf;
         size_t  total_written = 0;
+        size_t  total_received = 0;
         size_t  since_flush   = 0;
         bool write_failed_direct = false;
         unsigned int yield_count = 0;
@@ -500,6 +519,7 @@ static void audio_rx_task(void *arg)
                 ESP_LOGI(TAG, "Client finished sending '%s'", path_tmp);
                 break;
             }
+            total_received += (size_t)r;
 
             if (writer && ring) {
                 size_t off = 0;
@@ -591,36 +611,109 @@ static void audio_rx_task(void *arg)
 
         if (writer && ring) {
             writer->stop = true;
-            int waited_ms = 0;
-            while (!writer->done && waited_ms < 10000) {
+            TickType_t wait_start = xTaskGetTickCount();
+            TickType_t last_progress_tick = wait_start;
+            TickType_t last_wait_log = wait_start;
+            size_t last_written = writer->total_written;
+            bool ring_drained_last = false;
+            while (!writer->done) {
                 vTaskDelay(pdMS_TO_TICKS(10));
-                waited_ms += 10;
+                TickType_t now = xTaskGetTickCount();
+                size_t written_now = writer->total_written;
+                size_t free_now = xRingbufferGetCurFreeSize(ring);
+                bool ring_drained = (free_now == writer->ring_bytes);
+                ring_drained_last = ring_drained;
+
+                if (written_now != last_written) {
+                    last_written = written_now;
+                    last_progress_tick = now;
+                }
+
+                TickType_t elapsed = now - wait_start;
+                TickType_t idle = now - last_progress_tick;
+                if (elapsed > pdMS_TO_TICKS(AUDIO_RX_WRITER_WAIT_MAX_MS)) {
+                    ESP_LOGE(TAG,
+                             "RX: writer hard-timeout at %u ms (free=%u, written=%u, drained=%d)",
+                             (unsigned)(elapsed * portTICK_PERIOD_MS),
+                             (unsigned)free_now,
+                             (unsigned)written_now,
+                             ring_drained ? 1 : 0);
+                    break;
+                }
+                if (elapsed > pdMS_TO_TICKS(AUDIO_RX_WRITER_WAIT_MIN_MS)) {
+                    TickType_t idle_limit = ring_drained
+                        ? pdMS_TO_TICKS(AUDIO_RX_WRITER_IDLE_POST_DRAIN_MS)
+                        : pdMS_TO_TICKS(AUDIO_RX_WRITER_IDLE_STALL_MS);
+                    if (idle > idle_limit) {
+                        ESP_LOGE(TAG,
+                                 "RX: writer stalled %u ms after client finished "
+                                 "(free=%u, written=%u, drained=%d)",
+                                 (unsigned)(idle * portTICK_PERIOD_MS),
+                                 (unsigned)free_now,
+                                 (unsigned)written_now,
+                                 ring_drained ? 1 : 0);
+                        break;
+                    }
+                }
+
+                if ((now - last_wait_log) > pdMS_TO_TICKS(2000)) {
+                    ESP_LOGI(TAG, "RX wait writer: free %u, written %u%s",
+                             (unsigned)free_now,
+                             (unsigned)written_now,
+                             ring_drained ? " (drained)" : "");
+                    last_wait_log = now;
+                }
             }
             if (!writer->done) {
-                ESP_LOGE(TAG, "RX: writer did not finish in time; forcing close of '%s'", path_tmp);
-                had_error = true;
+                ESP_LOGE(TAG, "RX: writer did not finish; forcing shutdown of '%s'", path_tmp);
+                bool forced_close_ok = true;
+                if (writer->task) {
+                    vTaskDelete(writer->task);
+                    writer->task = NULL;
+                }
                 // Best effort: flush/close the writer file to keep FS consistent.
                 if (writer->file) {
-                    fflush(writer->file);
+                    if (fflush(writer->file) != 0) {
+                        forced_close_ok = false;
+                    }
                     int fd = fileno(writer->file);
-                    if (fd >= 0) fsync(fd);
-                    fclose(writer->file);
+                    if (fd >= 0 && fsync(fd) != 0) {
+                        forced_close_ok = false;
+                    }
+                    if (fclose(writer->file) != 0) {
+                        forced_close_ok = false;
+                    }
                     writer->file = NULL;
+                }
+                if (writer->filebuf) {
+                    free(writer->filebuf);
+                    writer->filebuf = NULL;
+                }
+                writer->done = true;
+                bool recovered = ring_drained_last &&
+                                 !writer->error &&
+                                 (writer->total_written >= total_received) &&
+                                 forced_close_ok;
+                if (recovered) {
+                    ESP_LOGW(TAG, "RX: writer recovered after timeout (recv=%u written=%u)",
+                             (unsigned)total_received, (unsigned)writer->total_written);
+                    had_error = false;
+                } else {
+                    had_error = true;
                 }
             } else {
                 had_error |= writer->error;
 
-                ESP_LOGI(TAG, "Finished '%s' (%u bytes)%s",
+                ESP_LOGI(TAG, "Finished '%s' (%u bytes, recv=%u)%s",
                          path_tmp,
                          (unsigned)writer->total_written,
+                         (unsigned)total_received,
                          writer->error ? " [WRITER ERROR]" : "");
             }
 
             vRingbufferDeleteWithCaps(ring);
             ring = NULL;
             if (writer) {
-                free(writer->filebuf);
-                writer->filebuf = NULL;
                 free(writer);
                 writer = NULL;
             }
