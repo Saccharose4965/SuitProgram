@@ -17,13 +17,6 @@ bool      audio_player_should_abort(void);
 bool      audio_player_is_active(void);
 bool      audio_player_is_paused(void);
 
-// Playlist helpers (in-RAM only).
-void      audio_player_queue_clear(void);
-int       audio_player_queue_count(void);
-esp_err_t audio_player_queue_play_now(const char *path);
-esp_err_t audio_player_queue_play_next(const char *path);
-esp_err_t audio_player_queue_play_last(const char *path);
-
 #ifdef __cplusplus
 }
 #endif
