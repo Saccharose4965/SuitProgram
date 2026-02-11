@@ -6,9 +6,11 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 
 #include "bt_audio.h"
 #include "audio.h"
@@ -33,8 +35,13 @@ typedef struct {
     char path[128];
 } audio_task_args_t;
 
-#define AUDIO_TASK_STACK (8 * 1024)
+#define AUDIO_TASK_STACK (4 * 1024)
 #define AUDIO_TASK_PRIO  2
+#if configNUMBER_OF_CORES > 1
+#define AUDIO_TASK_CORE  1
+#else
+#define AUDIO_TASK_CORE  0
+#endif
 
 static void audio_play_task(void *arg);
 
@@ -139,9 +146,9 @@ static void audio_play_task(void *arg)
                     }
                 }
 
-            } else if (err == ESP_ERR_INVALID_STATE && bt_audio_can_stream()) {
+            } else if (bt_audio_can_stream()) {
                 ESP_LOGW(TAG,
-                         "bt_audio_play_wav failed (%s), BT busy; skipping speaker fallback",
+                         "bt_audio_play_wav failed (%s), skipping speaker fallback",
                          esp_err_to_name(err));
                 skip_local = true;
             } else {
@@ -202,9 +209,33 @@ esp_err_t audio_player_play(const char *path)
         a,
         AUDIO_TASK_PRIO,
         &s_player_task,
-        tskNO_AFFINITY
+        AUDIO_TASK_CORE
     );
+
+#if CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+    if (ok != pdPASS) {
+        // Fallback when internal heap is fragmented/low under BT+Wi-Fi load.
+        ok = xTaskCreatePinnedToCoreWithCaps(
+            audio_play_task,
+            "audio_play_task",
+            AUDIO_TASK_STACK,
+            a,
+            AUDIO_TASK_PRIO,
+            &s_player_task,
+            AUDIO_TASK_CORE,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+        );
+        if (ok == pdPASS) {
+            ESP_LOGW(TAG, "audio task allocated in PSRAM");
+        }
+    }
+#endif
+
     if (ok != pdPASS){
+        ESP_LOGE(TAG,
+                 "audio task create failed: internal=%u spiram=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         free(a);
         s_player_task = NULL;
         return ESP_FAIL;

@@ -163,12 +163,16 @@ bool input_poll(input_event_t *out_event, TickType_t now_ticks)
 
 
     if (cur != s_prev_btn) {
+        const bool combo_from_ab = allow_combo_transition(s_prev_btn, cur);
+
         // Any ladder transition means press/release activity; drop a short
         // novelty window so button noise does not pollute beat tracking.
         fft_punch_novelty_hole(INPUT_AUDIO_HOLE_FRAMES);
 
         // On change, emit release first, then buffer new press.
-        s_prev_tick = now_ticks;
+        if (!combo_from_ab) {
+            s_prev_tick = now_ticks;
+        }
         s_long_sent = false;
 
         if (s_prev_btn != INPUT_BTN_NONE) {

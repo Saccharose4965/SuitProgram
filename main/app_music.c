@@ -9,6 +9,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "esp_err.h"
+#include "esp_log.h"
+
 #include "audio_player.h"
 #include "bt_audio.h"
 #include "storage_sd.h"
@@ -26,14 +29,7 @@ typedef struct {
     bool tried_mount;
 } music_state_t;
 static music_state_t s_music = {0};
-
-// Music playback task
-static TaskHandle_t s_music_task = NULL;
-static volatile bool s_music_stop = false;
-typedef struct {
-    char *path;
-    int   idx;
-} music_task_arg_t;
+static const char *TAG = "app_music";
 
 const shell_legend_t MUSIC_LEGEND = {
     .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_OK, SHELL_ICON_CUSTOM2 },
@@ -41,33 +37,12 @@ const shell_legend_t MUSIC_LEGEND = {
 
 void music_stop_playback(void)
 {
-    s_music_stop = true;
-    if (s_music_task){
-        audio_player_stop(); // ask playback to abort ASAP
-        for (int i = 0; i < 50 && s_music_task; ++i) { // wait up to ~500 ms
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
-    }
-    // If still running after waiting, force kill to avoid orphaned task
-    if (s_music_task){
-        vTaskDelete(s_music_task);
-        s_music_task = NULL;
+    // audio_player already owns its worker task; do not wrap/kill from here.
+    audio_player_stop();
+    for (int i = 0; i < 40 && audio_player_is_active(); ++i) {
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
     s_music.playing = -1;
-}
-
-static void music_play_task(void *arg)
-{
-    music_task_arg_t *info = (music_task_arg_t*)arg;
-    if (info && info->path) {
-        s_music.playing = info->idx;
-        audio_player_play(info->path); // blocking; runs in own task
-        free(info->path);
-    }
-    free(info);
-    s_music.playing = -1;
-    s_music_task = NULL;
-    vTaskDelete(NULL);
 }
 
 static bool has_wav_ext(const char *name)
@@ -112,18 +87,18 @@ static void music_start_selected(void)
     if (s_music.sel < 0 || s_music.sel >= s_music.count) return;
     int sel = s_music.sel;
     music_stop_playback();
-    char *path = strdup(s_music.paths[sel]);
-    if (!path) return;
-    music_task_arg_t *info = (music_task_arg_t*)malloc(sizeof(music_task_arg_t));
-    if (!info){
-        free(path);
+
+    // Give transport a short moment to flush previous stop/pause control.
+    for (int i = 0; i < 40 && audio_player_is_active(); ++i) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    esp_err_t err = audio_player_play(s_music.paths[sel]);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "start selected failed: %s", esp_err_to_name(err));
         return;
     }
-    info->path = path;
-    info->idx  = sel;
-    s_music_stop = false;
-    // Lower priority so UI stays responsive while playing.
-    xTaskCreatePinnedToCore(music_play_task, "music_play", 4096, info, 4, &s_music_task, tskNO_AFFINITY);
+    s_music.playing = sel;
 }
 
 void music_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
