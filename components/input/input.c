@@ -34,6 +34,8 @@ static bool allow_combo_transition(input_button_t prev, input_button_t cur)
 {
     if (prev == INPUT_BTN_A && cur == INPUT_BTN_TOP_COMBO) return true;
     if (prev == INPUT_BTN_B && cur == INPUT_BTN_TOP_COMBO) return true;
+    if (prev == INPUT_BTN_B && cur == INPUT_BTN_FAST_FALL) return true;
+    if (prev == INPUT_BTN_C && cur == INPUT_BTN_FAST_FALL) return true;
     return false;
 }
 

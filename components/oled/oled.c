@@ -17,6 +17,8 @@
 static spi_device_handle_t s_oled;
 static SemaphoreHandle_t s_oled_lock = NULL;
 static bool s_oled_inited = false;
+static bool s_oled_prev_valid = false;
+static uint8_t s_oled_prev_pages[PANEL_H / 8][PANEL_W];
 
 static inline void dc_cmd(void){
     gpio_set_level(PIN_DC_OLED, 0);
@@ -110,6 +112,7 @@ void oled_init(void)
     cmd1(0xA6);                  // normal display
     cmd1(0xAF);                  // display ON
     vTaskDelay(pdMS_TO_TICKS(50)); // let panel wake up
+    s_oled_prev_valid = false;
     s_oled_inited = true;
 }
 
@@ -120,13 +123,13 @@ void oled_clear(void){
     for (int page=0; page<PANEL_H/8; ++page){
         tx(zeros, PANEL_W, true);
     }
+    memset(s_oled_prev_pages, 0, sizeof(s_oled_prev_pages));
+    s_oled_prev_valid = true;
 }
 
 // ---- Full-screen 128x64 blit (buf is PANEL_W*PANEL_H/8) ----
 void oled_blit_full(const uint8_t* buf)
 {
-    begin_window(0, PANEL_W-1, 0, (PANEL_H/8)-1);
-
     uint8_t line[PANEL_W];
     for (int p = 0; p < PANEL_H/8; ++p) {
         for (int x = 0; x < PANEL_W; ++x) {
@@ -139,8 +142,61 @@ void oled_blit_full(const uint8_t* buf)
             }
             line[x] = b;
         }
-        tx(line, PANEL_W, true);
+
+        if (!s_oled_prev_valid) {
+            begin_window(0, PANEL_W - 1, p, p);
+            tx(line, PANEL_W, true);
+            memcpy(s_oled_prev_pages[p], line, PANEL_W);
+            continue;
+        }
+
+        int changed = 0;
+        int runs = 0;
+        bool in_run = false;
+        for (int x = 0; x < PANEL_W; ++x) {
+            bool diff = (line[x] != s_oled_prev_pages[p][x]);
+            if (diff) {
+                ++changed;
+                if (!in_run) {
+                    in_run = true;
+                    ++runs;
+                }
+            } else {
+                in_run = false;
+            }
+        }
+        if (changed == 0) {
+            continue;
+        }
+
+        // If a lot changed, send whole page (fewer SPI commands, less overhead).
+        if (changed > (PANEL_W / 2) || runs > 10) {
+            begin_window(0, PANEL_W - 1, p, p);
+            tx(line, PANEL_W, true);
+            memcpy(s_oled_prev_pages[p], line, PANEL_W);
+            continue;
+        }
+
+        int run_start = -1;
+        for (int x = 0; x < PANEL_W; ++x) {
+            bool diff = (line[x] != s_oled_prev_pages[p][x]);
+            if (diff) {
+                s_oled_prev_pages[p][x] = line[x];
+                if (run_start < 0) run_start = x;
+            } else if (run_start >= 0) {
+                int run_end = x - 1;
+                begin_window(run_start, run_end, p, p);
+                tx(&line[run_start], (size_t)(run_end - run_start + 1), true);
+                run_start = -1;
+            }
+        }
+        if (run_start >= 0) {
+            int run_end = PANEL_W - 1;
+            begin_window(run_start, run_end, p, p);
+            tx(&line[run_start], (size_t)(run_end - run_start + 1), true);
+        }
     }
+    s_oled_prev_valid = true;
 }
 
 // ---- 64x64 centered blit (buf is 64x64) ----

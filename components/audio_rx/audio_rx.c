@@ -55,7 +55,7 @@ static const char *TAG = "audio_rx";
 // Task priority (keep below the UI / main loop)
 #define AUDIO_RX_TASK_PRIO     1
 #define AUDIO_RX_TASK_STACK    8192
-#define AUDIO_RX_WRITER_PRIO   3
+#define AUDIO_RX_WRITER_PRIO   4
 #define AUDIO_RX_WRITER_STACK  4096
 
 // Yield occasionally to keep UI responsive during sustained transfers
@@ -66,9 +66,10 @@ static const char *TAG = "audio_rx";
 #define AUDIO_RX_TASK_CORE      0
 #define AUDIO_RX_WRITER_CORE    0
 #else
-// Keep RX on core1, let writer run on core0 to drain ring promptly
+// Keep RX + writer on core1 so SD writes are not starved by BT/Wi-Fi work
+// that heavily occupies core0 under load.
 #define AUDIO_RX_TASK_CORE      1
-#define AUDIO_RX_WRITER_CORE    0
+#define AUDIO_RX_WRITER_CORE    1
 #endif
 
 // -----------------------------------------------------------------------------
@@ -435,6 +436,8 @@ static void audio_rx_task(void *arg)
         TickType_t last_stat_log  = xTaskGetTickCount();
 
         TickType_t last_backpressure_log = xTaskGetTickCount();
+        size_t last_writer_written = 0;
+        TickType_t last_writer_progress_tick = xTaskGetTickCount();
         while (!s_stop_flag) {
             TickType_t now = xTaskGetTickCount();
 
@@ -442,6 +445,17 @@ static void audio_rx_task(void *arg)
             if ((now - last_stat_log) > pdMS_TO_TICKS(1000)) {
                 size_t free_bytes = writer && ring ? xRingbufferGetCurFreeSize(ring) : 0;
                 size_t writer_written = writer ? writer->total_written : total_written;
+                if (writer_written != last_writer_written) {
+                    last_writer_written = writer_written;
+                    last_writer_progress_tick = now;
+                } else if (writer && !writer->done &&
+                           (now - last_writer_progress_tick) > pdMS_TO_TICKS(3000) &&
+                           free_bytes <= AUDIO_RX_RING_LOW_WATER_BYTES) {
+                    ESP_LOGW(TAG, "Writer stalled >3s (ring free %u). "
+                                  "Likely SD/SPI contention from concurrent workloads.",
+                             (unsigned)free_bytes);
+                    last_writer_progress_tick = now;
+                }
                 ESP_LOGI(TAG, "RX stat: ring free %u, written %u, writer %s%s",
                          (unsigned)free_bytes,
                          (unsigned)writer_written,

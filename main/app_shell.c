@@ -11,6 +11,7 @@
 #include "freertos/task.h"
 
 #include "esp_log.h"
+#include "esp_system.h"
 
 #include "hw.h"
 #include "oled.h"
@@ -404,6 +405,9 @@ static void process_input_events(const shell_app_desc_t *app, TickType_t now_tic
         if (ev.type == INPUT_EVENT_LONG_PRESS) {
             if (ev.button == INPUT_BTN_TOP_COMBO) {
                 request_switch_cb("menu", NULL);
+                continue;
+            } else if (ev.button == INPUT_BTN_FAST_FALL) {
+                esp_restart();
                 continue;
             }
         }

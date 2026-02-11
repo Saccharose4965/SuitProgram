@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "esp_system.h"
+
 typedef shell_menu_entry_t menu_entry_t;
 
 typedef enum {
@@ -34,6 +36,7 @@ static const menu_entry_t g_menu_settings_entries[] = {
     { "bt",        "Bluetooth" },
     { "volume",    "Volume"    },
     { "keyboard",  "Keyboard"  },
+    { "reboot",    "Restart"   },
 };
 static const menu_entry_t g_menu_sim_entries[] = {
     { "menu_root", "Back"   },
@@ -163,6 +166,8 @@ void menu_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
                 g_menu_state.page = MENU_LED;
                 g_menu_state.selected = 0;
                 shell_ui_menu_reset(g_menu_state.selected);
+            } else if (strcmp(id, "reboot") == 0) {
+                esp_restart();
             } else {
                 ctx->request_switch(id, ctx->request_user_data);
             }
