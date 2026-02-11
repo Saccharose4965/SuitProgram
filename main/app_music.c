@@ -25,6 +25,7 @@ typedef struct {
     int  count;
     int  sel;
     int  playing;   // index of currently playing song, -1 if none
+    int  pending;   // pending track start index, -1 if none
     bool mounted;
     bool tried_mount;
 } music_state_t;
@@ -37,11 +38,8 @@ const shell_legend_t MUSIC_LEGEND = {
 
 void music_stop_playback(void)
 {
-    // audio_player already owns its worker task; do not wrap/kill from here.
+    s_music.pending = -1;
     audio_player_stop();
-    for (int i = 0; i < 40 && audio_player_is_active(); ++i) {
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
     s_music.playing = -1;
 }
 
@@ -79,26 +77,39 @@ void music_app_init(shell_app_context_t *ctx)
     (void)ctx;
     s_music.mounted = false;
     s_music.tried_mount = false;
+    s_music.pending = -1;
     music_scan();
+}
+
+static void music_try_start_pending(void)
+{
+    if (s_music.pending < 0 || s_music.pending >= s_music.count) {
+        s_music.pending = -1;
+        return;
+    }
+    if (audio_player_is_active()) {
+        return;
+    }
+
+    int idx = s_music.pending;
+    esp_err_t err = audio_player_play(s_music.paths[idx]);
+    if (err == ESP_OK) {
+        s_music.playing = idx;
+        s_music.pending = -1;
+    } else if (err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "start selected failed: %s", esp_err_to_name(err));
+        s_music.pending = -1;
+    }
 }
 
 static void music_start_selected(void)
 {
     if (s_music.sel < 0 || s_music.sel >= s_music.count) return;
     int sel = s_music.sel;
+    s_music.pending = sel;
     music_stop_playback();
-
-    // Give transport a short moment to flush previous stop/pause control.
-    for (int i = 0; i < 40 && audio_player_is_active(); ++i) {
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-
-    esp_err_t err = audio_player_play(s_music.paths[sel]);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "start selected failed: %s", esp_err_to_name(err));
-        return;
-    }
-    s_music.playing = sel;
+    s_music.pending = sel;
+    music_try_start_pending();
 }
 
 void music_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
@@ -134,6 +145,7 @@ void music_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 void music_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)
 {
     (void)ctx; (void)w; (void)h;
+    music_try_start_pending();
     if (!s_music.mounted && !s_music.tried_mount){
         s_music.tried_mount = true;
         if (storage_mount_sd() == ESP_OK){

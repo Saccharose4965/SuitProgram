@@ -384,13 +384,17 @@ static bool bt_stop_feeder(TickType_t wait_ticks)
     if (!s_bt_feeder_task) return true;
 
     s_bt_feeder_stop = true;
+    if (wait_ticks == 0) {
+        return false;
+    }
+
     TickType_t start = xTaskGetTickCount();
     while (s_bt_feeder_task) {
-        vTaskDelay(pdMS_TO_TICKS(2));
         if (wait_ticks > 0 && (xTaskGetTickCount() - start) >= wait_ticks) {
             ESP_LOGW(TAG, "Timeout stopping BT feeder task");
             return false;
         }
+        vTaskDelay(pdMS_TO_TICKS(2));
     }
     return true;
 }
@@ -453,6 +457,16 @@ static void bt_file_feeder_task(void *arg)
         break;
     }
 
+    // Best-effort file close owned by feeder context. Control path may already
+    // have closed/nullified it; keep this idempotent.
+    if (lock_fp(pdMS_TO_TICKS(50))) {
+        if (s_bt_fp) {
+            fclose(s_bt_fp);
+            s_bt_fp = NULL;
+        }
+        unlock_fp();
+    }
+
     s_bt_feeder_task = NULL;
     vTaskDelete(NULL);
 }
@@ -475,7 +489,8 @@ static bool close_bt_file(TickType_t wait_ticks){
         return true;
     } else {
         s_bt_bytes_left = 0;
-        s_bt_file_eof = false;
+        // Mark EOF so callback-side close path can finish once feeder exits.
+        s_bt_file_eof = true;
         bt_buf_reset();
         ESP_LOGW(TAG, "Failed to lock BT file for close");
         return false;
@@ -1287,7 +1302,9 @@ esp_err_t bt_audio_start_stream(void){
 
 esp_err_t bt_audio_stop_stream(void){
     if (!s_stack_ready) return ESP_ERR_INVALID_STATE;
-    (void)close_bt_file(pdMS_TO_TICKS(1500));
+    // Keep stop path responsive for shell/input context; feeder exits
+    // asynchronously if SD read is momentarily blocked.
+    (void)close_bt_file(pdMS_TO_TICKS(100));
     if (s_state != BT_AUDIO_STATE_CONNECTED && s_state != BT_AUDIO_STATE_STREAMING){
         return ESP_OK;
     }

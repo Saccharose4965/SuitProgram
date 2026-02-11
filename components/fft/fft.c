@@ -9,9 +9,11 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "audio.h"
 #include "esp_timer.h"
 #include "esp_attr.h"
@@ -906,6 +908,13 @@ esp_err_t fft_visualizer_start(void){
     }
     BaseType_t ok = xTaskCreatePinnedToCore(fft_task, "fft_vis", 12288, NULL,
                                             FFT_TASK_PRIO, &s_task, FFT_TASK_CORE);
+#if CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+    if (ok != pdPASS) {
+        ok = xTaskCreatePinnedToCoreWithCaps(fft_task, "fft_vis", 12288, NULL,
+                                             FFT_TASK_PRIO, &s_task, FFT_TASK_CORE,
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+#endif
     return ok==pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
