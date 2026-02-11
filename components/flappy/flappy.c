@@ -131,17 +131,16 @@ static int rand_range(int a, int b){ // inclusive [a..b]
     return a + (int)(r % (uint32_t)(b - a + 1));
 }
 
+static volatile bool g_stop = false;
+static volatile bool s_button_pressed = false;
+
 // Button helper
 static bool button_is_pressed(void){
-    hw_button_id_t b = HW_BTN_NONE;
-    if (hw_buttons_read(&b) != ESP_OK) {
-        return false;
-    }
-    return (b != HW_BTN_NONE);
+    return s_button_pressed;
 }
 
-static volatile bool g_stop = false;
 void flappy_request_stop(void){ g_stop = true; }
+void flappy_set_button_pressed(bool pressed){ s_button_pressed = pressed; }
 
 // ----------------- Rendering -----------------
 static void draw_bird(int x, int y, bool flip_vert){
@@ -224,6 +223,7 @@ static bool bird_hits_pipe(int bird_x, int bird_y, int pipe_x, int gap_y, bool f
 void flappy_run(void)
 {
     g_stop = false;
+    s_button_pressed = false;
     // Shell owns OLED initialization; this app only renders.
     oled_clear();
 

@@ -12,6 +12,8 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 // Some 6.x dev snapshots don’t expose 11 dB; map to 12 dB if needed.
 #ifndef ADC_ATTEN_DB_11
@@ -52,6 +54,8 @@ static i2s_chan_handle_t s_i2s_rx = NULL;
 static adc_oneshot_unit_handle_t s_adc_unit = NULL;
 static adc_cali_handle_t         s_adc_cali = NULL;
 static bool                      s_adc_cali_enabled = false;
+static SemaphoreHandle_t         s_adc_mutex = NULL;
+static portMUX_TYPE              s_adc_mutex_create_lock = portMUX_INITIALIZER_UNLOCKED;
 
 // ======================================================================
 // GPIO helpers
@@ -374,7 +378,35 @@ static inline void hw_adc_release_rtc_and_route_pads(void)
 #endif
 }
 
-esp_err_t hw_adc1_init_default(void)
+static esp_err_t hw_adc_mutex_ensure(void)
+{
+    if (s_adc_mutex) return ESP_OK;
+    taskENTER_CRITICAL(&s_adc_mutex_create_lock);
+    if (!s_adc_mutex) {
+        s_adc_mutex = xSemaphoreCreateMutex();
+    }
+    taskEXIT_CRITICAL(&s_adc_mutex_create_lock);
+    return s_adc_mutex ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+static esp_err_t hw_adc_lock(TickType_t timeout_ticks)
+{
+    esp_err_t err = hw_adc_mutex_ensure();
+    if (err != ESP_OK) return err;
+    if (xSemaphoreTake(s_adc_mutex, timeout_ticks) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
+
+static void hw_adc_unlock(void)
+{
+    if (s_adc_mutex) {
+        (void)xSemaphoreGive(s_adc_mutex);
+    }
+}
+
+static esp_err_t hw_adc1_init_default_locked(void)
 {
     if (s_adc_unit) return ESP_OK;
 
@@ -385,8 +417,8 @@ esp_err_t hw_adc1_init_default(void)
         .unit_id = ADC_UNIT_1,
         .clk_src = ADC_DIGI_CLK_SRC_DEFAULT,
     };
-    ESP_RETURN_ON_ERROR(adc_oneshot_new_unit(&unit_cfg, &s_adc_unit),
-                        TAG, "adc_oneshot_new_unit");
+    esp_err_t err = adc_oneshot_new_unit(&unit_cfg, &s_adc_unit);
+    ESP_RETURN_ON_ERROR(err, TAG, "adc_oneshot_new_unit");
 
     // Optional: sanity check the IO↔channel mapping (logs once)
 #if __has_include("esp_adc/adc_oneshot.h")
@@ -406,7 +438,7 @@ esp_err_t hw_adc1_init_default(void)
     ESP_ERROR_CHECK_WITHOUT_ABORT(adc_oneshot_config_channel(s_adc_unit, HW_HALL_A_ADC_CH,  &ch_cfg));
     ESP_ERROR_CHECK_WITHOUT_ABORT(adc_oneshot_config_channel(s_adc_unit, HW_HALL_B_ADC_CH,  &ch_cfg));
     ESP_ERROR_CHECK_WITHOUT_ABORT(adc_oneshot_config_channel(s_adc_unit, HW_BUTTONS_ADC_CH, &ch_cfg));
-    
+
     // Try enable calibration (line fitting)
     adc_cali_line_fitting_config_t cali_cfg = {
         .unit_id  = ADC_UNIT_1,
@@ -425,33 +457,59 @@ esp_err_t hw_adc1_init_default(void)
     return ESP_OK;
 }
 
+esp_err_t hw_adc1_init_default(void)
+{
+    esp_err_t err = hw_adc_lock(pdMS_TO_TICKS(100));
+    if (err != ESP_OK) return err;
+    err = hw_adc1_init_default_locked();
+    hw_adc_unlock();
+    return err;
+}
+
 esp_err_t hw_adc1_read_raw(adc_channel_t ch, int *out_value)
 {
     if (!out_value) return ESP_ERR_INVALID_ARG;
-    ESP_RETURN_ON_ERROR(hw_adc1_init_default(), TAG, "adc init");
-    return adc_oneshot_read(s_adc_unit, ch, out_value);
+    esp_err_t err = hw_adc_lock(pdMS_TO_TICKS(100));
+    if (err != ESP_OK) return err;
+    err = hw_adc1_init_default_locked();
+    if (err == ESP_OK) {
+        err = adc_oneshot_read(s_adc_unit, ch, out_value);
+    }
+    hw_adc_unlock();
+    return err;
 }
 
 esp_err_t hw_adc1_read_mv(adc_channel_t ch, int *out_mv)
 {
     if (!out_mv) return ESP_ERR_INVALID_ARG;
-    ESP_RETURN_ON_ERROR(hw_adc1_init_default(), TAG, "adc init (mv)");
+    esp_err_t err = hw_adc_lock(pdMS_TO_TICKS(100));
+    if (err != ESP_OK) return err;
+    err = hw_adc1_init_default_locked();
+    if (err != ESP_OK) {
+        hw_adc_unlock();
+        return err;
+    }
 
     int raw = 0;
-    esp_err_t er = adc_oneshot_read(s_adc_unit, ch, &raw);
-    if (er != ESP_OK) return er;
+    err = adc_oneshot_read(s_adc_unit, ch, &raw);
+    if (err != ESP_OK) {
+        hw_adc_unlock();
+        return err;
+    }
 
     if (s_adc_cali_enabled && s_adc_cali) {
         int mv = 0;
-        er = adc_cali_raw_to_voltage(s_adc_cali, raw, &mv);
-        if (er == ESP_OK) {
+        err = adc_cali_raw_to_voltage(s_adc_cali, raw, &mv);
+        if (err == ESP_OK) {
             *out_mv = mv;
+            hw_adc_unlock();
             return ESP_OK;
         }
-        ESP_LOGW(TAG, "ADC cali failed (e=%d), using linear fallback", er);
+        ESP_LOGW(TAG, "ADC cali failed (e=%d), using linear fallback", err);
     }
 
     *out_mv = (raw * HW_ADC_FALLBACK_FS_MV) / 4095;
+    hw_adc_unlock();
     return ESP_OK;
 }
 
