@@ -19,6 +19,14 @@
 #include "oled.h"  // for oled_render_three_lines()
 #include "system_state.h"
 
+#if configNUMBER_OF_CORES > 1
+#define APP_TASK_CORE 1
+#define BG_TASK_CORE 0
+#else
+#define APP_TASK_CORE 0
+#define BG_TASK_CORE 0
+#endif
+
 // ---------------- shared state ----------------
 static gps_fix_t s_fix = {0};
 static SemaphoreHandle_t s_fix_mux = NULL;
@@ -327,7 +335,7 @@ void gps_start(int baud){
     ESP_ERROR_CHECK(uart_set_pin(GPS_UART, GPS_TX_GPIO, GPS_RX_GPIO,
                                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 
-    xTaskCreatePinnedToCore(gps_task, "gps_task", 4096, NULL, 5, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(gps_task, "gps_task", 4096, NULL, 5, NULL, BG_TASK_CORE);
 }
 
 gps_fix_t gps_get_fix(void){
@@ -416,7 +424,7 @@ void gps_service_start(int baud){
     s_cached.year = s_cached.month = s_cached.day = -1;
     xSemaphoreGive(s_cached_mux);
 
-    xTaskCreatePinnedToCore(gps_service_task, "gps_svc", 4096, NULL, 4, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(gps_service_task, "gps_svc", 4096, NULL, 4, NULL, BG_TASK_CORE);
     started = true;
 }
 
@@ -476,7 +484,7 @@ void gps_system_time_bridge_start(void)
         NULL,
         4,
         &s_time_bridge_task,
-        tskNO_AFFINITY
+        BG_TASK_CORE
     );
     if (ok != pdPASS) {
         s_time_bridge_task = NULL;
@@ -536,5 +544,5 @@ static void gps_ui_task(void *arg){
 }
 
 void gps_ui_start(void){
-    xTaskCreatePinnedToCore(gps_ui_task, "gps_ui", 4096, NULL, 4, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(gps_ui_task, "gps_ui", 4096, NULL, 4, NULL, APP_TASK_CORE);
 }

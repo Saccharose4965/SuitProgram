@@ -25,6 +25,12 @@ static const char *TAG = "call";
 #define CALL_PLAY_CHUNK     CALL_FRAMES_PER_PKT
 #define CALL_RING_SAMPLES   65536 // mono int16 samples in ring buffer
 
+#if configNUMBER_OF_CORES > 1
+#define BG_TASK_CORE 0
+#else
+#define BG_TASK_CORE 0
+#endif
+
 typedef struct {
     uint32_t pkts;
     uint32_t last_seq;
@@ -322,8 +328,8 @@ void call_start(const call_cfg_t *cfg){
         rx_cfg_t *rcfg = (rx_cfg_t*)malloc(sizeof(rx_cfg_t));
         if (rcfg) {
             rcfg->port = cfg->call_port;
-            xTaskCreatePinnedToCore(call_rx_task, "call_rx", 4096, rcfg, 5, NULL, tskNO_AFFINITY);
-            xTaskCreatePinnedToCore(call_rx_play_task, "call_play", 4096, NULL, 6, NULL, tskNO_AFFINITY);
+            xTaskCreatePinnedToCore(call_rx_task, "call_rx", 4096, rcfg, 5, NULL, BG_TASK_CORE);
+            xTaskCreatePinnedToCore(call_rx_play_task, "call_play", 4096, NULL, 6, NULL, BG_TASK_CORE);
         } else {
             ESP_LOGE(TAG, "alloc rx cfg failed");
         }
@@ -343,7 +349,7 @@ void call_start(const call_cfg_t *cfg){
             strncpy(tcfg->peer_ip, cfg->peer_ip, sizeof(tcfg->peer_ip) - 1);
             tcfg->peer_ip[sizeof(tcfg->peer_ip) - 1] = 0;
             tcfg->port = cfg->call_port;
-            xTaskCreatePinnedToCore(mic_tx_task, "mic_tx", 4096, tcfg, 5, NULL, tskNO_AFFINITY);
+            xTaskCreatePinnedToCore(mic_tx_task, "mic_tx", 4096, tcfg, 5, NULL, BG_TASK_CORE);
         } else {
             ESP_LOGE(TAG, "alloc tx cfg failed");
         }

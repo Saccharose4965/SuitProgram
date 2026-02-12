@@ -35,6 +35,12 @@ static TaskHandle_t s_task = NULL;
 static bool s_sync_enabled = true;
 static uint8_t s_brightness = 96;
 
+#if configNUMBER_OF_CORES > 1
+#define BG_TASK_CORE 0
+#else
+#define BG_TASK_CORE 0
+#endif
+
 #ifndef LED_CUSTOM_RENDER_PIXELS
 #define LED_CUSTOM_RENDER_PIXELS LED_STRIP_LENGTH
 #endif
@@ -200,6 +206,6 @@ esp_err_t led_modes_start(void)
              (unsigned)custom_render_pixels(), (unsigned)period_ms, (unsigned)s_brightness);
 
     BaseType_t ok = xTaskCreatePinnedToCore(led_modes_task, "led_modes", 3072,
-                                            NULL, 4, &s_task, tskNO_AFFINITY);
+                                            NULL, 4, &s_task, BG_TASK_CORE);
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }

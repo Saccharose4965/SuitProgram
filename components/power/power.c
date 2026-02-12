@@ -28,6 +28,12 @@ static float k_cell_v_full  = 4.15f;
 static const char *TAG = "power";
 static TaskHandle_t s_task = NULL;
 
+#if configNUMBER_OF_CORES > 1
+#define BG_TASK_CORE 0
+#else
+#define BG_TASK_CORE 0
+#endif
+
 static void power_init_constants(void){
     static bool inited = false;
     if (inited) return;
@@ -101,6 +107,6 @@ static void power_task(void *arg){
 
 esp_err_t power_monitor_start(void){
     if (s_task) return ESP_OK;
-    BaseType_t ok = xTaskCreatePinnedToCore(power_task, "power", 2048, NULL, 4, &s_task, tskNO_AFFINITY);
+    BaseType_t ok = xTaskCreatePinnedToCore(power_task, "power", 2048, NULL, 4, &s_task, BG_TASK_CORE);
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }

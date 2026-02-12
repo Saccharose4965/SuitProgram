@@ -30,6 +30,12 @@ static uint8_t s_mac[6] = {0};
 static EventGroupHandle_t s_net_eg;
 static const int BIT_GOT_IP = (1<<0);
 
+#if configNUMBER_OF_CORES > 1
+#define BG_TASK_CORE 0
+#else
+#define BG_TASK_CORE 0
+#endif
+
 // Known MACs (from readme) for identity tagging (currently unused; keep for reference)
 static const uint8_t MAC_A[6] __attribute__((unused)) = {0x24,0xD7,0xEB,0x6B,0x26,0x40};
 static const uint8_t MAC_B[6] __attribute__((unused)) = {0x24,0xD7,0xEB,0x6B,0x26,0xC8};
@@ -372,6 +378,6 @@ esp_err_t telemetry_start_file_receiver(uint16_t listen_port, const char *save_d
     cfg->port = listen_port;
     strncpy(cfg->dir, save_dir, sizeof(cfg->dir)-1);
     cfg->dir[sizeof(cfg->dir)-1] = 0;
-    BaseType_t ok = xTaskCreatePinnedToCore(telemetry_rx_task, "tel_rx", 4096, cfg, 4, &s_rx_task, tskNO_AFFINITY);
+    BaseType_t ok = xTaskCreatePinnedToCore(telemetry_rx_task, "tel_rx", 4096, cfg, 4, &s_rx_task, BG_TASK_CORE);
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }

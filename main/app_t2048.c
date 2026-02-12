@@ -5,6 +5,12 @@
 
 #include "twenty48.h"
 
+#if configNUMBER_OF_CORES > 1
+#define APP_TASK_CORE 1
+#else
+#define APP_TASK_CORE 0
+#endif
+
 static TaskHandle_t s_t2048_task = NULL;
 static volatile bool s_t2048_stop = false;
 
@@ -35,7 +41,7 @@ void t2048_app_init(shell_app_context_t *ctx)
     (void)ctx;
     s_t2048_stop = false;
     if (!s_t2048_task) {
-        xTaskCreate(t2048_task_fn, "t2048", 4096, NULL, 5, &s_t2048_task);
+        xTaskCreatePinnedToCore(t2048_task_fn, "t2048", 4096, NULL, 5, &s_t2048_task, APP_TASK_CORE);
     }
 }
 

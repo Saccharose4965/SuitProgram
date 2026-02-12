@@ -28,6 +28,12 @@
 
 static const char *TAG = "shell";
 
+#if configNUMBER_OF_CORES > 1
+#define APP_TASK_CORE 1
+#else
+#define APP_TASK_CORE 0
+#endif
+
 static DRAM_ATTR uint8_t s_fb[PANEL_W * PANEL_H / 8];
 static DRAM_ATTR uint8_t s_fb_oled_a[PANEL_W * PANEL_H / 8];
 static DRAM_ATTR uint8_t s_fb_oled_b[PANEL_W * PANEL_H / 8];
@@ -418,7 +424,7 @@ static bool shell_init_hw_and_display(void)
     oled_init();
     oled_clear();
     if (!s_oled_task) {
-        xTaskCreatePinnedToCore(oled_task, "oled", 2048, NULL, 2, &s_oled_task, tskNO_AFFINITY);
+        xTaskCreatePinnedToCore(oled_task, "oled", 2048, NULL, 2, &s_oled_task, APP_TASK_CORE);
     }
 
     // Audio bus for FFT (shared RX/TX)

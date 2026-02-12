@@ -16,6 +16,12 @@
 
 static const char *TAG = "comms";
 
+#if configNUMBER_OF_CORES > 1
+#define BG_TASK_CORE 0
+#else
+#define BG_TASK_CORE 0
+#endif
+
 typedef struct {
     char     peer_ip[32];
     uint16_t port;
@@ -188,7 +194,7 @@ static void comms_task(void *arg){
             cfg_tx->peer_ip[sizeof(cfg_tx->peer_ip)-1] = 0;
             cfg_tx->port = ctx->call_port;
             cfg_tx->save_local = ctx->has_sd;
-            xTaskCreate(call_sender_task, "call_tx", 5120, cfg_tx, 5, NULL);
+            xTaskCreatePinnedToCore(call_sender_task, "call_tx", 5120, cfg_tx, 5, NULL, BG_TASK_CORE);
         }
     }
     if (ctx->has_amp) {
@@ -198,7 +204,7 @@ static void comms_task(void *arg){
             cfg_rx->peer_ip[sizeof(cfg_rx->peer_ip)-1] = 0;
             cfg_rx->port = ctx->call_port;
             cfg_rx->save_local = false;
-            xTaskCreate(call_receiver_task, "call_rx", 4096, cfg_rx, 5, NULL);
+            xTaskCreatePinnedToCore(call_receiver_task, "call_rx", 4096, cfg_rx, 5, NULL, BG_TASK_CORE);
         }
     }
 
@@ -244,5 +250,5 @@ void comms_start(const comms_cfg_t *cfg){
     ctx->has_amp = has_amp;
     ctx->has_sd  = has_sd;
 
-    xTaskCreate(comms_task, "comms_ctrl", 4096, ctx, 5, NULL);
+    xTaskCreatePinnedToCore(comms_task, "comms_ctrl", 4096, ctx, 5, NULL, BG_TASK_CORE);
 }

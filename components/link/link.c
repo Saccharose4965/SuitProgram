@@ -12,6 +12,7 @@
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "freertos/event_groups.h"
 
@@ -19,6 +20,12 @@
 #include "system_state.h"
 
 static const char *TAG = "link";
+
+#if configNUMBER_OF_CORES > 1
+#define BG_TASK_CORE 0
+#else
+#define BG_TASK_CORE 0
+#endif
 
 static link_path_t s_active = LINK_PATH_NONE;
 static telemetry_cfg_t s_wifi = {0};
@@ -180,7 +187,7 @@ static void udp_rx_task(void *arg){
 
 static void maybe_start_udp_rx(void){
     if (s_udp_rx_task || !s_rx_cb || !s_wifi_ready) return;
-    xTaskCreate(udp_rx_task, "link_udp_rx", 3072, NULL, 4, &s_udp_rx_task);
+    xTaskCreatePinnedToCore(udp_rx_task, "link_udp_rx", 3072, NULL, 4, &s_udp_rx_task, BG_TASK_CORE);
 }
 
 // Info broadcast task (system_state snapshot)
@@ -209,7 +216,7 @@ esp_err_t link_start_info_broadcast(uint32_t period_ms){
     s_info_period_ms = period_ms;
     if (s_info_task) return ESP_OK;
     if (!s_active || s_active == LINK_PATH_NONE) return ESP_ERR_INVALID_STATE;
-    BaseType_t ok = xTaskCreate(info_task, "link_info", 4096, NULL, 4, &s_info_task);
+    BaseType_t ok = xTaskCreatePinnedToCore(info_task, "link_info", 4096, NULL, 4, &s_info_task, BG_TASK_CORE);
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
 

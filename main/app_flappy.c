@@ -5,6 +5,12 @@
 
 #include "flappy.h"
 
+#if configNUMBER_OF_CORES > 1
+#define APP_TASK_CORE 1
+#else
+#define APP_TASK_CORE 0
+#endif
+
 static TaskHandle_t s_flappy_task = NULL;
 
 const shell_legend_t FLAPPY_LEGEND = {
@@ -32,7 +38,7 @@ void flappy_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
     if (!s_flappy_task) {
-        xTaskCreate(flappy_task_fn, "flappy", 4096, NULL, 5, &s_flappy_task);
+        xTaskCreatePinnedToCore(flappy_task_fn, "flappy", 4096, NULL, 5, &s_flappy_task, APP_TASK_CORE);
     }
 }
 

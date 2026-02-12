@@ -5,6 +5,12 @@
 
 #include "tetris.h"
 
+#if configNUMBER_OF_CORES > 1
+#define APP_TASK_CORE 1
+#else
+#define APP_TASK_CORE 0
+#endif
+
 static TaskHandle_t s_tetris_task = NULL;
 
 const shell_legend_t TETRIS_LEGEND = {
@@ -23,7 +29,7 @@ void tetris_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
     if (!s_tetris_task) {
-        xTaskCreate(tetris_task_fn, "tetris", 4096, NULL, 5, &s_tetris_task);
+        xTaskCreatePinnedToCore(tetris_task_fn, "tetris", 4096, NULL, 5, &s_tetris_task, APP_TASK_CORE);
     }
 }
 

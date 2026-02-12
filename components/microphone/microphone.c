@@ -18,6 +18,12 @@
 
 static const char *TAG = "mic_rec";
 
+#if configNUMBER_OF_CORES > 1
+#define BG_TASK_CORE 0
+#else
+#define BG_TASK_CORE 0
+#endif
+
 /* State */
 static i2s_chan_handle_t s_rx = NULL;
 static FILE  *s_wav = NULL;
@@ -182,7 +188,7 @@ esp_err_t mic_rec_start(const char *path){
     }
 
     s_rec = true;
-    xTaskCreatePinnedToCore(recorder_task, "mic_rec", 4096, NULL, 5, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(recorder_task, "mic_rec", 4096, NULL, 5, NULL, BG_TASK_CORE);
     ESP_LOGI(TAG, "Recording -> %s", path);
     return ESP_OK;
 }
