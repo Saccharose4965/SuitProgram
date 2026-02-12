@@ -101,7 +101,7 @@ void app_main(void)
 
     // Base hardware bring-up
     ESP_ERROR_CHECK(hw_spi2_init_once());
-    hw_gpio_init_fixed();
+    hw_gpio_init();
     ESP_ERROR_CHECK(hw_adc1_init_default());
 
     oled_init();

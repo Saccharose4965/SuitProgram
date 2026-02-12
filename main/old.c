@@ -13,7 +13,7 @@ void app_main(void)
 {
     // Bring up SPI + GPIO defaults
     ESP_ERROR_CHECK(hw_spi2_init_once());
-    hw_gpio_init_fixed();
+    hw_gpio_init();
 
     // Initialize OLED
     oled_init();
@@ -61,7 +61,7 @@ void app_main(void)
 {
     // Bring up SPI + GPIO defaults
     hw_spi2_init_once();
-    hw_gpio_init_fixed();
+    hw_gpio_init();
 
     // Initialize OLED
     oled_init();

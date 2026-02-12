@@ -194,7 +194,7 @@ void stick_run(void)
 {
     ESP_LOGI(TAG, "starting stick figure");
     ESP_ERROR_CHECK(hw_spi2_init_once());
-    hw_gpio_init_fixed();
+    hw_gpio_init();
     oled_init();
     oled_clear();
 

@@ -70,7 +70,7 @@ static inline uint64_t gpio_pin_mask(gpio_num_t pin) {
 }
 
 // Drive known-safe defaults for SPI-attached devices
-void hw_gpio_init_fixed(void)
+void hw_gpio_init(void)
 {
     // --- CS lines default HIGH; OLED DC default LOW ---
     const gpio_num_t cs_pins[] = {
@@ -157,7 +157,7 @@ esp_err_t hw_spi2_init_once(void)
 {
     if (s_spi2_inited) return ESP_OK;
 
-    hw_gpio_init_fixed();
+    hw_gpio_init();
 
     spi_bus_config_t bus = {
         .mosi_io_num = PIN_SPI_MOSI,

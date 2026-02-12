@@ -420,6 +420,12 @@ void gps_service_start(int baud){
     started = true;
 }
 
+void gps_services_start(int baud)
+{
+    gps_service_start(baud);
+    gps_system_time_bridge_start();
+}
+
 gps_fix_t gps_cached_fix(void){
     gps_fix_t out;
     if (!s_cached_mux){

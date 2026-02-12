@@ -286,7 +286,7 @@ void call_start(const call_cfg_t *cfg){
     if (!cfg || !cfg->ssid || !cfg->pass || !cfg->peer_ip || cfg->peer_port == 0 || cfg->call_port == 0) return;
 
     ESP_ERROR_CHECK(hw_spi2_init_once());
-    hw_gpio_init_fixed();
+    hw_gpio_init();
     ESP_ERROR_CHECK(hw_adc1_init_default());
 
     oled_init();

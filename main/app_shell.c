@@ -404,18 +404,22 @@ static void process_input_events(const shell_app_desc_t *app, TickType_t now_tic
     }
 }
 
-void app_shell_start(void)
+static bool shell_init_hw_and_display(void)
 {
     ESP_LOGI(TAG, "stage: start");
-    ESP_ERROR_CHECK(hw_spi2_init_once());
-    hw_gpio_init_fixed();
+    esp_err_t spi2 = hw_spi2_init_once();
+    if (spi2 != ESP_OK) {
+        ESP_LOGE(TAG, "spi2 init failed: %s", esp_err_to_name(spi2));
+        return false;
+    }
+    hw_gpio_init();
     oled_init();
     oled_clear();
     if (!s_oled_task) {
         xTaskCreatePinnedToCore(oled_task, "oled", 2048, NULL, 2, &s_oled_task, tskNO_AFFINITY);
     }
     ESP_LOGI(TAG, "stage: oled init done");
-    
+
     // Audio bus for FFT (shared RX/TX)
     if (!shell_audio_init_if_needed()) {
         ESP_LOGE(TAG, "audio_init failed; FFT won't run");
@@ -428,41 +432,20 @@ void app_shell_start(void)
     }
     ESP_LOGI(TAG, "stage: imu init done");
 
+    return true;
+}
+
+static void shell_init_core_state(void)
+{
     system_state_init();
     ESP_LOGI(TAG, "stage: system_state_init done");
 
     app_settings_init();
     ESP_LOGI(TAG, "stage: settings init done");
+}
 
-    // Toggle subsystems that have caused instability on some hardware spins.
-#ifdef CONFIG_APP_ENABLE_LED_MODES
-    const bool enable_led_modes = CONFIG_APP_ENABLE_LED_MODES;
-#else
-    const bool enable_led_modes = false; // default off to avoid RMT-related resets
-#endif
-#ifdef CONFIG_APP_ENABLE_POWER_MON
-    const bool enable_power = CONFIG_APP_ENABLE_POWER_MON;
-#else
-    const bool enable_power = false; // default off while debugging resets
-#endif
-
-    if (enable_led_modes) {
-        if (led_modes_start() != ESP_OK) {
-            ESP_LOGW(TAG, "LED modes failed to start");
-        }
-        ESP_LOGI(TAG, "stage: led_modes_start done");
-    } else {
-        ESP_LOGI(TAG, "LED modes disabled (debug)");
-    }
-
-    if (enable_power) {
-        if (power_monitor_start() != ESP_OK) {
-            ESP_LOGW(TAG, "Power monitor failed to start");
-        }
-        ESP_LOGI(TAG, "stage: power_monitor_start done");
-    } else {
-        ESP_LOGI(TAG, "Power monitor disabled (debug)");
-    }
+static void shell_setup_link(void)
+{
     const char *mac_str = CONFIG_LINK_ESPNOW_PEER_MAC;
     const uint8_t *peer_mac = NULL;
     if (mac_str && mac_str[0] && parse_mac_string(mac_str, s_peer_mac_cfg)){
@@ -502,19 +485,10 @@ void app_shell_start(void)
         }
     }
     ESP_LOGI(TAG, "stage: link setup done");
+}
 
-#ifdef CONFIG_APP_ENABLE_GPS
-    const bool enable_gps = CONFIG_APP_ENABLE_GPS;
-#else
-    const bool enable_gps = false; // default off while isolating resets
-#endif
-    if (enable_gps) {
-        gps_service_start(9600);
-        gps_system_time_bridge_start();
-        ESP_LOGI(TAG, "stage: gps start done");
-    } else {
-        ESP_LOGI(TAG, "GPS disabled (debug)");
-    }
+static void shell_seed_initial_system_state(void)
+{
     // Seed HUD with something legible until services wire in real data.
     {
         int led_mode = led_modes_current();
@@ -525,7 +499,10 @@ void app_shell_start(void)
     system_state_set_battery(1, 65);
     system_state_set_battery(2, 50);
     system_state_set_connection(SYS_CONN_CONNECTING);
+}
 
+static void shell_init_input_and_apps(void)
+{
     input_init();
     ESP_LOGI(TAG, "stage: input init done");
 
@@ -544,7 +521,10 @@ void app_shell_start(void)
     s_current_app = menu_idx;
     s_prev_app = menu_idx;
     switch_to_index(menu_idx);
+}
 
+static void shell_run_loop(void)
+{
     const TickType_t frame_period = pdMS_TO_TICKS(33);
     TickType_t last_wake = xTaskGetTickCount();
     TickType_t last_tick = last_wake;
@@ -601,4 +581,17 @@ void app_shell_start(void)
         }
         vTaskDelayUntil(&last_wake, frame_period);
     }
+}
+
+void app_shell_start(void)
+{
+    if (!shell_init_hw_and_display()) return;
+    shell_init_core_state();
+    // (void)led_modes_start();     // temporarily disabled
+    // (void)power_monitor_start(); // temporarily disabled
+    shell_setup_link();
+    // gps_services_start(9600); // temporarily disabled for now
+    shell_seed_initial_system_state();
+    shell_init_input_and_apps();
+    shell_run_loop();
 }

@@ -27,6 +27,7 @@ typedef struct {
 
 // Service API (moved out of app_main.c)
 void gps_service_start(int baud);
+void gps_services_start(int baud);
 bool gps_is_good_fix(const gps_fix_t *f);
 gps_fix_t gps_cached_fix(void);
 void gps_system_time_bridge_start(void);

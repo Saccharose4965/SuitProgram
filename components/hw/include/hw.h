@@ -113,7 +113,7 @@ extern "C" {
 // ======================================================================
 
 // Configure static GPIOs (CS default high, DC low etc.)
-void hw_gpio_init_fixed(void);
+void hw_gpio_init(void);
 
 // Initialize shared SPI2 bus (idempotent)
 esp_err_t hw_spi2_init_once(void);
