@@ -207,6 +207,13 @@ void bt_audio_set_disconnect_cb(bt_audio_disconnect_cb_t cb)
     s_disconnect_cb = cb;
 }
 
+void bt_audio_invoke_disconnect_cb(void)
+{
+    if (s_disconnect_cb) {
+        s_disconnect_cb();
+    }
+}
+
 static void set_pending_connect(const esp_bd_addr_t bda)
 {
     memcpy(s_pending_bda, bda, sizeof(s_pending_bda));
@@ -1506,9 +1513,8 @@ static void bt_make_label(const bt_audio_device_t *dev, char *out, size_t out_sz
     }
 }
 
-void bt_app_init(shell_app_context_t *ctx)
+void bt_audio_shell_init(void)
 {
-    (void)ctx;
     bt_audio_status_t st = {0};
     bt_audio_get_status(&st);
     // Only kick off a scan if we're not already connected/connecting/streaming.
@@ -1520,9 +1526,9 @@ void bt_app_init(shell_app_context_t *ctx)
     }
 }
 
-void bt_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
+void bt_audio_shell_handle_input(const input_event_t *ev)
 {
-    if (!ctx || !ev) return;
+    if (!ev) return;
     if (ev->type == INPUT_EVENT_PRESS) {
         if (ev->button == INPUT_BTN_A) {           // up
             if (s_bt_ui.sel > 0) s_bt_ui.sel--;
@@ -1555,17 +1561,15 @@ void bt_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
     bt_update_viewport();
 }
 
-void bt_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)
+void bt_audio_shell_draw(uint8_t *fb, int x, int y, int w, int h)
 {
-    (void)ctx; (void)w; (void)h;
+    (void)w; (void)h;
     bt_refresh_list();
     bt_audio_status_t st = {0};
     bt_audio_get_status(&st);
     if ((s_bt_prev_state == BT_AUDIO_STATE_CONNECTED || s_bt_prev_state == BT_AUDIO_STATE_STREAMING) &&
         !(st.state == BT_AUDIO_STATE_CONNECTED || st.state == BT_AUDIO_STATE_STREAMING)) {
-        if (s_disconnect_cb) {
-            s_disconnect_cb();
-        }
+        bt_audio_invoke_disconnect_cb();
     }
     s_bt_prev_state = st.state;
 

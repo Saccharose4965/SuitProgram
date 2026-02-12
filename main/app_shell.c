@@ -41,7 +41,6 @@ static shell_app_context_t s_ctx = {0};
 static TaskHandle_t s_gps_time_task = NULL; //move to own component service?
 
 static void link_frame_handler(link_msg_type_t type, const uint8_t *payload, size_t len, void *user_ctx);
-static inline void log_stage(const char *msg){ ESP_LOGI(TAG, "stage: %s", msg); }
 static uint8_t s_peer_mac_cfg[6] = {0};
 
 static int hex_nib(char c){
@@ -107,8 +106,6 @@ static inline void oled_submit_frame(void)
 // App helpers
 // ======================================================================
 
-static void queue_app_switch_request(const char *id, void *user_data);
-
 static const shell_app_desc_t *current_app(void)
 {
     if (!s_ctx.registry || s_ctx.registry_count == 0 || s_current_app >= s_ctx.registry_count) return NULL;
@@ -168,6 +165,7 @@ static void apply_queued_app_switch(void)
 }
 
 // Link frame dispatch (shared across apps)
+// we may want to split this out into a separate component
 static void link_frame_handler(link_msg_type_t type, const uint8_t *payload, size_t len, void *user_ctx)
 {
     (void)user_ctx;
@@ -195,8 +193,6 @@ static void link_frame_handler(link_msg_type_t type, const uint8_t *payload, siz
 // ======================================================================
 // Built-in apps
 // ======================================================================
-
-static const shell_legend_t BT_AUDIO_LEGEND = BT_AUDIO_SHELL_LEGEND_INIT;
 
 static const shell_app_desc_t s_builtin_apps[] = {
     {
@@ -437,7 +433,7 @@ static void gps_time_task(void *arg)
 
 void app_shell_start(void)
 {
-    log_stage("start");
+    ESP_LOGI(TAG, "stage: start");
     ESP_ERROR_CHECK(hw_spi2_init_once());
     hw_gpio_init_fixed();
     oled_init();
@@ -445,25 +441,25 @@ void app_shell_start(void)
     if (!s_oled_task) {
         xTaskCreatePinnedToCore(oled_task, "oled", 2048, NULL, 2, &s_oled_task, tskNO_AFFINITY);
     }
-    log_stage("oled init done");
+    ESP_LOGI(TAG, "stage: oled init done");
     
     // Audio bus for FFT (shared RX/TX)
     if (!shell_audio_init_if_needed()) {
         ESP_LOGE(TAG, "audio_init failed; FFT won't run");
     }
-    log_stage("audio init done");
+    ESP_LOGI(TAG, "stage: audio init done");
 
     esp_err_t ori = orientation_service_start();
     if (ori != ESP_OK) {
         ESP_LOGW(TAG, "orientation service not started: %s", esp_err_to_name(ori));
     }
-    log_stage("imu init done");
+    ESP_LOGI(TAG, "stage: imu init done");
 
     system_state_init();
-    log_stage("system_state_init done");
+    ESP_LOGI(TAG, "stage: system_state_init done");
 
     app_settings_init();
-    log_stage("settings init done");
+    ESP_LOGI(TAG, "stage: settings init done");
 
     // Toggle subsystems that have caused instability on some hardware spins.
 #ifdef CONFIG_APP_ENABLE_LED_MODES
@@ -481,7 +477,7 @@ void app_shell_start(void)
         if (led_modes_start() != ESP_OK) {
             ESP_LOGW(TAG, "LED modes failed to start");
         }
-        log_stage("led_modes_start done");
+        ESP_LOGI(TAG, "stage: led_modes_start done");
     } else {
         ESP_LOGI(TAG, "LED modes disabled (debug)");
     }
@@ -490,7 +486,7 @@ void app_shell_start(void)
         if (power_monitor_start() != ESP_OK) {
             ESP_LOGW(TAG, "Power monitor failed to start");
         }
-        log_stage("power_monitor_start done");
+        ESP_LOGI(TAG, "stage: power_monitor_start done");
     } else {
         ESP_LOGI(TAG, "Power monitor disabled (debug)");
     }
@@ -532,7 +528,7 @@ void app_shell_start(void)
             ESP_LOGW(TAG, "audio_rx_start failed: %s", esp_err_to_name(ar));
         }
     }
-    log_stage("link setup done");
+    ESP_LOGI(TAG, "stage: link setup done");
 
 #ifdef CONFIG_APP_ENABLE_GPS
     const bool enable_gps = CONFIG_APP_ENABLE_GPS;
@@ -544,7 +540,7 @@ void app_shell_start(void)
         if (!s_gps_time_task) {
             xTaskCreatePinnedToCore(gps_time_task, "gps_time", 2048, NULL, 4, &s_gps_time_task, tskNO_AFFINITY);
         }
-        log_stage("gps start done");
+        ESP_LOGI(TAG, "stage: gps start done");
     } else {
         ESP_LOGI(TAG, "GPS disabled (debug)");
     }
@@ -560,7 +556,7 @@ void app_shell_start(void)
     system_state_set_connection(SYS_CONN_CONNECTING);
 
     input_init();
-    log_stage("input init done");
+    ESP_LOGI(TAG, "stage: input init done");
 
     bt_audio_set_disconnect_cb(music_stop_playback);
 
@@ -581,7 +577,7 @@ void app_shell_start(void)
     const TickType_t frame_period = pdMS_TO_TICKS(33);
     TickType_t last_wake = xTaskGetTickCount();
     TickType_t last_tick = last_wake;
-    log_stage("enter loop");
+    ESP_LOGI(TAG, "stage: enter loop");
 
     while (1) {
         TickType_t now = xTaskGetTickCount();

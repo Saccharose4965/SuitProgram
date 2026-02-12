@@ -1,7 +1,6 @@
 #pragma once
 
 #include "app_shell.h"
-#include "bt_audio_shell.h"
 #include "app_keyboard.h"
 
 #ifdef __cplusplus
@@ -39,6 +38,11 @@ void music_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void music_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 void music_stop_playback(void);
 extern const shell_legend_t MUSIC_LEGEND;
+
+void bt_app_init(shell_app_context_t *ctx);
+void bt_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
+void bt_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
+extern const shell_legend_t BT_AUDIO_LEGEND;
 
 void flappy_app_init(shell_app_context_t *ctx);
 void flappy_app_deinit(shell_app_context_t *ctx);
