@@ -403,10 +403,10 @@ static void process_input_events(const shell_app_desc_t *app, TickType_t now_tic
         }
         // Global escape to menu
         if (ev.type == INPUT_EVENT_LONG_PRESS) {
-            if (ev.button == INPUT_BTN_TOP_COMBO) {
+            if (ev.button == INPUT_BTN_AB_COMBO) {
                 request_switch_cb("menu", NULL);
                 continue;
-            } else if (ev.button == INPUT_BTN_FAST_FALL) {
+            } else if (ev.button == INPUT_BTN_BC_COMBO) {
                 esp_restart();
                 continue;
             }
@@ -614,10 +614,10 @@ void app_shell_start(void)
     system_state_set_connection(SYS_CONN_CONNECTING);
 
     input_config_t input_cfg = {
-        .long_press_ms = 1200,  // 1.2s long-press for top-combo escape
-        .combo_mv = 1100,       // A+B combo target (~1.1 V)
-        .combo_tol_mv = 350,    // tolerate ladder noise
-        .combo_verify_ms = 80,
+        .long_press_ms = 1200,     // 1.2s long-press for A+B menu escape
+        .ab_combo_mv = 1100,       // A+B combo target (~1.1 V)
+        .ab_combo_tol_mv = 350,    // tolerate ladder noise
+        .ab_combo_verify_ms = 80,
     };
     input_init(&input_cfg);
     log_stage("input init done");

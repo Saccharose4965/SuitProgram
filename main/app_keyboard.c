@@ -87,7 +87,7 @@ void keyboard_app_handle_input(struct shell_app_context *ctx, const input_event_
             case INPUT_BTN_A: keyboard_move_focus(0, -1); break;   // left
             case INPUT_BTN_B: keyboard_move_focus(1, 0); break;    // down
             case INPUT_BTN_C: keyboard_move_focus(0, 1); break;    // right
-            case INPUT_BTN_FAST_FALL: keyboard_move_focus(1, 0); break; // middle-two: down
+            case INPUT_BTN_BC_COMBO: keyboard_move_focus(1, 0); break; // middle-two: down
             case INPUT_BTN_D:
                 s_keyboard_app.pointer_down = true;
                 keyboard_send_pointer(true, 0.0f);
@@ -95,7 +95,7 @@ void keyboard_app_handle_input(struct shell_app_context *ctx, const input_event_
             default: break;
         }
     } else if (ev->type == INPUT_EVENT_LONG_PRESS) {
-        if (ev->button == INPUT_BTN_FAST_FALL) {
+        if (ev->button == INPUT_BTN_BC_COMBO) {
             (void)keyboard_backspace(&s_keyboard_app.kb);
         }
     } else if (ev->type == INPUT_EVENT_RELEASE) {

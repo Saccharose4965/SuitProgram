@@ -116,10 +116,6 @@ void music_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 {
     (void)ctx;
     if (!ev) return;
-    if (ev->type == INPUT_EVENT_LONG_PRESS && ev->button == INPUT_BTN_A) {
-        ctx->request_switch("menu", ctx->request_user_data);
-        return;
-    }
     if (ev->type == INPUT_EVENT_PRESS){
         if (ev->button == INPUT_BTN_A && s_music.sel > 0){
             s_music.sel--;

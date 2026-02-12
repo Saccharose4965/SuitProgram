@@ -174,7 +174,7 @@ void tetris_run(void)
         }
         TickType_t now = xTaskGetTickCount();
         bool move_ready = (now - last_move) >= move_ticks;
-        bool fast_drop = (b == INPUT_BTN_FAST_FALL);
+        bool fast_drop = (b == INPUT_BTN_BC_COMBO);
 
         if (b != last_btn && move_ready) {
             if (b == INPUT_BTN_A) {

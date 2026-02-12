@@ -15,8 +15,8 @@ typedef enum {
     INPUT_BTN_B,
     INPUT_BTN_C,
     INPUT_BTN_D,
-    INPUT_BTN_TOP_COMBO, // long-press escape to menu
-    INPUT_BTN_FAST_FALL, // B+C combo (≈2.2 V) for drop
+    INPUT_BTN_AB_COMBO, // A+B combo level (≈1.1 V), long-press escape to menu
+    INPUT_BTN_BC_COMBO, // B+C combo level (≈2.2 V), long-press restart
 } input_button_t;
 
 typedef enum {
@@ -33,9 +33,9 @@ typedef struct {
 
 typedef struct {
     uint32_t long_press_ms; // default ~800 ms
-    int combo_mv;           // optional ADC target for top-button combo (0 disables)
-    int combo_tol_mv;       // tolerance around combo_mv
-    uint32_t combo_verify_ms; // how long the combo voltage must stay before emitting
+    int ab_combo_mv;           // optional ADC target for A+B combo (0 disables)
+    int ab_combo_tol_mv;       // tolerance around ab_combo_mv
+    uint32_t ab_combo_verify_ms; // how long the combo voltage must stay before emitting
 } input_config_t;
 
 // Configure thresholds/long-press timings (safe to call with NULL for defaults).

@@ -16,9 +16,9 @@ static const char *TAG = "input";
 
 static input_config_t s_cfg = {
     .long_press_ms = 800,
-    .combo_mv = 0,         // disabled by default until ladder supports combo step
-    .combo_tol_mv = 120,
-    .combo_verify_ms = 40,
+    .ab_combo_mv = 0,         // disabled by default until ladder supports combo step
+    .ab_combo_tol_mv = 120,
+    .ab_combo_verify_ms = 40,
 };
 
 static input_button_t s_prev_btn = INPUT_BTN_NONE;
@@ -30,18 +30,15 @@ static input_event_t  s_buffered;
 static bool           s_combo_pending = false;
 static TickType_t     s_combo_pending_tick = 0;
 
-static bool allow_combo_transition(input_button_t prev, input_button_t cur)
+static bool allow_combo_transition(input_button_t cur)
 {
-    if (prev == INPUT_BTN_A && cur == INPUT_BTN_TOP_COMBO) return true;
-    if (prev == INPUT_BTN_B && cur == INPUT_BTN_TOP_COMBO) return true;
-    if (prev == INPUT_BTN_B && cur == INPUT_BTN_FAST_FALL) return true;
-    if (prev == INPUT_BTN_C && cur == INPUT_BTN_FAST_FALL) return true;
-    return false;
+    // Combo voltage levels should be reachable regardless of the prior ladder state.
+    return (cur == INPUT_BTN_AB_COMBO || cur == INPUT_BTN_BC_COMBO);
 }
 
 static input_button_t decode_mv(int mv)
 {
-    int combo_tol = s_cfg.combo_tol_mv > 0 ? s_cfg.combo_tol_mv : 200;
+    int combo_tol = s_cfg.ab_combo_tol_mv > 0 ? s_cfg.ab_combo_tol_mv : 200;
     const int tol_single = 220;
     const int tol_fast = 140; // narrower so it doesn't steal B/C
 
@@ -50,8 +47,8 @@ static input_button_t decode_mv(int mv)
         input_button_t btn;
         int tol;
     } targets[] = {
-        { s_cfg.combo_mv > 0 ? s_cfg.combo_mv : 1100, INPUT_BTN_TOP_COMBO, combo_tol },
-        { 2200, INPUT_BTN_FAST_FALL, tol_fast },
+        { s_cfg.ab_combo_mv > 0 ? s_cfg.ab_combo_mv : 1100, INPUT_BTN_AB_COMBO, combo_tol },
+        { 2200, INPUT_BTN_BC_COMBO, tol_fast },
         { 3300, INPUT_BTN_D, tol_single },
         { 2475, INPUT_BTN_C, tol_single },
         { 1650, INPUT_BTN_B, tol_single },
@@ -134,9 +131,9 @@ bool input_poll(input_event_t *out_event, TickType_t now_ticks)
 #endif
 
     // Combo verification: require it to be stable before emitting
-    if (cur == INPUT_BTN_TOP_COMBO && s_cfg.combo_verify_ms > 0) {
-        TickType_t verify_ticks = pdMS_TO_TICKS(s_cfg.combo_verify_ms);
-        if (!s_combo_pending && s_prev_btn != INPUT_BTN_TOP_COMBO) {
+    if (cur == INPUT_BTN_AB_COMBO && s_cfg.ab_combo_verify_ms > 0) {
+        TickType_t verify_ticks = pdMS_TO_TICKS(s_cfg.ab_combo_verify_ms);
+        if (!s_combo_pending && s_prev_btn != INPUT_BTN_AB_COMBO) {
             s_combo_pending = true;
             s_combo_pending_tick = now_ticks;
         }
@@ -150,31 +147,28 @@ bool input_poll(input_event_t *out_event, TickType_t now_ticks)
     }
 
     // If we were in combo, require a return to NONE before other buttons can fire
-    if (s_prev_btn == INPUT_BTN_TOP_COMBO && cur != INPUT_BTN_NONE) {
+    if (s_prev_btn == INPUT_BTN_AB_COMBO && cur != INPUT_BTN_NONE) {
         cur = s_prev_btn;
     }
 
     // Require a return to NONE between distinct buttons so a held press can't
-    // trigger another, except when A/B transitions into the verified top combo.
+    // trigger another, except when transitioning into either combo voltage.
     if (s_prev_btn != INPUT_BTN_NONE &&
         cur != INPUT_BTN_NONE &&
         cur != s_prev_btn &&
-        !allow_combo_transition(s_prev_btn, cur)) {
+        !allow_combo_transition(cur)) {
         cur = s_prev_btn;
     }
 
 
     if (cur != s_prev_btn) {
-        const bool combo_from_ab = allow_combo_transition(s_prev_btn, cur);
-
         // Any ladder transition means press/release activity; drop a short
         // novelty window so button noise does not pollute beat tracking.
         fft_punch_novelty_hole(INPUT_AUDIO_HOLE_FRAMES);
 
         // On change, emit release first, then buffer new press.
-        if (!combo_from_ab) {
-            s_prev_tick = now_ticks;
-        }
+        // Long-press timing always restarts when the logical button changes.
+        s_prev_tick = now_ticks;
         s_long_sent = false;
 
         if (s_prev_btn != INPUT_BTN_NONE) {

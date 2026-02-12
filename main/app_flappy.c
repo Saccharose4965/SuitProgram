@@ -6,8 +6,6 @@
 #include "flappy.h"
 
 static TaskHandle_t s_flappy_task = NULL;
-static void (*s_flappy_request_switch)(const char *id, void *user_data) = NULL;
-static void *s_flappy_request_user_data = NULL;
 
 const shell_legend_t FLAPPY_LEGEND = {
     .slots = { SHELL_ICON_BACK, SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_MENU },
@@ -17,9 +15,6 @@ static void flappy_task_fn(void *arg)
 {
     (void)arg;
     flappy_run(); // blocking
-    if (s_flappy_request_switch) {
-        s_flappy_request_switch("menu", s_flappy_request_user_data);
-    }
     s_flappy_task = NULL;
     vTaskDelete(NULL);
 }
@@ -37,10 +32,7 @@ void flappy_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 
 void flappy_app_init(shell_app_context_t *ctx)
 {
-    if (ctx) {
-        s_flappy_request_switch = ctx->request_switch;
-        s_flappy_request_user_data = ctx->request_user_data;
-    }
+    (void)ctx;
     flappy_set_button_pressed(false);
     if (!s_flappy_task) {
         xTaskCreate(flappy_task_fn, "flappy", 4096, NULL, 5, &s_flappy_task);
