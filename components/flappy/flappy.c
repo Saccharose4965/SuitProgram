@@ -132,15 +132,17 @@ static int rand_range(int a, int b){ // inclusive [a..b]
 }
 
 static volatile bool g_stop = false;
-static volatile bool s_button_pressed = false;
+static volatile bool s_press_pending = false;
 
 // Button helper
-static bool button_is_pressed(void){
-    return s_button_pressed;
+static bool button_take_press(void){
+    if (!s_press_pending) return false;
+    s_press_pending = false;
+    return true;
 }
 
 void flappy_request_stop(void){ g_stop = true; }
-void flappy_set_button_pressed(bool pressed){ s_button_pressed = pressed; }
+void flappy_trigger_press(void){ s_press_pending = true; }
 
 // ----------------- Rendering -----------------
 static void draw_bird(int x, int y, bool flip_vert){
@@ -223,7 +225,7 @@ static bool bird_hits_pipe(int bird_x, int bird_y, int pipe_x, int gap_y, bool f
 void flappy_run(void)
 {
     g_stop = false;
-    s_button_pressed = false;
+    s_press_pending = false;
     // Shell owns OLED initialization; this app only renders.
     oled_clear();
 
@@ -245,12 +247,8 @@ void flappy_run(void)
 
         oled_blit_full(gfb);
 
-        // wait for button press
-        while (!button_is_pressed()) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
-        // debounce / wait for release
-        while (button_is_pressed()) {
+        // wait for button press trigger
+        while (!button_take_press()) {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
@@ -278,18 +276,15 @@ void flappy_run(void)
     bool upside_down = false;
     int death_frames = 0;
     bool running = true;
-    bool pressed_prev = false;
 
     while (running) {
         if (g_stop) {
             break;
         }
         // --- input ---
-        bool pressed = button_is_pressed();
-        if (state == STATE_PLAYING && pressed && !pressed_prev) {
+        if (state == STATE_PLAYING && button_take_press()) {
             bird_vy = FLAP_VY;
         }
-        pressed_prev = pressed;
 
         // --- physics ---
         // Pipes keep moving in all states

@@ -151,6 +151,7 @@ static void render_active_view(const fft_render_packet_t *pkt){
         case FFT_VIEW_TEMPO_SPECTRUM: render_tempo_spectrum(); break;
         case FFT_VIEW_PHASE_COMB:     render_phase_comb(); break;
         case FFT_VIEW_BPM_TEXT:
+        case FFT_VIEW_COUNT:
         default:                      render_beat_spectrum(pkt); break;
     }
 }
@@ -518,6 +519,10 @@ void fft_render_trigger_flash(uint32_t flash_frames){
 }
 
 void fft_render_set_view(fft_view_t view){
+    if (view >= FFT_VIEW_COUNT) {
+        g_view_mode = FFT_VIEW_BPM_TEXT;
+        return;
+    }
     g_view_mode = view;
 }
 

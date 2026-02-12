@@ -1,7 +1,5 @@
 #include "input.h"
 
-#include <string.h>
-
 #include "esp_err.h"
 #include "esp_log.h"
 
@@ -13,58 +11,50 @@
 static const char *TAG = "input";
 #define INPUT_LOG_EVENTS 0
 #define INPUT_AUDIO_HOLE_FRAMES 6
-
-static input_config_t s_cfg = {
-    .long_press_ms = 800,
-    .ab_combo_mv = 0,         // disabled by default until ladder supports combo step
-    .ab_combo_tol_mv = 120,
-    .ab_combo_verify_ms = 40,
-};
+#define INPUT_DEBOUNCE_MS 25
+#define INPUT_LONG_PRESS_MS 1200
+#define INPUT_LEVEL_TOL_MV 220
+#define INPUT_LEVEL_A_MV 825
+#define INPUT_LEVEL_AB_MV 1100
+#define INPUT_LEVEL_B_MV 1650
+#define INPUT_LEVEL_BC_MV 2200
+#define INPUT_LEVEL_C_MV 2475
+#define INPUT_LEVEL_D_MV 3300
 
 static input_button_t s_prev_btn = INPUT_BTN_NONE;
 static TickType_t     s_prev_tick = 0;
 static bool           s_long_sent = false;
 
-static bool           s_has_buffered = false;
-static input_event_t  s_buffered;
-static bool           s_combo_pending = false;
-static TickType_t     s_combo_pending_tick = 0;
+static input_button_t s_candidate_btn = INPUT_BTN_NONE;
+static TickType_t     s_candidate_tick = 0;
 
-static bool allow_combo_transition(input_button_t cur)
+static inline void consider_level(int mv,
+                                  int target_mv,
+                                  int target_tol,
+                                  input_button_t target_btn,
+                                  int *best_diff,
+                                  input_button_t *best_btn)
 {
-    // Combo voltage levels should be reachable regardless of the prior ladder state.
-    return (cur == INPUT_BTN_AB_COMBO || cur == INPUT_BTN_BC_COMBO);
+    int diff = target_mv - mv;
+    if (diff < 0) diff = -diff;
+    if (diff <= target_tol && diff < *best_diff) {
+        *best_diff = diff;
+        *best_btn = target_btn;
+    }
 }
 
 static input_button_t decode_mv(int mv)
 {
-    int combo_tol = s_cfg.ab_combo_tol_mv > 0 ? s_cfg.ab_combo_tol_mv : 200;
-    const int tol_single = 220;
-    const int tol_fast = 140; // narrower so it doesn't steal B/C
-
-    const struct {
-        int mv;
-        input_button_t btn;
-        int tol;
-    } targets[] = {
-        { s_cfg.ab_combo_mv > 0 ? s_cfg.ab_combo_mv : 1100, INPUT_BTN_AB_COMBO, combo_tol },
-        { 2200, INPUT_BTN_BC_COMBO, tol_fast },
-        { 3300, INPUT_BTN_D, tol_single },
-        { 2475, INPUT_BTN_C, tol_single },
-        { 1650, INPUT_BTN_B, tol_single },
-        { 825,  INPUT_BTN_A, tol_single },
-    };
-
     int best_diff = 1000000;
     input_button_t best = INPUT_BTN_NONE;
-    for (size_t i = 0; i < sizeof(targets)/sizeof(targets[0]); ++i) {
-        int diff = targets[i].mv - mv;
-        if (diff < 0) diff = -diff;
-        if (diff <= targets[i].tol && diff < best_diff) {
-            best_diff = diff;
-            best = targets[i].btn;
-        }
-    }
+
+    consider_level(mv, INPUT_LEVEL_AB_MV, INPUT_LEVEL_TOL_MV, INPUT_BTN_AB_COMBO, &best_diff, &best);
+    consider_level(mv, INPUT_LEVEL_BC_MV, INPUT_LEVEL_TOL_MV, INPUT_BTN_BC_COMBO, &best_diff, &best);
+    consider_level(mv, INPUT_LEVEL_D_MV, INPUT_LEVEL_TOL_MV, INPUT_BTN_D, &best_diff, &best);
+    consider_level(mv, INPUT_LEVEL_C_MV, INPUT_LEVEL_TOL_MV, INPUT_BTN_C, &best_diff, &best);
+    consider_level(mv, INPUT_LEVEL_B_MV, INPUT_LEVEL_TOL_MV, INPUT_BTN_B, &best_diff, &best);
+    consider_level(mv, INPUT_LEVEL_A_MV, INPUT_LEVEL_TOL_MV, INPUT_BTN_A, &best_diff, &best);
+
     return best;
 }
 
@@ -80,38 +70,20 @@ bool input_sample(input_button_t *out_btn, int *out_mv)
     return true;
 }
 
-void input_init(const input_config_t *cfg)
+void input_init(void)
 {
-    if (cfg) {
-        s_cfg = *cfg;
-    }
     // Ensure ADC is ready for ladder sampling.
     (void)hw_adc1_init_default();
     s_prev_btn = INPUT_BTN_NONE;
     s_prev_tick = xTaskGetTickCount();
     s_long_sent = false;
-    s_has_buffered = false;
-    s_combo_pending = false;
-    s_combo_pending_tick = 0;
-}
-
-static bool maybe_emit_pending(input_event_t *out_event)
-{
-    if (s_has_buffered && out_event) {
-        *out_event = s_buffered;
-        s_has_buffered = false;
-        return true;
-    }
-    return false;
+    s_candidate_btn = INPUT_BTN_NONE;
+    s_candidate_tick = s_prev_tick;
 }
 
 bool input_poll(input_event_t *out_event, TickType_t now_ticks)
 {
     if (!out_event) return false;
-
-    if (maybe_emit_pending(out_event)) {
-        return true;
-    }
 
     if (now_ticks == 0) {
         now_ticks = xTaskGetTickCount();
@@ -130,63 +102,27 @@ bool input_poll(input_event_t *out_event, TickType_t now_ticks)
     }
 #endif
 
-    // Combo verification: require it to be stable before emitting
-    if (cur == INPUT_BTN_AB_COMBO && s_cfg.ab_combo_verify_ms > 0) {
-        TickType_t verify_ticks = pdMS_TO_TICKS(s_cfg.ab_combo_verify_ms);
-        if (!s_combo_pending && s_prev_btn != INPUT_BTN_AB_COMBO) {
-            s_combo_pending = true;
-            s_combo_pending_tick = now_ticks;
-        }
-        if (s_combo_pending && (now_ticks - s_combo_pending_tick) < verify_ticks) {
-            cur = s_prev_btn; // hold previous until verified
-        } else {
-            s_combo_pending = false;
-        }
-    } else {
-        s_combo_pending = false;
-    }
-
-    // If we were in combo, require a return to NONE before other buttons can fire
-    if (s_prev_btn == INPUT_BTN_AB_COMBO && cur != INPUT_BTN_NONE) {
+    // Debounce the decoded ladder level so brief ADC jitter doesn't create
+    // synthetic event churn. This allows direct A->B transitions when
+    // they are truly stable, without enforcing an intermediate NONE sample.
+    TickType_t settle_ticks = pdMS_TO_TICKS(INPUT_DEBOUNCE_MS);
+    if (cur != s_candidate_btn) {
+        s_candidate_btn = cur;
+        s_candidate_tick = now_ticks;
         cur = s_prev_btn;
-    }
-
-    // Require a return to NONE between distinct buttons so a held press can't
-    // trigger another, except when transitioning into either combo voltage.
-    if (s_prev_btn != INPUT_BTN_NONE &&
-        cur != INPUT_BTN_NONE &&
-        cur != s_prev_btn &&
-        !allow_combo_transition(cur)) {
+    } else if ((now_ticks - s_candidate_tick) < settle_ticks) {
         cur = s_prev_btn;
     }
 
 
     if (cur != s_prev_btn) {
-        // Any ladder transition means press/release activity; drop a short
-        // novelty window so button noise does not pollute beat tracking.
+        // Any ladder transition means input activity; drop a short novelty
+        // window so button noise does not pollute beat tracking.
         fft_punch_novelty_hole(INPUT_AUDIO_HOLE_FRAMES);
 
-        // On change, emit release first, then buffer new press.
         // Long-press timing always restarts when the logical button changes.
         s_prev_tick = now_ticks;
         s_long_sent = false;
-
-        if (s_prev_btn != INPUT_BTN_NONE) {
-            out_event->button   = s_prev_btn;
-            out_event->type     = INPUT_EVENT_RELEASE;
-            out_event->at_ticks = now_ticks;
-#if INPUT_LOG_EVENTS
-            ESP_LOGI(TAG, "event: release %d (mv=%d)", out_event->button, mv);
-#endif
-            s_prev_btn = cur;
-            if (cur != INPUT_BTN_NONE) {
-                s_buffered.button   = cur;
-                s_buffered.type     = INPUT_EVENT_PRESS;
-                s_buffered.at_ticks = now_ticks;
-                s_has_buffered = true;
-            }
-            return true;
-        }
 
         s_prev_btn = cur;
         if (cur != INPUT_BTN_NONE) {
@@ -203,7 +139,7 @@ bool input_poll(input_event_t *out_event, TickType_t now_ticks)
 
     if (cur != INPUT_BTN_NONE && !s_long_sent) {
         TickType_t held_ticks = now_ticks - s_prev_tick;
-        TickType_t long_ticks = pdMS_TO_TICKS(s_cfg.long_press_ms);
+        TickType_t long_ticks = pdMS_TO_TICKS(INPUT_LONG_PRESS_MS);
         if (held_ticks >= long_ticks) {
             s_long_sent = true;
             out_event->button   = cur;

@@ -11,8 +11,8 @@ void flappy_run(void);
 // Signal a running flappy_run() loop to stop gracefully.
 void flappy_request_stop(void);
 
-// Feed debounced button state from the shell input layer.
-void flappy_set_button_pressed(bool pressed);
+// Feed one-shot press triggers from the shell input layer.
+void flappy_trigger_press(void);
 
 #ifdef __cplusplus
 }

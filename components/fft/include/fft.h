@@ -26,7 +26,8 @@ typedef enum {
     FFT_VIEW_FLUX,           // raw spectral flux (positive-only derivative) over time
     FFT_VIEW_TEMPO_RAW,      // temporal FFT spectrum (instantaneous)
     FFT_VIEW_TEMPO_SPECTRUM, // temporal FFT of novelty (capacitor-smoothed)
-    FFT_VIEW_PHASE_COMB      // phase correlation vs comb filter aligned to BPM
+    FFT_VIEW_PHASE_COMB,     // phase correlation vs comb filter aligned to BPM
+    FFT_VIEW_COUNT           // number of valid render views
 } fft_view_t;
 
 /**

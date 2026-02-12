@@ -14,7 +14,6 @@ typedef struct {
     keyboard_state_t kb;
     int row;
     int col;
-    bool pointer_down;
 } keyboard_app_state_t;
 
 static keyboard_app_state_t s_keyboard_app;
@@ -52,7 +51,7 @@ static void keyboard_move_focus(int drow, int dcol)
         s_keyboard_app.col += dcol;
     }
     keyboard_clamp_focus();
-    keyboard_send_pointer(s_keyboard_app.pointer_down, 0.0f);
+    keyboard_send_pointer(false, 0.0f);
 }
 
 void keyboard_app_init(struct shell_app_context *ctx)
@@ -89,8 +88,8 @@ void keyboard_app_handle_input(struct shell_app_context *ctx, const input_event_
             case INPUT_BTN_C: keyboard_move_focus(0, 1); break;    // right
             case INPUT_BTN_BC_COMBO: keyboard_move_focus(1, 0); break; // middle-two: down
             case INPUT_BTN_D:
-                s_keyboard_app.pointer_down = true;
                 keyboard_send_pointer(true, 0.0f);
+                keyboard_send_pointer(false, 0.0f);
                 break;
             default: break;
         }
@@ -98,19 +97,14 @@ void keyboard_app_handle_input(struct shell_app_context *ctx, const input_event_
         if (ev->button == INPUT_BTN_BC_COMBO) {
             (void)keyboard_backspace(&s_keyboard_app.kb);
         }
-    } else if (ev->type == INPUT_EVENT_RELEASE) {
-        if (ev->button == INPUT_BTN_D && s_keyboard_app.pointer_down) {
-            keyboard_send_pointer(false, 0.0f);
-            s_keyboard_app.pointer_down = false;
-        }
     }
 }
 
 void keyboard_app_tick(struct shell_app_context *ctx, float dt_sec)
 {
     (void)ctx;
-    // Keep hot/click state updated for held presses (backspace repeat, accents).
-    keyboard_send_pointer(s_keyboard_app.pointer_down, dt_sec);
+    // Keep hover/hot state updated.
+    keyboard_send_pointer(false, dt_sec);
     if (!keyboard_is_visible(&s_keyboard_app.kb)) {
         keyboard_show(&s_keyboard_app.kb, true);
     }

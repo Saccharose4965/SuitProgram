@@ -613,13 +613,7 @@ void app_shell_start(void)
     system_state_set_battery(2, 50);
     system_state_set_connection(SYS_CONN_CONNECTING);
 
-    input_config_t input_cfg = {
-        .long_press_ms = 1200,     // 1.2s long-press for A+B menu escape
-        .ab_combo_mv = 1100,       // A+B combo target (~1.1 V)
-        .ab_combo_tol_mv = 350,    // tolerate ladder noise
-        .ab_combo_verify_ms = 80,
-    };
-    input_init(&input_cfg);
+    input_init();
     log_stage("input init done");
 
     bt_audio_set_disconnect_cb(music_stop_playback);

@@ -21,7 +21,6 @@ typedef enum {
 
 typedef enum {
     INPUT_EVENT_PRESS = 0,
-    INPUT_EVENT_RELEASE,
     INPUT_EVENT_LONG_PRESS,
 } input_event_type_t;
 
@@ -31,17 +30,10 @@ typedef struct {
     TickType_t         at_ticks;
 } input_event_t;
 
-typedef struct {
-    uint32_t long_press_ms; // default ~800 ms
-    int ab_combo_mv;           // optional ADC target for A+B combo (0 disables)
-    int ab_combo_tol_mv;       // tolerance around ab_combo_mv
-    uint32_t ab_combo_verify_ms; // how long the combo voltage must stay before emitting
-} input_config_t;
+// Initialize ladder input (idempotent).
+void input_init(void);
 
-// Configure thresholds/long-press timings (safe to call with NULL for defaults).
-void input_init(const input_config_t *cfg);
-
-// Poll the ladder and return one event at a time (PRESS/RELEASE/LONG_PRESS).
+// Poll the ladder and return one event at a time (PRESS/LONG_PRESS).
 // Returns true when an event is available and stored into out_event.
 bool input_poll(input_event_t *out_event, TickType_t now_ticks);
 

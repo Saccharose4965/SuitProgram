@@ -24,16 +24,13 @@ void flappy_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
     (void)ctx;
     if (!ev) return;
     if (ev->type == INPUT_EVENT_PRESS) {
-        flappy_set_button_pressed(true);
-    } else if (ev->type == INPUT_EVENT_RELEASE) {
-        flappy_set_button_pressed(false);
+        flappy_trigger_press();
     }
 }
 
 void flappy_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
-    flappy_set_button_pressed(false);
     if (!s_flappy_task) {
         xTaskCreate(flappy_task_fn, "flappy", 4096, NULL, 5, &s_flappy_task);
     }
@@ -43,7 +40,6 @@ void flappy_app_deinit(shell_app_context_t *ctx)
 {
     (void)ctx;
     flappy_request_stop();
-    flappy_set_button_pressed(false);
     // wait briefly for task to exit
     for (int i = 0; i < 50 && s_flappy_task; ++i) {
         vTaskDelay(pdMS_TO_TICKS(10));
