@@ -1,5 +1,5 @@
 #include "app_shell.h"
-#include "shell_orientation.h"
+#include "orientation_service.h"
 
 #include "threedee.h"
 
@@ -11,7 +11,7 @@ void threedee_app_init_wrapper(shell_app_context_t *ctx)
 {
     if (!ctx) return;
     threedee_set_request_switch(ctx->request_switch, ctx->request_user_data);
-    imu_orientation_t *ori = shell_orientation_ctx();
+    imu_orientation_t *ori = orientation_service_ctx();
     if (ori) {
         threedee_set_orientation_ctx(ori);
     }

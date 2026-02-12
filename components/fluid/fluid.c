@@ -19,6 +19,7 @@
 #include "hw.h"
 #include "mpu6500.h"
 #include "oled.h"
+#include "orientation_service.h"
 
 #define SIM_W 64
 #define SIM_H 32
@@ -79,6 +80,7 @@ static uint8_t s_fb[PANEL_W * PANEL_H / 8];
 // IMU
 static bool s_mpu_ready = false;
 static bool s_mpu_shared = false;
+static bool s_use_orientation_service = false;
 static mpu6500_t s_mpu = { .mux = portMUX_INITIALIZER_UNLOCKED };
 
 // ------------------------------------------------------------------------
@@ -375,6 +377,13 @@ static void ensure_mpu(void)
 {
     if (s_mpu_ready) return;
 
+    if (orientation_service_start() == ESP_OK) {
+        s_use_orientation_service = true;
+        s_mpu_ready = true;
+        ESP_LOGI(TAG, "Using orientation service MPU stream");
+        return;
+    }
+
     if (hw_spi2_init_once() != ESP_OK) {
         ESP_LOGW(TAG, "spi2 init failed");
         return;
@@ -418,7 +427,9 @@ static void sample_gravity_xy(float *out_gx, float *out_gy)
     if (!out_gx || !out_gy || !s_mpu_ready) return;
 
     mpu6500_sample_t s = {0};
-    if (s_mpu_shared) {
+    if (s_use_orientation_service) {
+        if (!orientation_service_read_sample(&s)) return;
+    } else if (s_mpu_shared) {
         if (mpu6500_read_once(&s_mpu, &s) != ESP_OK) return;
     } else {
         s = mpu6500_latest(&s_mpu);

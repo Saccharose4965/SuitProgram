@@ -1,7 +1,6 @@
 #include "app_shell.h"
 #include "shell_apps.h"
 #include "shell_audio.h"
-#include "shell_orientation.h"
 #include "app_settings.h"
 
 #include <stdio.h>
@@ -22,8 +21,7 @@
 #include "audio_rx.h"
 #include "bt_audio.h"
 #include "storage_sd.h"
-#include "mpu6500.h"
-#include "orientation.h"
+#include "orientation_service.h"
 #include "pong.h"
 
 static const char *TAG = "shell";
@@ -36,24 +34,15 @@ static TaskHandle_t s_oled_task = NULL;
 
 static size_t s_current_app = 0;
 static size_t s_prev_app = 0;
-static size_t s_pending_app = 0;
-static bool   s_has_pending = false;
+static size_t s_queued_app_index = 0;
+static bool   s_app_switch_queued = false;
 
 static shell_app_context_t s_ctx = {0};
-static TaskHandle_t s_gps_time_task = NULL;
-static bool s_imu_inited = false;
-static TaskHandle_t s_imu_orient_task = NULL;
-static mpu6500_t s_imu = { .mux = portMUX_INITIALIZER_UNLOCKED };
-static imu_orientation_t s_ori = {0};
+static TaskHandle_t s_gps_time_task = NULL; //move to own component service?
 
 static void link_frame_handler(link_msg_type_t type, const uint8_t *payload, size_t len, void *user_ctx);
 static inline void log_stage(const char *msg){ ESP_LOGI(TAG, "stage: %s", msg); }
 static uint8_t s_peer_mac_cfg[6] = {0};
-
-imu_orientation_t *shell_orientation_ctx(void)
-{
-    return &s_ori;
-}
 
 static int hex_nib(char c){
     if (c >= '0' && c <= '9') return c - '0';
@@ -118,7 +107,7 @@ static inline void oled_submit_frame(void)
 // App helpers
 // ======================================================================
 
-static void request_switch_cb(const char *id, void *user_data);
+static void queue_app_switch_request(const char *id, void *user_data);
 
 static const shell_app_desc_t *current_app(void)
 {
@@ -158,24 +147,24 @@ static void switch_to_index(size_t idx)
     ESP_LOGI(TAG, "switched to app [%s]", app ? app->id : "none");
 }
 
-static void request_switch_cb(const char *id, void *user_data)
+static void queue_app_switch_request(const char *id, void *user_data)
 {
     (void)user_data;
     size_t idx = 0;
     if (find_app_by_id(id, &idx)) {
-        s_pending_app = idx;
-        s_has_pending = true;
+        s_queued_app_index = idx;
+        s_app_switch_queued = true;
     } else {
         ESP_LOGW(TAG, "request to unknown app '%s'", id ? id : "(null)");
     }
 }
 
-static void pump_pending_switch(void)
+static void apply_queued_app_switch(void)
 {
-    if (!s_has_pending) return;
-    s_has_pending = false;
-    if (s_pending_app == s_current_app) return;
-    switch_to_index(s_pending_app);
+    if (!s_app_switch_queued) return;
+    s_app_switch_queued = false;
+    if (s_queued_app_index == s_current_app) return;
+    switch_to_index(s_queued_app_index);
 }
 
 // Link frame dispatch (shared across apps)
@@ -398,13 +387,13 @@ static void process_input_events(const shell_app_desc_t *app, TickType_t now_tic
     while (input_poll(&ev, now_ticks)) {
         // Any press on the title screen jumps to menu
         if (ev.type == INPUT_EVENT_PRESS && (!app || (app->id && strcmp(app->id, "title") == 0))) {
-            request_switch_cb("menu", NULL);
+            queue_app_switch_request("menu", NULL);
             continue;
         }
         // Global escape to menu
         if (ev.type == INPUT_EVENT_LONG_PRESS) {
             if (ev.button == INPUT_BTN_AB_COMBO) {
-                request_switch_cb("menu", NULL);
+                queue_app_switch_request("menu", NULL);
                 continue;
             } else if (ev.button == INPUT_BTN_BC_COMBO) {
                 esp_restart();
@@ -414,7 +403,7 @@ static void process_input_events(const shell_app_desc_t *app, TickType_t now_tic
         if (app && app->handle_input) {
             app->handle_input(&s_ctx, &ev);
         }
-        pump_pending_switch();
+        apply_queued_app_switch();
         app = current_app();
         if (!app) break;
     }
@@ -446,28 +435,6 @@ static void gps_time_task(void *arg)
     }
 }
 
-// Simple task to feed MPU samples into the orientation filter
-static void imu_orientation_task(void *arg)
-{
-    (void)arg;
-    TickType_t last = xTaskGetTickCount();
-    TickType_t period = pdMS_TO_TICKS(5); // ~200 Hz
-    if (period < 1) period = 1;           // ensure non-zero increment for vTaskDelayUntil
-    uint64_t last_t_us = 0;
-    for (;;) {
-        vTaskDelayUntil(&last, period);
-        mpu6500_sample_t raw = mpu6500_latest(&s_imu);
-        if (raw.t_us == 0 || raw.t_us == last_t_us) continue;
-        last_t_us = raw.t_us;
-        imu_orientation_update(
-            &s_ori,
-            raw.ax_g, raw.ay_g, raw.az_g,
-            raw.gx_dps, raw.gy_dps, raw.gz_dps,
-            raw.t_us
-        );
-    }
-}
-
 void app_shell_start(void)
 {
     log_stage("start");
@@ -486,30 +453,9 @@ void app_shell_start(void)
     }
     log_stage("audio init done");
 
-    if (!s_imu_inited) {
-        hw_spi2_idle_all_cs_high();
-        const gpio_num_t cs = PIN_CS_IMU1;
-        const uint32_t freqs[] = { 8000000, 1000000 };
-        for (size_t f = 0; f < sizeof(freqs)/sizeof(freqs[0]); ++f) {
-            spi_device_handle_t dev = NULL;
-            if (hw_spi2_add_device(cs, freqs[f], 0, 4, &dev) != ESP_OK || !dev) continue;
-            mpu6500_config_t cfg = { .spi = dev, .tag = "mpu_shell" };
-            if (mpu6500_init(&s_imu, &cfg) == ESP_OK) {
-                if (mpu6500_start_sampler(&s_imu, 200, 2, 1, 0) == ESP_OK) {
-                    s_imu_inited = true;
-                    ESP_LOGI(TAG, "IMU sampler started @CS%u (%u Hz)", (unsigned)cs, (unsigned)freqs[f]);
-                    imu_orientation_init(&s_ori, 0.05f);
-                    if (!s_imu_orient_task) {
-                        xTaskCreatePinnedToCore(imu_orientation_task, "imu_orient", 3072, NULL, 2, &s_imu_orient_task, 1);
-                    }
-                    break;
-                }
-            }
-            (void)spi_bus_remove_device(dev);
-        }
-        if (!s_imu_inited) {
-            ESP_LOGW(TAG, "IMU sampler not started (no device)");
-        }
+    esp_err_t ori = orientation_service_start();
+    if (ori != ESP_OK) {
+        ESP_LOGW(TAG, "orientation service not started: %s", esp_err_to_name(ori));
     }
     log_stage("imu init done");
 
@@ -620,7 +566,7 @@ void app_shell_start(void)
 
     s_ctx.registry = s_builtin_apps;
     s_ctx.registry_count = sizeof(s_builtin_apps) / sizeof(s_builtin_apps[0]);
-    s_ctx.request_switch = request_switch_cb;
+    s_ctx.request_switch = queue_app_switch_request;
     s_ctx.request_user_data = NULL;
 
     // Boot straight into the menu (skip blank title screen)
@@ -644,7 +590,7 @@ void app_shell_start(void)
 
         const shell_app_desc_t *app = current_app();
         process_input_events(app, now);
-        pump_pending_switch();
+        apply_queued_app_switch();
         app = current_app();
         if (!app) {
             vTaskDelayUntil(&last_wake, frame_period);
