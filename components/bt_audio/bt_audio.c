@@ -1,7 +1,7 @@
 #include "bt_audio.h"
 #include "audio.h"
 #include "audio_player.h"
-#include "bt_audio_shell.h"
+#include "bt_audio_app.h"
 #include "input.h"
 #include "oled.h"
 
@@ -1513,7 +1513,7 @@ static void bt_make_label(const bt_audio_device_t *dev, char *out, size_t out_sz
     }
 }
 
-void bt_audio_shell_init(void)
+void bt_audio_app_init(void)
 {
     bt_audio_status_t st = {0};
     bt_audio_get_status(&st);
@@ -1526,7 +1526,7 @@ void bt_audio_shell_init(void)
     }
 }
 
-void bt_audio_shell_handle_input(const input_event_t *ev)
+void bt_audio_app_handle_input(const input_event_t *ev)
 {
     if (!ev) return;
     if (ev->type == INPUT_EVENT_PRESS) {
@@ -1552,16 +1552,12 @@ void bt_audio_shell_handle_input(const input_event_t *ev)
                 (void)bt_audio_connect_index(s_bt_ui.sel);
             }
         }
-    } else if (ev->type == INPUT_EVENT_LONG_PRESS) {
-        if (ev->button == INPUT_BTN_D) {
-            (void)bt_audio_disconnect();
-        }
     }
 
     bt_update_viewport();
 }
 
-void bt_audio_shell_draw(uint8_t *fb, int x, int y, int w, int h)
+void bt_audio_app_draw(uint8_t *fb, int x, int y, int w, int h)
 {
     (void)w; (void)h;
     bt_refresh_list();

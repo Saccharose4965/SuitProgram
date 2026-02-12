@@ -38,7 +38,6 @@ static size_t s_queued_app_index = 0;
 static bool   s_app_switch_queued = false;
 
 static shell_app_context_t s_ctx = {0};
-static TaskHandle_t s_gps_time_task = NULL; //move to own component service?
 
 static void link_frame_handler(link_msg_type_t type, const uint8_t *payload, size_t len, void *user_ctx);
 static uint8_t s_peer_mac_cfg[6] = {0};
@@ -266,11 +265,11 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .name   = "Bluetooth",
         .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
         .legend = &BT_AUDIO_LEGEND,
-        .init   = bt_app_init,
+        .init   = bt_app_init_wrapper,
         .deinit = NULL,
         .tick   = NULL,
-        .handle_input = bt_app_handle_input,
-        .draw   = bt_app_draw,
+        .handle_input = bt_handle_input_wrapper,
+        .draw   = bt_draw_wrapper,
     },
     {
         .id     = "keyboard",
@@ -405,32 +404,6 @@ static void process_input_events(const shell_app_desc_t *app, TickType_t now_tic
     }
 }
 
-// ======================================================================
-// GPS time bridge → system_state (for HUD clock)
-// ======================================================================
-
-static void gps_time_task(void *arg)
-{
-    (void)arg;
-    const TickType_t stale_window = pdMS_TO_TICKS(30000); // mark invalid if >30 s old
-    TickType_t last_valid = 0;
-    for (;;) {
-        gps_fix_t f = gps_cached_fix();
-        TickType_t now = xTaskGetTickCount();
-
-        bool have_time = f.time_valid && f.hour >= 0 && f.hour < 24 && f.min >= 0 && f.min < 60;
-        if (have_time) {
-            system_state_set_time(true, (uint8_t)f.hour, (uint8_t)f.min);
-            last_valid = now;
-        } else if (last_valid != 0 && (now - last_valid) > stale_window) {
-            system_state_set_time(false, 0, 0);
-            last_valid = 0;
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-}
-
 void app_shell_start(void)
 {
     ESP_LOGI(TAG, "stage: start");
@@ -537,9 +510,7 @@ void app_shell_start(void)
 #endif
     if (enable_gps) {
         gps_service_start(9600);
-        if (!s_gps_time_task) {
-            xTaskCreatePinnedToCore(gps_time_task, "gps_time", 2048, NULL, 4, &s_gps_time_task, tskNO_AFFINITY);
-        }
+        gps_system_time_bridge_start();
         ESP_LOGI(TAG, "stage: gps start done");
     } else {
         ESP_LOGI(TAG, "GPS disabled (debug)");

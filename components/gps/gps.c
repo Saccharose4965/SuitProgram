@@ -17,6 +17,7 @@
 #define GPS_RX_GPIO  3
 
 #include "oled.h"  // for oled_render_three_lines()
+#include "system_state.h"
 
 // ---------------- shared state ----------------
 static gps_fix_t s_fix = {0};
@@ -346,6 +347,7 @@ gps_fix_t gps_get_fix(void){
 // ===== GPS service (moved from app_main.c) =====
 static gps_fix_t s_cached;
 static SemaphoreHandle_t s_cached_mux;
+static TaskHandle_t s_time_bridge_task = NULL;
 
 static inline bool _sane_lat(double d){ return !isnan(d) && fabs(d) <= 90.0 && fabs(d) > 1e-5; }
 static inline bool _sane_lon(double d){ return !isnan(d) && fabs(d) <=180.0 && fabs(d) > 1e-5; }
@@ -432,6 +434,47 @@ gps_fix_t gps_cached_fix(void){
     out = s_cached;
     xSemaphoreGive(s_cached_mux);
     return out;
+}
+
+static void gps_system_time_bridge_task(void *arg)
+{
+    (void)arg;
+    const TickType_t stale_window = pdMS_TO_TICKS(30000); // mark invalid if >30 s old
+    TickType_t last_valid = 0;
+
+    for (;;) {
+        gps_fix_t f = gps_cached_fix();
+        TickType_t now = xTaskGetTickCount();
+
+        bool have_time = f.time_valid && f.hour >= 0 && f.hour < 24 && f.min >= 0 && f.min < 60;
+        if (have_time) {
+            system_state_set_time(true, (uint8_t)f.hour, (uint8_t)f.min);
+            last_valid = now;
+        } else if (last_valid != 0 && (now - last_valid) > stale_window) {
+            system_state_set_time(false, 0, 0);
+            last_valid = 0;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+void gps_system_time_bridge_start(void)
+{
+    if (s_time_bridge_task) return;
+
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        gps_system_time_bridge_task,
+        "gps_time",
+        2048,
+        NULL,
+        4,
+        &s_time_bridge_task,
+        tskNO_AFFINITY
+    );
+    if (ok != pdPASS) {
+        s_time_bridge_task = NULL;
+    }
 }
 
 static inline void fb_clear_rect(uint8_t *fb, int x0, int y0, int w, int h){
