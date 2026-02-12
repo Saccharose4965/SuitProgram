@@ -19,6 +19,7 @@ idf_component_register(
         "app_threedee.c"
         "app_fluid.c"
         "shell_audio.c"
+        "shell_profiler.c"
     INCLUDE_DIRS "."
     REQUIRES state input oled hw ui_shell flappy twenty48 tetris audio audio_player fft keyboard storage_sd gps led_modes power link audio_rx bt_audio snake pong threedee fluid orientation
 )

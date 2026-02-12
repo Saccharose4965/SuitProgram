@@ -13,3 +13,33 @@ config POWER_CELL_V_FULL
     default "4.15"
 
 endmenu
+
+menu "Shell Performance"
+
+config SHELL_PERF_LOG_ENABLE
+    bool "Enable shell performance logs"
+    default n
+    help
+        Logs app frame timings and (optionally) task/core CPU load.
+
+config SHELL_PERF_LOG_PERIOD_MS
+    int "Log period (ms)"
+    default 1000
+    range 200 10000
+    depends on SHELL_PERF_LOG_ENABLE
+
+config SHELL_PERF_LOG_TOP_TASKS
+    int "Top tasks to print"
+    default 5
+    range 1 10
+    depends on SHELL_PERF_LOG_ENABLE
+
+config SHELL_PERF_LOG_MAX_TASKS
+    int "Max tasks sampled"
+    default 64
+    range 16 128
+    depends on SHELL_PERF_LOG_ENABLE
+    help
+        Increase if your system has many tasks and logs report truncation.
+
+endmenu

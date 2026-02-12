@@ -1,6 +1,7 @@
 #include "app_shell.h"
 #include "shell_apps.h"
 #include "shell_audio.h"
+#include "shell_profiler.h"
 #include "app_settings.h"
 
 #include <stdio.h>
@@ -11,6 +12,7 @@
 
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 
 #include "hw.h"
 #include "oled.h"
@@ -512,11 +514,16 @@ static void shell_init_input_and_apps(void)
 static void shell_run_loop(void)
 {
     const TickType_t frame_period = pdMS_TO_TICKS(33);
+    const uint32_t frame_budget_us = (uint32_t)frame_period * (uint32_t)portTICK_PERIOD_MS * 1000u;
     TickType_t last_wake = xTaskGetTickCount();
     TickType_t last_tick = last_wake;
     ESP_LOGI(TAG, "stage: enter loop");
 
     while (1) {
+        int64_t frame_work_start_us = esp_timer_get_time();
+        uint32_t tick_us = 0;
+        uint32_t draw_us = 0;
+
         TickType_t now = xTaskGetTickCount();
         float dt_sec = (float)(now - last_tick) * portTICK_PERIOD_MS / 1000.0f;
         last_tick = now;
@@ -526,12 +533,16 @@ static void shell_run_loop(void)
         apply_queued_app_switch();
         app = current_app();
         if (!app) {
+            uint32_t work_us = (uint32_t)(esp_timer_get_time() - frame_work_start_us);
+            shell_profiler_on_frame("none", false, frame_budget_us, 0, 0, work_us);
             vTaskDelayUntil(&last_wake, frame_period);
             continue;
         }
 
         if (app->tick) {
+            int64_t t0 = esp_timer_get_time();
             app->tick(&s_ctx, dt_sec);
+            tick_us = (uint32_t)(esp_timer_get_time() - t0);
         }
 
         system_state_t state_snapshot = system_state_get();
@@ -546,7 +557,9 @@ static void shell_run_loop(void)
             if (content_h < 0) content_h = 0;
 
             if (app->draw) {
+                int64_t t0 = esp_timer_get_time();
                 app->draw(&s_ctx, s_fb, 0, content_y, PANEL_W, content_h);
+                draw_us = (uint32_t)(esp_timer_get_time() - t0);
             }
 
             if (app->flags & SHELL_APP_FLAG_SHOW_HUD) {
@@ -565,6 +578,14 @@ static void shell_run_loop(void)
 
             oled_submit_frame();
         }
+
+        uint32_t work_us = (uint32_t)(esp_timer_get_time() - frame_work_start_us);
+        shell_profiler_on_frame(app->id ? app->id : "none",
+                                (app->flags & SHELL_APP_FLAG_EXTERNAL) != 0,
+                                frame_budget_us,
+                                tick_us,
+                                draw_us,
+                                work_us);
         vTaskDelayUntil(&last_wake, frame_period);
     }
 }
@@ -584,6 +605,7 @@ void app_shell_start(void)
     // gps_services_start(9600); // temporarily disabled for now
     shell_seed_initial_system_state();
     shell_init_input_and_apps();
+    shell_profiler_init();
     ESP_LOGI(TAG, "stage: input init and app init done");
     shell_run_loop();
 }
