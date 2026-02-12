@@ -352,6 +352,7 @@ Power / thermal notes (legacy hardware sizing):
 
 Open TODO / wishlist (legacy backlog)
 -------------------------------------
+- measure real value adc to check ladder expected values
 - don't blink when not confident
 - zero out audio data upon button press and release to remove parasitic spikes
 - implement blink phase tune in
