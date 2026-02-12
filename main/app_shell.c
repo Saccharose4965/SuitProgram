@@ -418,30 +418,18 @@ static bool shell_init_hw_and_display(void)
     if (!s_oled_task) {
         xTaskCreatePinnedToCore(oled_task, "oled", 2048, NULL, 2, &s_oled_task, tskNO_AFFINITY);
     }
-    ESP_LOGI(TAG, "stage: oled init done");
 
     // Audio bus for FFT (shared RX/TX)
     if (!shell_audio_init_if_needed()) {
         ESP_LOGE(TAG, "audio_init failed; FFT won't run");
     }
-    ESP_LOGI(TAG, "stage: audio init done");
 
     esp_err_t ori = orientation_service_start();
     if (ori != ESP_OK) {
         ESP_LOGW(TAG, "orientation service not started: %s", esp_err_to_name(ori));
     }
-    ESP_LOGI(TAG, "stage: imu init done");
 
     return true;
-}
-
-static void shell_init_core_state(void)
-{
-    system_state_init();
-    ESP_LOGI(TAG, "stage: system_state_init done");
-
-    app_settings_init();
-    ESP_LOGI(TAG, "stage: settings init done");
 }
 
 static void shell_setup_link(void)
@@ -484,7 +472,6 @@ static void shell_setup_link(void)
             ESP_LOGW(TAG, "audio_rx_start failed: %s", esp_err_to_name(ar));
         }
     }
-    ESP_LOGI(TAG, "stage: link setup done");
 }
 
 static void shell_seed_initial_system_state(void)
@@ -504,7 +491,6 @@ static void shell_seed_initial_system_state(void)
 static void shell_init_input_and_apps(void)
 {
     input_init();
-    ESP_LOGI(TAG, "stage: input init done");
 
     bt_audio_set_disconnect_cb(music_stop_playback);
 
@@ -586,12 +572,18 @@ static void shell_run_loop(void)
 void app_shell_start(void)
 {
     if (!shell_init_hw_and_display()) return;
-    shell_init_core_state();
+    ESP_LOGI(TAG, "stage: oled, audio and imu init done");
+    system_state_init();
+    ESP_LOGI(TAG, "stage: system_state_init done");
+    app_settings_init();
+    ESP_LOGI(TAG, "stage: settings init done");
     // (void)led_modes_start();     // temporarily disabled
     // (void)power_monitor_start(); // temporarily disabled
-    shell_setup_link();
+    shell_setup_link(); // TODO: better names for these setup stages? and sepaate components for each service init? 
+    ESP_LOGI(TAG, "stage: link setup done");
     // gps_services_start(9600); // temporarily disabled for now
     shell_seed_initial_system_state();
     shell_init_input_and_apps();
+    ESP_LOGI(TAG, "stage: input init and app init done");
     shell_run_loop();
 }

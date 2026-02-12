@@ -293,7 +293,6 @@ int oled_calc_scroll_px_slick(int step, int total_steps)
 }
 
 // ===== Simple 3-line text renderer =====
-// ===== Simple 3-line text renderer =====
 #include <string.h>
 
 static const uint8_t font5x7[][5] = {
