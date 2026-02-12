@@ -160,13 +160,12 @@ void tetris_run(void)
     g_score = 0; // reset per run
     TickType_t last = xTaskGetTickCount();
     const TickType_t drop_ticks_normal = pdMS_TO_TICKS(450);
-    const TickType_t drop_ticks_fast   = pdMS_TO_TICKS(120);
     TickType_t last_move = last;
     const TickType_t move_ticks = pdMS_TO_TICKS(140);
     input_button_t last_btn = INPUT_BTN_NONE;
 
     while (!s_tetris_stop) {
-        // simple input: A=left, B=rot left, C=rot right, D=right; B+C combo = fast drop
+        // simple input: A=left, B=rot left, C=rot right, D=right
         input_button_t b = INPUT_BTN_NONE;
         int mv = 0;
         if (!input_sample(&b, &mv)) {
@@ -174,7 +173,6 @@ void tetris_run(void)
         }
         TickType_t now = xTaskGetTickCount();
         bool move_ready = (now - last_move) >= move_ticks;
-        bool fast_drop = (b == INPUT_BTN_BC_COMBO);
 
         if (b != last_btn && move_ready) {
             if (b == INPUT_BTN_A) {
@@ -197,7 +195,7 @@ void tetris_run(void)
         }
         last_btn = b;
 
-        TickType_t drop_int = fast_drop ? drop_ticks_fast : drop_ticks_normal;
+        TickType_t drop_int = drop_ticks_normal;
         if ((now - last) >= drop_int) {
             piece_t p = cur; p.y++;
             if (collision(p)) {
