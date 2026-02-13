@@ -36,6 +36,7 @@ typedef struct {
 } audio_task_args_t;
 
 #define AUDIO_TASK_STACK (4 * 1024)
+#define AUDIO_TASK_STACK_RETRY (3 * 1024)
 #define AUDIO_TASK_PRIO  2
 #if configNUMBER_OF_CORES > 1
 #define AUDIO_TASK_CORE  1
@@ -65,7 +66,7 @@ static void audio_play_task(void *arg)
     s_play_mode = AUDIO_PLAYER_MODE_NONE;
 
     ESP_LOGI(TAG, "audio_play_task started for '%s'", path);
-    ESP_LOGI(TAG, "audio_play_task stack high watermark: %u words",
+    ESP_LOGI(TAG, "audio_play_task stack high watermark: %u bytes",
              (unsigned)uxTaskGetStackHighWaterMark(NULL));
 
     FILE *f = fopen(path, "rb");
@@ -231,10 +232,42 @@ esp_err_t audio_player_play(const char *path)
     }
 #endif
 
+    if (ok != pdPASS && AUDIO_TASK_STACK_RETRY < AUDIO_TASK_STACK) {
+        ESP_LOGW(TAG, "audio task create retry with smaller stack (%u -> %u bytes)",
+                 (unsigned)AUDIO_TASK_STACK, (unsigned)AUDIO_TASK_STACK_RETRY);
+        ok = xTaskCreatePinnedToCore(
+            audio_play_task,
+            "audio_play_task",
+            AUDIO_TASK_STACK_RETRY,
+            a,
+            AUDIO_TASK_PRIO,
+            &s_player_task,
+            AUDIO_TASK_CORE
+        );
+#if CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+        if (ok != pdPASS) {
+            ok = xTaskCreatePinnedToCoreWithCaps(
+                audio_play_task,
+                "audio_play_task",
+                AUDIO_TASK_STACK_RETRY,
+                a,
+                AUDIO_TASK_PRIO,
+                &s_player_task,
+                AUDIO_TASK_CORE,
+                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+            );
+            if (ok == pdPASS) {
+                ESP_LOGW(TAG, "audio task allocated in PSRAM (retry stack)");
+            }
+        }
+#endif
+    }
+
     if (ok != pdPASS){
         ESP_LOGE(TAG,
-                 "audio task create failed: internal=%u spiram=%u",
+                 "audio task create failed: internal=%u largest_internal=%u spiram=%u",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         free(a);
         s_player_task = NULL;

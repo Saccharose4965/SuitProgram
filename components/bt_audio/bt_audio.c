@@ -158,6 +158,7 @@ static SemaphoreHandle_t s_bt_fp_lock = NULL; // protects FILE access across cal
 #define BT_STREAM_BUF_BYTES_MIN   (64 * 1024)
 #define BT_STREAM_START_WATERMARK (12 * 1024)
 #define BT_FEEDER_CHUNK_BYTES     2048
+#define BT_FEEDER_POLL_MS         8
 #define BT_FEEDER_TASK_STACK      3072
 #define BT_FEEDER_TASK_PRIO       4
 #if configNUMBER_OF_CORES > 1
@@ -174,6 +175,7 @@ static size_t   s_bt_buf_count  = 0;
 static uint8_t  s_bt_feeder_chunk[BT_FEEDER_CHUNK_BYTES];
 static volatile bool s_bt_file_eof    = false;
 static volatile bool s_bt_feeder_stop = false;
+static volatile bool s_bt_direct_stream = false;
 static TaskHandle_t  s_bt_feeder_task = NULL;
 static portMUX_TYPE  s_bt_buf_mux     = portMUX_INITIALIZER_UNLOCKED;
 
@@ -378,12 +380,64 @@ static bool bt_ensure_buffer(void)
     return true;
 }
 
+static void bt_release_buffer(void)
+{
+    taskENTER_CRITICAL(&s_bt_buf_mux);
+    s_bt_buf_r = 0;
+    s_bt_buf_w = 0;
+    s_bt_buf_count = 0;
+    taskEXIT_CRITICAL(&s_bt_buf_mux);
+
+    if (s_bt_buf) {
+        free(s_bt_buf);
+        s_bt_buf = NULL;
+    }
+    s_bt_buf_size = 0;
+}
+
 // Pull bytes for the A2DP callback:
 // from RAM ring buffer (normal buffered path).
 static size_t bt_stream_pull(uint8_t *dst, size_t n)
 {
     if (!dst || n == 0) return 0;
-    return bt_buf_read(dst, n);
+
+    size_t rd = bt_buf_read(dst, n);
+    if (rd > 0 || !s_bt_direct_stream) {
+        return rd;
+    }
+
+    if (!s_bt_fp || s_bt_bytes_left == 0 || s_bt_file_eof) {
+        return 0;
+    }
+
+    size_t want = n;
+    if (want > s_bt_bytes_left) want = s_bt_bytes_left;
+    if (want == 0) {
+        s_bt_file_eof = true;
+        return 0;
+    }
+
+    bool last_chunk = (want == s_bt_bytes_left);
+    if (!lock_fp(0)) {
+        return 0;
+    }
+
+    if (s_bt_fp) {
+        rd = fread(dst, 1, want, s_bt_fp);
+    } else {
+        rd = 0;
+    }
+    unlock_fp();
+
+    if (rd == 0) {
+        s_bt_file_eof = true;
+        return 0;
+    }
+    if (rd < want || last_chunk) {
+        s_bt_file_eof = true;
+    }
+
+    return rd;
 }
 
 static bool bt_stop_feeder(TickType_t wait_ticks)
@@ -421,7 +475,7 @@ static void bt_file_feeder_task(void *arg)
 
         size_t space = bt_buf_space();
         if (space < (BT_FEEDER_CHUNK_BYTES / 2)) {
-            vTaskDelay(pdMS_TO_TICKS(2));
+            vTaskDelay(pdMS_TO_TICKS(BT_FEEDER_POLL_MS));
             continue;
         }
 
@@ -429,7 +483,7 @@ static void bt_file_feeder_task(void *arg)
         if (want > space) want = space;
         if (want > s_bt_bytes_left) want = s_bt_bytes_left;
         if (want == 0) {
-            vTaskDelay(pdMS_TO_TICKS(2));
+            vTaskDelay(pdMS_TO_TICKS(BT_FEEDER_POLL_MS));
             continue;
         }
 
@@ -439,6 +493,10 @@ static void bt_file_feeder_task(void *arg)
                 rd = fread(s_bt_feeder_chunk, 1, want, s_bt_fp);
             }
             unlock_fp();
+        } else {
+            // Contended by control path; retry instead of forcing EOF.
+            vTaskDelay(pdMS_TO_TICKS(2));
+            continue;
         }
 
         if (rd > 0) {
@@ -485,6 +543,7 @@ static void close_bt_file_locked(void){
     }
     s_bt_bytes_left = 0;
     s_bt_file_eof = false;
+    s_bt_direct_stream = false;
     bt_buf_reset();
 }
 
@@ -926,9 +985,9 @@ esp_err_t bt_audio_play_wav(FILE *fp,
         return ESP_FAIL;
     }
 
-    if (!bt_ensure_buffer()) {
-        ESP_LOGW(TAG, "bt_audio_play_wav: stream buffer alloc failed");
-        return ESP_ERR_NO_MEM;
+    bool use_buffered_stream = bt_ensure_buffer();
+    if (!use_buffered_stream) {
+        ESP_LOGW(TAG, "bt_audio_play_wav: stream buffer alloc failed, using direct stream fallback");
     }
 
     setvbuf(fp, NULL, _IOFBF, 32 * 1024);
@@ -956,9 +1015,10 @@ esp_err_t bt_audio_play_wav(FILE *fp,
     bt_buf_reset();
     s_bt_file_eof = false;
     s_bt_feeder_stop = false;
+    s_bt_direct_stream = !use_buffered_stream;
     unlock_fp();
 
-    if (!s_bt_feeder_task) {
+    if (use_buffered_stream && !s_bt_feeder_task) {
         BaseType_t ok = xTaskCreatePinnedToCore(
             bt_file_feeder_task,
             "bt_feed",
@@ -987,26 +1047,24 @@ esp_err_t bt_audio_play_wav(FILE *fp,
 #endif
         if (ok != pdPASS) {
             s_bt_feeder_task = NULL;
-            if (lock_fp(pdMS_TO_TICKS(200))) {
-                if (s_bt_fp == fp) {
-                    s_bt_fp = NULL;
-                    s_bt_bytes_left = 0;
-                    s_bt_file_eof = false;
-                    bt_buf_reset();
-                }
-                unlock_fp();
-            }
-            ESP_LOGW(TAG, "BT feeder task create failed");
-            return ESP_ERR_NO_MEM;
+            s_bt_direct_stream = true;
+            bt_release_buffer();
+            ESP_LOGW(TAG,
+                     "BT feeder task create failed, using direct stream fallback "
+                     "(internal free=%u largest=%u)",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
         }
     }
 
-    TickType_t start_tick = xTaskGetTickCount();
-    while (!s_bt_file_eof && bt_buf_level() < BT_STREAM_START_WATERMARK) {
-        if ((xTaskGetTickCount() - start_tick) > pdMS_TO_TICKS(250)) {
-            break;
+    if (!s_bt_direct_stream) {
+        TickType_t start_tick = xTaskGetTickCount();
+        while (!s_bt_file_eof && bt_buf_level() < BT_STREAM_START_WATERMARK) {
+            if ((xTaskGetTickCount() - start_tick) > pdMS_TO_TICKS(250)) {
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(2));
         }
-        vTaskDelay(pdMS_TO_TICKS(2));
     }
 
     err = bt_audio_start_stream();

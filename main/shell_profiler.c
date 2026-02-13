@@ -5,6 +5,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_attr.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -20,7 +21,9 @@ static const char *TAG = "shell_perf";
 #endif
 
 static int64_t s_last_log_us = 0;
+#if !SHELL_PERF_HAS_RT_STATS
 static bool s_warned_missing_rt_stats = false;
+#endif
 
 static char s_app_id[20] = {0};
 static bool s_app_external = false;
@@ -41,10 +44,10 @@ typedef struct {
     configRUN_TIME_COUNTER_TYPE delta;
 } task_delta_t;
 
-static TaskStatus_t s_tasks[CONFIG_SHELL_PERF_LOG_MAX_TASKS];
-static task_prev_t s_prev[CONFIG_SHELL_PERF_LOG_MAX_TASKS];
-static task_delta_t s_deltas[CONFIG_SHELL_PERF_LOG_MAX_TASKS];
-static bool s_used[CONFIG_SHELL_PERF_LOG_MAX_TASKS];
+static EXT_RAM_BSS_ATTR TaskStatus_t s_tasks[CONFIG_SHELL_PERF_LOG_MAX_TASKS];
+static EXT_RAM_BSS_ATTR task_prev_t s_prev[CONFIG_SHELL_PERF_LOG_MAX_TASKS];
+static EXT_RAM_BSS_ATTR task_delta_t s_deltas[CONFIG_SHELL_PERF_LOG_MAX_TASKS];
+static EXT_RAM_BSS_ATTR bool s_used[CONFIG_SHELL_PERF_LOG_MAX_TASKS];
 static size_t s_prev_count = 0;
 
 static configRUN_TIME_COUNTER_TYPE diff_counter(configRUN_TIME_COUNTER_TYPE now,
