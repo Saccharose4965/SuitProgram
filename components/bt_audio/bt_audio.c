@@ -9,6 +9,7 @@
 
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "system_state.h"
 
@@ -40,6 +41,8 @@ extern void BTM_SetDefaultLinkPolicy(uint16_t settings);
 extern uint8_t BTM_SetLinkPolicy(uint8_t bd_addr[6], uint16_t *settings);
 
 static const char *TAG = "bt_audio";
+#define BT_CONNECT_MIN_INTERNAL_FREE    (12U * 1024U)
+#define BT_CONNECT_MIN_INTERNAL_LARGEST (4U * 1024U)
 
 // ===== AVRCP hooks (weak, overridden by higher-level code like audio_player) =====
 void __attribute__((weak)) bt_audio_on_play(void)   {}
@@ -205,43 +208,6 @@ static bool bda_is_zero(const esp_bd_addr_t bda)
         if (bda[i] != 0) return false;
     }
     return true;
-}
-
-static void disconnect_all_peers_except(const esp_bd_addr_t keep, bool use_keep)
-{
-    if (!s_stack_ready) {
-        return;
-    }
-
-    for (int i = 0; i < s_device_count; ++i) {
-        if (bda_is_zero(s_devices[i].bda)) {
-            continue;
-        }
-        if (use_keep &&
-            memcmp(keep, s_devices[i].bda, sizeof(esp_bd_addr_t)) == 0) {
-            continue;
-        }
-
-        esp_err_t e = esp_a2d_source_disconnect(s_devices[i].bda);
-        if (e != ESP_OK &&
-            e != ESP_ERR_INVALID_STATE &&
-            e != ESP_ERR_INVALID_ARG) {
-            ESP_LOGW(TAG, "disconnect dev %d failed: %s",
-                     i, esp_err_to_name(e));
-        }
-    }
-
-    // Also try the current peer directly if it's not the "keep" one
-    if (!bda_is_zero(s_peer_bda) && (!use_keep ||
-        memcmp(keep, s_peer_bda, sizeof(s_peer_bda)) != 0)) {
-        esp_err_t e = esp_a2d_source_disconnect(s_peer_bda);
-        if (e != ESP_OK &&
-            e != ESP_ERR_INVALID_STATE &&
-            e != ESP_ERR_INVALID_ARG) {
-            ESP_LOGW(TAG, "disconnect current peer failed: %s",
-                     esp_err_to_name(e));
-        }
-    }
 }
 
 static void maybe_request_name(esp_bd_addr_t bda){
@@ -424,6 +390,19 @@ static void gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param){
 // ============================ Start/Connect ============================
 static esp_err_t start_connect(esp_bd_addr_t bda){
     if (!bda) return ESP_ERR_INVALID_ARG;
+    size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    size_t largest_internal = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ESP_LOGI(TAG, "start_connect: internal free=%u largest=%u",
+             (unsigned)free_internal, (unsigned)largest_internal);
+    if (free_internal < BT_CONNECT_MIN_INTERNAL_FREE ||
+        largest_internal < BT_CONNECT_MIN_INTERNAL_LARGEST) {
+        ESP_LOGE(TAG, "connect blocked: low internal heap (need >=%u free, >=%u largest)",
+                 (unsigned)BT_CONNECT_MIN_INTERNAL_FREE,
+                 (unsigned)BT_CONNECT_MIN_INTERNAL_LARGEST);
+        set_state(BT_AUDIO_STATE_FAILED);
+        set_connection(SYS_CONN_DISCONNECTED);
+        return ESP_ERR_NO_MEM;
+    }
     // Stop any active discovery before initiating a link; otherwise the
     // controller can get congested and fail the new connection.
     (void)esp_bt_gap_cancel_discovery();
@@ -697,9 +676,6 @@ esp_err_t bt_audio_connect_index(int idx){
         (void)bt_audio_stop_stream();
         return bt_audio_disconnect();
     }
-
-    ESP_LOGI(TAG, "Disconnecting other peers before connecting new one");
-    disconnect_all_peers_except(target, true);
 
     s_user_streaming = false;
     s_streaming      = false;

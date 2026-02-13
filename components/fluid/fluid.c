@@ -53,6 +53,14 @@
 #define GRAVITY_SIGN_X -1.0f
 #define GRAVITY_SIGN_Y -1.0f
 #define GRAVITY_ACCEL 20.0f
+#define FLUID_SIM_PERIOD_MS 33
+#define FLUID_TASK_STACK 4096
+#define FLUID_TASK_PRIO 4
+#if configNUMBER_OF_CORES > 1
+#define FLUID_TASK_CORE 0
+#else
+#define FLUID_TASK_CORE 0
+#endif
 
 static const char *TAG = "fluid";
 
@@ -73,6 +81,9 @@ static EXT_RAM_BSS_ATTR uint8_t s_mask_a[SIM_PIXELS];
 static EXT_RAM_BSS_ATTR uint8_t s_mask_b[SIM_PIXELS];
 static uint8_t *s_mask = s_mask_a;
 static uint8_t *s_mask_tmp = s_mask_b;
+static EXT_RAM_BSS_ATTR uint8_t s_mask_render[SIM_PIXELS];
+static uint8_t s_mask_shadow[SIM_PIXELS];
+static portMUX_TYPE s_mask_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // Framebuffer for standalone runner blits
 static uint8_t s_fb[PANEL_W * PANEL_H / 8];
@@ -82,6 +93,8 @@ static bool s_mpu_ready = false;
 static bool s_mpu_shared = false;
 static bool s_use_orientation_service = false;
 static mpu6500_t s_mpu = { .mux = portMUX_INITIALIZER_UNLOCKED };
+static TaskHandle_t s_fluid_task = NULL;
+static volatile bool s_fluid_task_stop = false;
 
 // ------------------------------------------------------------------------
 // Utilities
@@ -162,6 +175,7 @@ static void reset_sim(void)
 {
     memset(s_mask_a, 0, sizeof(s_mask_a));
     memset(s_mask_b, 0, sizeof(s_mask_b));
+    memset(s_mask_render, 0, sizeof(s_mask_render));
     s_mask = s_mask_a;
     s_mask_tmp = s_mask_b;
 
@@ -353,11 +367,27 @@ static bool view_transform(int x, int y, int w, int h, int *out_ox, int *out_oy,
     return true;
 }
 
-static void draw_mask(uint8_t *fb, int ox, int oy, int scale)
+static void publish_mask_snapshot(void)
 {
+    taskENTER_CRITICAL(&s_mask_mux);
+    memcpy(s_mask_render, s_mask, SIM_PIXELS);
+    taskEXIT_CRITICAL(&s_mask_mux);
+}
+
+static void copy_mask_snapshot(uint8_t *out)
+{
+    if (!out) return;
+    taskENTER_CRITICAL(&s_mask_mux);
+    memcpy(out, s_mask_render, SIM_PIXELS);
+    taskEXIT_CRITICAL(&s_mask_mux);
+}
+
+static void draw_mask(const uint8_t *mask, uint8_t *fb, int ox, int oy, int scale)
+{
+    if (!mask) return;
     for (int y = 0; y < SIM_H; ++y) {
         for (int x = 0; x < SIM_W; ++x) {
-            if (!s_mask[sim_idx(x, y)]) continue;
+            if (!mask[sim_idx(x, y)]) continue;
             int px0 = ox + x * scale;
             int py0 = oy + y * scale;
             for (int yy = 0; yy < scale; ++yy) {
@@ -441,6 +471,70 @@ static void sample_gravity_xy(float *out_gx, float *out_gy)
     *out_gy = gy;
 }
 
+static void fluid_step_once(void)
+{
+    float gx = 0.0f;
+    float gy = 0.0f;
+    sample_gravity_xy(&gx, &gy);
+
+    float hdt = SIM_DT / (float)SUBSTEPS;
+    for (int s = 0; s < SUBSTEPS; ++s) {
+        step_sub(hdt, gx, gy);
+    }
+
+    rasterize_particles();
+    publish_mask_snapshot();
+}
+
+static void fluid_task_fn(void *arg)
+{
+    (void)arg;
+    TickType_t last_wake = xTaskGetTickCount();
+    TickType_t period = pdMS_TO_TICKS(FLUID_SIM_PERIOD_MS);
+    if (period < 1) period = 1;
+
+    while (!s_fluid_task_stop) {
+        fluid_step_once();
+        vTaskDelayUntil(&last_wake, period);
+    }
+
+    s_fluid_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void fluid_start_task(void)
+{
+    if (s_fluid_task) return;
+
+    s_fluid_task_stop = false;
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        fluid_task_fn,
+        "fluid_sim",
+        FLUID_TASK_STACK,
+        NULL,
+        FLUID_TASK_PRIO,
+        &s_fluid_task,
+        FLUID_TASK_CORE
+    );
+    if (ok != pdPASS) {
+        s_fluid_task = NULL;
+        ESP_LOGW(TAG, "fluid task create failed on core %d", FLUID_TASK_CORE);
+    } else {
+        ESP_LOGI(TAG, "fluid task running on core %d", FLUID_TASK_CORE);
+    }
+}
+
+static void fluid_stop_task(void)
+{
+    if (!s_fluid_task) return;
+
+    s_fluid_task_stop = true;
+    while (s_fluid_task) {
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+    s_fluid_task_stop = false;
+}
+
 // ------------------------------------------------------------------------
 // Shell-facing API
 // ------------------------------------------------------------------------
@@ -448,10 +542,13 @@ void fluid_app_init(void)
 {
     reset_sim();
     ensure_mpu();
+    fluid_step_once();
+    fluid_start_task();
 }
 
 void fluid_app_deinit(void)
 {
+    fluid_stop_task();
     reset_sim();
 }
 
@@ -463,26 +560,21 @@ void fluid_app_handle_input(const input_event_t *ev)
 void fluid_app_tick(float dt_sec)
 {
     (void)dt_sec;
-    float gx = 0.0f;
-    float gy = 0.0f;
-    sample_gravity_xy(&gx, &gy);
-
-    float hdt = SIM_DT / (float)SUBSTEPS;
-    for (int s = 0; s < SUBSTEPS; ++s) {
-        step_sub(hdt, gx, gy);
+    // Fallback path for standalone use if the worker task wasn't created.
+    if (!s_fluid_task) {
+        fluid_step_once();
     }
-
-    rasterize_particles();
 }
 
 void fluid_app_draw(uint8_t *fb, int x, int y, int w, int h)
 {
     if (!fb) return;
     fb_clear(fb);
+    copy_mask_snapshot(s_mask_shadow);
 
     int ox = 0, oy = 0, scale = 0;
     if (view_transform(x, y, w, h, &ox, &oy, &scale)) {
-        draw_mask(fb, ox, oy, scale);
+        draw_mask(s_mask_shadow, fb, ox, oy, scale);
     }
 }
 
@@ -504,7 +596,9 @@ void fluid_run(void)
         float dt = (float)(now - last) / 1e6f;
         last = now;
 
-        fluid_app_tick(dt);
+        if (!s_fluid_task) {
+            fluid_app_tick(dt);
+        }
         fluid_app_draw(s_fb, 0, 0, PANEL_W, PANEL_H);
         oled_blit_full(s_fb);
 
