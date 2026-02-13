@@ -124,7 +124,7 @@ static void call_rx_play_task(void *arg){
         }
         size_t bytes = CHUNK * 2 * sizeof(int32_t);
         size_t written = 0;
-        esp_err_t er = i2s_channel_write(tx, stereo, bytes, &written, pdMS_TO_TICKS(400));
+        esp_err_t er = i2s_channel_write(tx, stereo, bytes, &written, 400);
         if (er != ESP_OK) {
             ESP_LOGW(TAG, "i2s write err %d", er);
             g_rx_stats.write_errs++;
@@ -256,7 +256,7 @@ static void mic_tx_task(void *arg){
         size_t nread = 0;
         esp_err_t er = i2s_channel_read(rx, buf32,
                                         FRAMES * 2 * sizeof(int32_t),
-                                        &nread, pdMS_TO_TICKS(200));
+                                        &nread, 200);
         if (er != ESP_OK) {
             if (++err_count % 8 == 0) ESP_LOGW(TAG, "mic read err %d", er);
             vTaskDelay(pdMS_TO_TICKS(20));

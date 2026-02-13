@@ -54,11 +54,7 @@ static fft_render_packet_t g_render_pkt; // avoid large per-task stack usage
 static QueueHandle_t s_render_queue = NULL;
 static TaskHandle_t s_render_task = NULL;
 
-#if CONFIG_FREERTOS_UNICORE
-#define FFT_RENDER_CORE 0
-#else
 #define FFT_RENDER_CORE 1
-#endif
 #define FFT_RENDER_PRIO 3
 
 // ------------------- Rendering -------------------

@@ -61,7 +61,7 @@ static void call_sender_task(void *arg){
 
     while (1){
         size_t nread = 0;
-        esp_err_t er = i2s_channel_read(rx, buf32, sizeof(buf32), &nread, pdMS_TO_TICKS(200));
+        esp_err_t er = i2s_channel_read(rx, buf32, sizeof(buf32), &nread, 200);
         if (er != ESP_OK) {
             if (++err_count > 5) { ESP_LOGE(TAG, "call_tx: RX read failing, stopping"); break; }
             vTaskDelay(pdMS_TO_TICKS(50));
@@ -135,7 +135,7 @@ static void call_receiver_task(void *arg){
         }
         size_t bytes = samples * 2 * sizeof(int32_t);
         size_t written = 0;
-        i2s_channel_write(audio_tx_handle(), out32, bytes, &written, pdMS_TO_TICKS(20));
+        i2s_channel_write(audio_tx_handle(), out32, bytes, &written, 20);
         (void)can_save;
     }
     vTaskDelete(NULL);

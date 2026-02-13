@@ -39,6 +39,8 @@ static bool                s_rx_enabled = false;
 // Yield occasionally during long streaming loops to keep UI responsive.
 #define AUDIO_PLAY_YIELD_EVERY    4
 #define AUDIO_PLAY_YIELD_DELAY_MS 1
+// Keep TX writes <= one DMA frame worth of bytes to avoid all-or-nothing stalls.
+#define AUDIO_TX_WRITE_SLICE_BYTES 2048
 
 // Small static zero blocks to avoid stack usage
 static int32_t s_zero256_stereo[256 * 2] = {0};
@@ -174,8 +176,50 @@ esp_err_t audio_enable_tx(void){
     if (!s_tx_enabled) {
         if (g_last_cfg.sd_en_pin >= 0) gpio_set_level(g_last_cfg.sd_en_pin, 1); // unmute
         esp_err_t e = i2s_channel_enable(s_tx);
+        if (e == ESP_ERR_TIMEOUT) {
+            // Recover from occasional stalled TX state by re-arming the channel.
+            ESP_LOGW(TAG, "TX enable timeout; retrying");
+            (void)i2s_channel_disable(s_tx);
+            vTaskDelay(pdMS_TO_TICKS(1));
+            e = i2s_channel_enable(s_tx);
+        }
+        if (e == ESP_ERR_TIMEOUT && s_rx && !s_rx_enabled) {
+            // Some full-duplex driver states need RX armed before TX can drain.
+            ESP_LOGW(TAG, "TX enable still timed out; arming RX and retrying TX");
+            esp_err_t re = i2s_channel_enable(s_rx);
+            if (re == ESP_OK || re == ESP_ERR_INVALID_STATE) {
+                s_rx_enabled = true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(1));
+            e = i2s_channel_enable(s_tx);
+        }
         if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return e;
         s_tx_enabled = true;
+    }
+    // In full-duplex allocation mode, some ESP32 driver states only progress TX
+    // writes when RX is also enabled on the paired channel.
+    if (s_rx && !s_rx_enabled) {
+        esp_err_t re = i2s_channel_enable(s_rx);
+        if (re == ESP_OK || re == ESP_ERR_INVALID_STATE) {
+            s_rx_enabled = true;
+        } else {
+            ESP_LOGW(TAG, "RX companion enable failed while enabling TX: %s",
+                     esp_err_to_name(re));
+        }
+    }
+    // Prime TX DMA once after enable; if this stalls, surface it immediately.
+    size_t just = 0;
+    // IDF 6.x API expects timeout in milliseconds (not RTOS ticks).
+    esp_err_t pe = i2s_channel_write(
+        s_tx, s_zero256_stereo, sizeof(s_zero256_stereo), &just, 40);
+    if (pe == ESP_ERR_TIMEOUT || just == 0) {
+        ESP_LOGW(TAG, "TX prime failed: err=%s wrote=%u",
+                 esp_err_to_name(pe), (unsigned)just);
+        return ESP_ERR_TIMEOUT;
+    }
+    if (pe != ESP_OK) {
+        ESP_LOGW(TAG, "TX prime write error: %s", esp_err_to_name(pe));
+        return pe;
     }
     return ESP_OK;
 }
@@ -192,7 +236,7 @@ esp_err_t audio_enable_rx(void){
         if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return e;
         s_tx_enabled = true;
         size_t just = 0;
-        (void)i2s_channel_write(s_tx, s_zero256_stereo, sizeof(s_zero256_stereo), &just, pdMS_TO_TICKS(10));
+        (void)i2s_channel_write(s_tx, s_zero256_stereo, sizeof(s_zero256_stereo), &just, 10);
     }
 
     if (!s_rx_enabled) {
@@ -435,12 +479,14 @@ esp_err_t audio_play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
                 continue;
             }
             size_t just = 0;
+            size_t req = bytes_out - written;
+            if (req > AUDIO_TX_WRITE_SLICE_BYTES) req = AUDIO_TX_WRITE_SLICE_BYTES;
             esp_err_t e = i2s_channel_write(
                 s_tx,
                 ((uint8_t *)out) + written,
-                bytes_out - written,
+                req,
                 &just,
-                pdMS_TO_TICKS(200)
+                200
             );
 
             if (e == ESP_ERR_TIMEOUT) {
@@ -579,12 +625,14 @@ esp_err_t audio_play_wav_file(const char* path){
                 continue;
             }
             size_t just = 0;
+            size_t req = bytes_out - written;
+            if (req > AUDIO_TX_WRITE_SLICE_BYTES) req = AUDIO_TX_WRITE_SLICE_BYTES;
             esp_err_t e = i2s_channel_write(
                 s_tx,
                 ((uint8_t*)out) + written,
-                bytes_out - written,
+                req,
                 &just,
-                pdMS_TO_TICKS(200)
+                200
             );
             if (e == ESP_ERR_TIMEOUT) continue;   // retry to avoid dropping samples
             if (e != ESP_OK) {
@@ -667,7 +715,9 @@ esp_err_t audio_play_wav_mem(const void* data, size_t size){
         size_t bytes = n * 2 * sizeof(int32_t);
         size_t written = 0, just = 0;
         while (written < bytes) {
-            esp_err_t e = i2s_channel_write(s_tx, ((uint8_t*)st)+written, bytes-written, &just, pdMS_TO_TICKS(60));
+            size_t req = bytes - written;
+            if (req > AUDIO_TX_WRITE_SLICE_BYTES) req = AUDIO_TX_WRITE_SLICE_BYTES;
+            esp_err_t e = i2s_channel_write(s_tx, ((uint8_t*)st)+written, req, &just, 60);
             if (e == ESP_ERR_TIMEOUT) break;
             if (e != ESP_OK)          { free(st); return e; }
             written += just;
@@ -698,10 +748,19 @@ static esp_err_t audio_quiet_tail(int fade_ms, int zero_ms){
     while (left > 0) {
         int n = left > 512 ? 512 : left;
         size_t bytes = (size_t)n * 2 * sizeof(int32_t);
-        size_t just = 0;
-        esp_err_t e = i2s_channel_write(s_tx, s_zero512_stereo, bytes, &just, pdMS_TO_TICKS(10));
-        if (e != ESP_OK || just == 0) break; // no progress → bail quietly
-        left -= (int)(just / (2 * sizeof(int32_t)));
+        size_t wr = 0;
+        while (wr < bytes) {
+            size_t just = 0;
+            size_t req = bytes - wr;
+            if (req > AUDIO_TX_WRITE_SLICE_BYTES) req = AUDIO_TX_WRITE_SLICE_BYTES;
+            esp_err_t e = i2s_channel_write(s_tx, ((uint8_t*)s_zero512_stereo) + wr, req, &just, 10);
+            if (e != ESP_OK || just == 0) {
+                wr = bytes;
+                break;
+            }
+            wr += just;
+        }
+        left -= n;
     }
 
     if (g_last_cfg.sd_en_pin >= 0) gpio_set_level(g_last_cfg.sd_en_pin, 0); // mute
@@ -743,8 +802,14 @@ esp_err_t audio_play_tone(int hz, int ms){
     uint32_t phase = 0;                        // Q16.16
     uint32_t step  = (uint32_t)((((uint64_t)hz) << 16) / Fs);
     int frames_left = (Fs * ms) / 1000;
+    unsigned int yield_count = 0;
 
-    ESP_RETURN_ON_ERROR(audio_enable_tx(), TAG, "enable tx");
+    esp_err_t en = audio_enable_tx();
+    if (en != ESP_OK) {
+        ESP_LOGW(TAG, "tone: audio_enable_tx failed: %s", esp_err_to_name(en));
+        free(st);
+        return en;
+    }
 
     while (frames_left > 0) {
         int n = frames_left > (int)CHUNK ? (int)CHUNK : frames_left;
@@ -758,13 +823,41 @@ esp_err_t audio_play_tone(int hz, int ms){
         }
         size_t bytes = (size_t)n * 2 * sizeof(int32_t);
         size_t wr = 0, just = 0;
+        int idle_retries = 0;
         while (wr < bytes) {
-            esp_err_t e = i2s_channel_write(s_tx, ((uint8_t*)st)+wr, bytes-wr, &just, pdMS_TO_TICKS(60));
-            if (e == ESP_ERR_TIMEOUT) break;
+            size_t req = bytes - wr;
+            if (req > AUDIO_TX_WRITE_SLICE_BYTES) req = AUDIO_TX_WRITE_SLICE_BYTES;
+            esp_err_t e = i2s_channel_write(s_tx, ((uint8_t*)st)+wr, req, &just, 60);
+            if (e == ESP_ERR_TIMEOUT) {
+                // Give scheduler/idle time to run and avoid WDT when I2S stalls.
+                if (++idle_retries >= 200) {
+                    ESP_LOGW(TAG, "tone: i2s write timeout stall (wr=%u/%u, fs=%d)",
+                             (unsigned)wr, (unsigned)bytes, Fs);
+                    free(st);
+                    return ESP_ERR_TIMEOUT;
+                }
+                vTaskDelay(pdMS_TO_TICKS(1));
+                continue;
+            }
             if (e != ESP_OK) { free(st); return e; }
+            if (just == 0) {
+                if (++idle_retries >= 200) {
+                    ESP_LOGW(TAG, "tone: i2s write made no progress (wr=%u/%u, fs=%d)",
+                             (unsigned)wr, (unsigned)bytes, Fs);
+                    free(st);
+                    return ESP_ERR_TIMEOUT;
+                }
+                vTaskDelay(pdMS_TO_TICKS(1));
+                continue;
+            }
+            idle_retries = 0;
             wr += just;
         }
         frames_left -= n;
+        if (++yield_count >= AUDIO_PLAY_YIELD_EVERY) {
+            vTaskDelay(pdMS_TO_TICKS(AUDIO_PLAY_YIELD_DELAY_MS));
+            yield_count = 0;
+        }
     }
     free(st);
     (void)audio_quiet_tail(12, 8);

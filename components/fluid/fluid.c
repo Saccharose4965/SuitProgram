@@ -56,11 +56,7 @@
 #define FLUID_SIM_PERIOD_MS 33
 #define FLUID_TASK_STACK 4096
 #define FLUID_TASK_PRIO 4
-#if configNUMBER_OF_CORES > 1
-#define FLUID_TASK_CORE 0
-#else
-#define FLUID_TASK_CORE 0
-#endif
+#define FLUID_TASK_CORE 1
 
 static const char *TAG = "fluid";
 
@@ -324,34 +320,33 @@ static void step_sub(float hdt, float gx, float gy)
 // ------------------------------------------------------------------------
 static void rasterize_particles(void)
 {
-    memset(s_mask, 0, SIM_PIXELS);
+    // Build 3x3 neighborhood hit counts around occupied particle pixels.
+    // This is equivalent to the prior full-image blur+threshold pass but
+    // scales with particle count instead of SIM_W*SIM_H*9 work per frame.
+    memset(s_mask_tmp, 0, SIM_PIXELS);
 
     for (int i = 0; i < PARTICLE_COUNT; ++i) {
         int ix = clampi((int)s_x[i], 0, SIM_W - 1);
         int iy = clampi((int)s_y[i], 0, SIM_H - 1);
-        s_mask[sim_idx(ix, iy)] = 1;
-    }
 
-    memset(s_mask_tmp, 0, SIM_PIXELS);
-    for (int y = 0; y < SIM_H; ++y) {
-        for (int x = 0; x < SIM_W; ++x) {
-            int sum = 0;
-            for (int yy = -1; yy <= 1; ++yy) {
-                int ny = y + yy;
-                if ((unsigned)ny >= SIM_H) continue;
-                for (int xx = -1; xx <= 1; ++xx) {
-                    int nx = x + xx;
-                    if ((unsigned)nx >= SIM_W) continue;
-                    if (s_mask[sim_idx(nx, ny)]) ++sum;
+        for (int yy = -1; yy <= 1; ++yy) {
+            int ny = iy + yy;
+            if ((unsigned)ny >= SIM_H) continue;
+            int row = ny * SIM_W;
+            for (int xx = -1; xx <= 1; ++xx) {
+                int nx = ix + xx;
+                if ((unsigned)nx >= SIM_W) continue;
+                int idx = row + nx;
+                if (s_mask_tmp[idx] < 255) {
+                    s_mask_tmp[idx]++;
                 }
             }
-            s_mask_tmp[sim_idx(x, y)] = (sum >= 2) ? 1 : 0;
         }
     }
 
-    uint8_t *tmp = s_mask;
-    s_mask = s_mask_tmp;
-    s_mask_tmp = tmp;
+    for (int i = 0; i < SIM_PIXELS; ++i) {
+        s_mask[i] = (s_mask_tmp[i] >= 2) ? 1 : 0;
+    }
 }
 
 static bool view_transform(int x, int y, int w, int h, int *out_ox, int *out_oy, int *out_scale)
@@ -526,10 +521,18 @@ static void fluid_start_task(void)
 
 static void fluid_stop_task(void)
 {
-    if (!s_fluid_task) return;
+    TaskHandle_t task = s_fluid_task;
+    if (!task) return;
 
     s_fluid_task_stop = true;
+    TickType_t start = xTaskGetTickCount();
     while (s_fluid_task) {
+        if ((xTaskGetTickCount() - start) > pdMS_TO_TICKS(300)) {
+            ESP_LOGW(TAG, "fluid task stop timeout; force delete");
+            vTaskDelete(task);
+            s_fluid_task = NULL;
+            break;
+        }
         vTaskDelay(pdMS_TO_TICKS(2));
     }
     s_fluid_task_stop = false;

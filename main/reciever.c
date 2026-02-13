@@ -85,7 +85,7 @@ static void call_rx_task(void *arg){
 
         size_t bytes = samples * 2 * sizeof(int32_t);
         size_t written = 0;
-        esp_err_t er = i2s_channel_write(tx, out32, bytes, &written, pdMS_TO_TICKS(30));
+        esp_err_t er = i2s_channel_write(tx, out32, bytes, &written, 30);
         if (er != ESP_OK) {
             ESP_LOGW(TAG, "i2s write err %d", er);
             vTaskDelay(pdMS_TO_TICKS(5));

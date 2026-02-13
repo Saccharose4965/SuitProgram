@@ -89,7 +89,7 @@ static void recorder_task(void *arg){
 
     while (s_rec) {
         size_t nread = 0;
-        esp_err_t err = i2s_channel_read(s_rx, rx32, in_bytes, &nread, pdMS_TO_TICKS(1000));
+        esp_err_t err = i2s_channel_read(s_rx, rx32, in_bytes, &nread, 1000);
         if (err != ESP_OK || nread == 0) {
             static int zc = 0;
             if (nread == 0 && zc++ < 3) ESP_LOGW(TAG, "i2s read returned 0 bytes (no clocks?)");

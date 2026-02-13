@@ -122,6 +122,7 @@ static void audio_play_task(void *arg)
                 bt_used = true;
                 s_play_mode = AUDIO_PLAYER_MODE_BT;
                 ESP_LOGI(TAG, "BT playback started");
+                bool drain_stop_requested = false;
 
                 while (!s_abort) {
                     if (s_paused) {
@@ -130,6 +131,17 @@ static void audio_play_task(void *arg)
                     }
                     bt_audio_status_t st = {0};
                     bt_audio_get_status(&st);
+                    if (st.queued_frames == 0 && st.streaming) {
+                        // Track drained: actively suspend A2DP so BT stack idles
+                        // instead of continuously requesting silence.
+                        if (!drain_stop_requested && !bt_audio_media_cmd_pending()) {
+                            ESP_LOGI(TAG, "BT track drained; stopping stream");
+                            (void)bt_audio_stop_stream();
+                            drain_stop_requested = true;
+                        }
+                    } else if (st.queued_frames > 0) {
+                        drain_stop_requested = false;
+                    }
                     if (!st.streaming && st.queued_frames == 0) {
                         break;
                     }
@@ -138,12 +150,10 @@ static void audio_play_task(void *arg)
 
                 if (s_abort) {
                     ESP_LOGW(TAG, "BT playback aborted via audio_player_stop");
-                    if (bt_audio_can_stream()) {
-                        bt_audio_status_t st = {0};
-                        bt_audio_get_status(&st);
-                        if (st.streaming) {
-                            (void)bt_audio_stop_stream();
-                        }
+                    if (s_play_mode == AUDIO_PLAYER_MODE_BT || bt_audio_can_stream()) {
+                        // Single-owner teardown: avoid racing stop requests from
+                        // control/UI and worker contexts during rapid play spam.
+                        (void)bt_audio_stop_stream();
                     }
                 }
 
@@ -332,13 +342,6 @@ void audio_player_stop(void)
 {
     s_abort = true;
     s_paused = false;
-    if (bt_audio_can_stream()) {
-        bt_audio_status_t st = {0};
-        bt_audio_get_status(&st);
-        if (st.streaming || s_play_mode == AUDIO_PLAYER_MODE_BT) {
-            (void)bt_audio_stop_stream();
-        }
-    }
 }
 
 bool audio_player_should_abort(void)

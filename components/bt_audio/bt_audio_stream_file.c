@@ -31,11 +31,7 @@ static SemaphoreHandle_t s_bt_fp_lock = NULL; // protects FILE access
 #define BT_FEEDER_WAIT_MS              100
 #define BT_FEEDER_TASK_STACK           3072
 #define BT_FEEDER_TASK_PRIO            4
-#if configNUMBER_OF_CORES > 1
 #define BT_FEEDER_TASK_CORE            1
-#else
-#define BT_FEEDER_TASK_CORE            0
-#endif
 
 static uint8_t *s_bt_buf                 = NULL;
 static size_t   s_bt_buf_size            = 0;
@@ -526,7 +522,16 @@ static void close_bt_file_locked(void)
 
 static bool close_bt_file(TickType_t wait_ticks)
 {
-    (void)bt_stop_feeder(wait_ticks);
+    bool feeder_stopped = bt_stop_feeder(wait_ticks);
+    if (!feeder_stopped && s_bt_feeder_task) {
+        s_bt_src_bytes_left = 0;
+        s_bt_bytes_left = 0;
+        s_bt_file_eof = true;
+        s_bt_stream_paused = false;
+        s_bt_direct_stream = false;
+        bt_buf_reset();
+        return false;
+    }
     if (lock_fp(wait_ticks)) {
         close_bt_file_locked();
         unlock_fp();
@@ -672,7 +677,10 @@ esp_err_t bt_audio_play_wav(FILE *fp,
         return err;
     }
 
-    (void)bt_stop_feeder(pdMS_TO_TICKS(500));
+    if (!bt_stop_feeder(pdMS_TO_TICKS(500)) && s_bt_feeder_task) {
+        ESP_LOGW(TAG, "bt_audio_play_wav: previous feeder still stopping; drop request");
+        return ESP_ERR_TIMEOUT;
+    }
 
     uint64_t out_total = (num_channels == 1)
         ? ((uint64_t)data_size * 2ULL)

@@ -3,6 +3,7 @@
 #include "shell_audio.h"
 #include "shell_profiler.h"
 #include "app_settings.h"
+#include "audio.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -39,6 +40,7 @@ static DRAM_ATTR uint8_t s_fb_oled_a[PANEL_W * PANEL_H / 8];
 static DRAM_ATTR uint8_t s_fb_oled_b[PANEL_W * PANEL_H / 8];
 static uint8_t *s_fb_oled_latest = s_fb_oled_a;
 static TaskHandle_t s_oled_task = NULL;
+static TaskHandle_t s_startup_tone_task = NULL;
 
 static size_t s_current_app = 0;
 static size_t s_prev_app = 0;
@@ -95,6 +97,21 @@ static void oled_task(void *arg)
             oled_blit_full(buf);
         }
     }
+}
+
+static void startup_tone_task(void *arg)
+{
+    (void)arg;
+    // Let shell init continue; play tone asynchronously.
+    vTaskDelay(pdMS_TO_TICKS(50));
+    esp_err_t tone_err = audio_play_tone(440, 1000);
+    if (tone_err != ESP_OK) {
+        ESP_LOGW(TAG, "startup tone failed: %s", esp_err_to_name(tone_err));
+    } else {
+        ESP_LOGI(TAG, "startup tone played");
+    }
+    s_startup_tone_task = NULL;
+    vTaskDelete(NULL);
 }
 
 static inline void oled_submit_frame(void)
@@ -430,6 +447,23 @@ static bool shell_init_hw_and_display(void)
     // Audio bus for FFT (shared RX/TX)
     if (!shell_audio_init_if_needed()) {
         ESP_LOGE(TAG, "audio_init failed; FFT won't run");
+    } else {
+        // Startup speaker sanity check (async so shell task does not trip WDT).
+        if (!s_startup_tone_task) {
+            BaseType_t ok = xTaskCreatePinnedToCore(
+                startup_tone_task,
+                "tone_boot",
+                3072,
+                NULL,
+                1,
+                &s_startup_tone_task,
+                APP_TASK_CORE
+            );
+            if (ok != pdPASS) {
+                s_startup_tone_task = NULL;
+                ESP_LOGW(TAG, "startup tone task create failed");
+            }
+        }
     }
 
     esp_err_t ori = orientation_service_start();

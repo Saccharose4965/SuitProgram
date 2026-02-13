@@ -735,7 +735,7 @@ static void fft_task(void *arg){
 
     while(1){
         size_t nread=0;
-        esp_err_t e = i2s_channel_read(rx, rx32, in_bytes, &nread, pdMS_TO_TICKS(200));
+        esp_err_t e = i2s_channel_read(rx, rx32, in_bytes, &nread, 200);
         if (e!=ESP_OK || nread==0){ vTaskDelay(pdMS_TO_TICKS(10)); continue; }
         size_t frames_rd = nread / (sizeof(int32_t)*2);
         if (!slot_decided && frames_rd>=8){

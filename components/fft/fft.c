@@ -826,11 +826,7 @@ static void process_fft_frame(void){
 static TaskHandle_t s_task=NULL;
 static volatile bool s_stop_requested = false;
 
-#if CONFIG_FREERTOS_UNICORE
-#define FFT_TASK_CORE 0
-#else
 #define FFT_TASK_CORE 1
-#endif
 #define FFT_TASK_PRIO 4
 
 static void fft_task(void *arg){
@@ -858,7 +854,8 @@ static void fft_task(void *arg){
 
     while(!s_stop_requested){
         size_t nread=0;
-        esp_err_t e = i2s_channel_read(rx, rx32, in_bytes, &nread, pdMS_TO_TICKS(200));
+        // IDF 6.x API expects timeout in milliseconds (not RTOS ticks).
+        esp_err_t e = i2s_channel_read(rx, rx32, in_bytes, &nread, 200);
         if (e!=ESP_OK || nread==0){ vTaskDelay(pdMS_TO_TICKS(10)); continue; }
         size_t frames_rd = nread / (sizeof(int32_t)*2);
         if (!slot_decided && frames_rd>=8){
