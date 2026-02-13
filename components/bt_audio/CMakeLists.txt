@@ -27,7 +27,7 @@ endif()
 get_filename_component(PROJECT_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 
 idf_component_register(
-    SRCS "bt_audio.c"
+    SRCS "bt_audio.c" "bt_audio_stream_file.c" "bt_audio_app.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS
         "${BTA_PRIV_DIR}"
