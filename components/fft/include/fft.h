@@ -1,5 +1,7 @@
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 
@@ -13,7 +15,6 @@ extern "C" {
  *
  * Prerequisites:
  * - audio_init() must have been called with a valid RX pin (din_gpio >= 0)
- * - oled_init() must have been called
  */
 esp_err_t fft_visualizer_start(void);
 void fft_visualizer_stop(void);
@@ -47,9 +48,17 @@ int fft_get_confident_bpms(float *bpm_out, float *conf_out, int max_out);
 // Enable or disable OLED rendering; beat detection and sampling keep running.
 void fft_set_display_enabled(bool enabled);
 
-// Request a retroactive novelty hole over the most recent N frames
+// Copy the latest FFT view framebuffer into dst_fb (PANEL_W*PANEL_H/8 bytes).
+void fft_copy_frame(uint8_t *dst_fb, size_t dst_len);
+
+// Request novelty suppression over the most recent N frames
 // (e.g., to ignore button voltage changes).
-void fft_punch_novelty_hole(int frames);
+void fft_suppress_novelty_frames(int frames);
+
+// Request novelty suppression aligned to real-world latency:
+// - backfill_ms: retroactively suppress recent novelty history covering this delay
+// - future_frames: also suppress a few upcoming frames to absorb jitter/ringing
+void fft_suppress_novelty_timed_ms(int backfill_ms, int future_frames);
 
 #ifdef __cplusplus
 }

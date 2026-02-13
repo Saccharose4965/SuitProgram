@@ -133,13 +133,14 @@ static int64_t  g_last_frame_time_us = 0;
 static float    g_bpm_hz = 0.0f;
 static float    g_bpm_conf = 0.0f;
 static float    g_bpm_phase = 0.0f;
+static float    g_phase_shift_accum = 0.0f; // continuous phase advance (prevents retroactive jumps)
 static float    g_blink_bpm_hz = 0.0f;  // latched BPM that drives the blinker until next beat
 static float    g_blink_rate_hz = 0.0f; // actual blink rate used for display
 static float    g_beat_phase = 0.0f;    // phase accumulator for main beat blinker
 static int      g_tempo_update_countdown = 0;
 static QueueHandle_t s_beat_queue = NULL;
-static volatile int g_nov_hole_backfill_frames = 0;  // recent frames to retroactively clear
-static volatile int g_nov_hole_future_frames = 0;    // upcoming frames to clear (timing jitter guard)
+static volatile int g_nov_suppress_backfill_frames = 0;  // recent frames to suppress
+static volatile int g_nov_suppress_future_frames = 0;    // upcoming frames to suppress
 
 // ------------------- BPM export and smoothing -------------------
 #define MAX_BPM_EXPORT  3      // export at most 3 BPMs (fundamental, double, special)
@@ -185,44 +186,85 @@ static void bpm_soft_decay_and_reset(void){
     g_bpm_list_count = 0;
     g_bpm_hz    = 0.0f;
     g_bpm_phase = 0.0f;
+    g_phase_shift_accum = 0.0f;
     g_phase_curve_len = 0;
     g_bpm_score_hist_idx = 0;
     g_bpm_score_hist_count = 0;
+    g_blink_bpm_hz = 0.0f;
+    g_blink_rate_hz = 0.0f;
+    g_beat_phase = 0.0f;
+    memset(g_family_spec_smooth, 0, sizeof(g_family_spec_smooth));
     memset(g_bpm_score_hist, 0, sizeof(g_bpm_score_hist));
     memset(g_bpm_score_sum, 0, sizeof(g_bpm_score_sum));
 }
 
-static void apply_novelty_backfill_hole(void){
-    int frames = g_nov_hole_backfill_frames;
+static void reset_novelty_baseline_state(void){
+    g_local_idx = 0;
+    g_local_count = 0;
+    g_local_sum = 0.0f;
+    memset(g_local_mem, 0, sizeof(g_local_mem));
+    g_prev_logmag_valid = false;
+}
+
+static void apply_novelty_suppression_to_recent_history(void){
+    int frames = g_nov_suppress_backfill_frames;
     if (frames <= 0) return;
-    g_nov_hole_backfill_frames = 0;
+    g_nov_suppress_backfill_frames = 0;
 
     int history_len = (g_nov_total_frames < (uint64_t)NOV_RING_FRAMES)
                         ? (int)g_nov_total_frames
                         : NOV_RING_FRAMES;
     if (history_len <= 0) return;
-    int shift = frames / 2; // move hole back by ~half its width
-    int max_erasable = history_len - shift;
-    if (max_erasable <= 0) return;
-    if (frames > max_erasable) frames = max_erasable;
+    if (frames > history_len) frames = history_len;
 
-    // Clear a same-width window shifted older by `shift`.
+    // Clear the most recent history so suppression reaches back to the
+    // voltage-change time reported by input debounce logic.
     for (int i = 0; i < frames; ++i){
-        int idx = g_nov_write_pos - 1 - (shift + i);
+        int idx = g_nov_write_pos - 1 - i;
         while (idx < 0) idx += NOV_RING_FRAMES;
         g_novelty_ring[idx] = 0.0f;
     }
+    fft_render_suppress_recent_novelty(frames);
+
+    // Suppression must affect downstream novelty logic too, not only history arrays.
+    reset_novelty_baseline_state();
+    bpm_soft_decay_and_reset();
+    g_tempo_update_countdown = 0;
 }
 
-// Public hook: clear a recent novelty window (retroactive) for button-induced spikes.
-void fft_punch_novelty_hole(int frames){
+void fft_suppress_novelty_frames(int frames){
     if (frames < 1) frames = 1;
     if (frames > NOV_RING_FRAMES) frames = NOV_RING_FRAMES;
-    if (frames > g_nov_hole_backfill_frames){
-        g_nov_hole_backfill_frames = frames;
+    if (frames > g_nov_suppress_backfill_frames){
+        g_nov_suppress_backfill_frames = frames;
     }
-    if (frames > g_nov_hole_future_frames){
-        g_nov_hole_future_frames = frames;
+    if (frames > g_nov_suppress_future_frames){
+        g_nov_suppress_future_frames = frames;
+    }
+}
+
+static int novelty_frames_from_ms(int backfill_ms)
+{
+    if (backfill_ms <= 0) return 1;
+    const int denom = HOP_SAMPLES * 1000;
+    int64_t num = (int64_t)backfill_ms * (int64_t)SAMPLE_RATE_HZ;
+    int frames = (int)((num + denom - 1) / denom); // ceil(ms / hop_ms)
+    if (frames < 1) frames = 1;
+    if (frames > NOV_RING_FRAMES) frames = NOV_RING_FRAMES;
+    return frames;
+}
+
+void fft_suppress_novelty_timed_ms(int backfill_ms, int future_frames)
+{
+    int backfill_frames = novelty_frames_from_ms(backfill_ms);
+    if (future_frames < 0) future_frames = 0;
+    if (future_frames > NOV_RING_FRAMES) future_frames = NOV_RING_FRAMES;
+
+    if (backfill_frames > g_nov_suppress_backfill_frames){
+        g_nov_suppress_backfill_frames = backfill_frames;
+    }
+    if (future_frames > g_nov_suppress_future_frames){
+        g_nov_suppress_future_frames = future_frames;
     }
 }
 
@@ -563,11 +605,12 @@ static void update_bpm_from_novelty(void){
     g_bpm_score_hist_idx = (g_bpm_score_hist_idx + 1) % BPM_SCORE_WINDOW_UPDATES;
     g_bpm_score_hist_count = next_count;
 
-    // Render the same windowed score map used by BPM picking.
+    // Render windowed score map for display; BPM/phase picking uses score_map below.
     fft_render_update_tempo_spectrum(bpmWindowAvg);
 
     int targetMinIdx = TARGET_BPM_MIN - BPM_MIN;
     int targetMaxIdx = TARGET_BPM_MAX - BPM_MIN;
+    const float *score_map = g_family_spec_smooth; // match temp.c BPM/phase selection map
     if (targetMinIdx < 0) targetMinIdx = 0;
     if (targetMaxIdx >= bpmCount) targetMaxIdx = bpmCount - 1;
     if (targetMaxIdx < targetMinIdx){
@@ -577,7 +620,7 @@ static void update_bpm_from_novelty(void){
 
     float target_energy = 0.0f;
     for (int i = targetMinIdx; i <= targetMaxIdx; ++i){
-        float v = g_bpm_score_sum[i];
+        float v = score_map[i];
         if (v > 0.0f) target_energy += v;
     }
     if (target_energy <= 1e-6f){
@@ -591,8 +634,8 @@ static void update_bpm_from_novelty(void){
 
     if (targetMaxIdx > targetMinIdx){
         for (int i = targetMinIdx; i < targetMaxIdx; ++i){
-            float s0 = g_bpm_score_sum[i];
-            float s1 = g_bpm_score_sum[i + 1];
+            float s0 = score_map[i];
+            float s1 = score_map[i + 1];
             if (s0 < 0.0f) s0 = 0.0f;
             if (s1 < 0.0f) s1 = 0.0f;
             float pair_score = s0 + s1;
@@ -602,7 +645,7 @@ static void update_bpm_from_novelty(void){
             }
         }
     } else {
-        float s0 = g_bpm_score_sum[targetMinIdx];
+        float s0 = score_map[targetMinIdx];
         if (s0 < 0.0f) s0 = 0.0f;
         pair_best_score = s0;
     }
@@ -612,8 +655,8 @@ static void update_bpm_from_novelty(void){
         return;
     }
 
-    float s_pair_0 = g_bpm_score_sum[pair_best_idx];
-    float s_pair_1 = (pair_best_idx + 1 <= targetMaxIdx) ? g_bpm_score_sum[pair_best_idx + 1] : 0.0f;
+    float s_pair_0 = score_map[pair_best_idx];
+    float s_pair_1 = (pair_best_idx + 1 <= targetMaxIdx) ? score_map[pair_best_idx + 1] : 0.0f;
     if (s_pair_0 < 0.0f) s_pair_0 = 0.0f;
     if (s_pair_1 < 0.0f) s_pair_1 = 0.0f;
     float pair_mass = s_pair_0 + s_pair_1;
@@ -630,8 +673,8 @@ static void update_bpm_from_novelty(void){
     int cluster_r = (pair_best_idx + 1 <= targetMaxIdx) ? (pair_best_idx + 1) : pair_best_idx;
 
     while (cluster_l > targetMinIdx){
-        float inner = g_bpm_score_sum[cluster_l];
-        float outer = g_bpm_score_sum[cluster_l - 1];
+        float inner = score_map[cluster_l];
+        float outer = score_map[cluster_l - 1];
         if (inner < 0.0f) inner = 0.0f;
         if (outer < 0.0f) outer = 0.0f;
         if (outer < inner){
@@ -641,8 +684,8 @@ static void update_bpm_from_novelty(void){
         }
     }
     while (cluster_r < targetMaxIdx){
-        float inner = g_bpm_score_sum[cluster_r];
-        float outer = g_bpm_score_sum[cluster_r + 1];
+        float inner = score_map[cluster_r];
+        float outer = score_map[cluster_r + 1];
         if (inner < 0.0f) inner = 0.0f;
         if (outer < 0.0f) outer = 0.0f;
         if (outer < inner){
@@ -654,7 +697,7 @@ static void update_bpm_from_novelty(void){
 
     float cluster_energy = 0.0f;
     for (int i = cluster_l; i <= cluster_r; ++i){
-        float v = g_bpm_score_sum[i];
+        float v = score_map[i];
         if (v > 0.0f) cluster_energy += v;
     }
 
@@ -687,10 +730,9 @@ static void update_bpm_from_novelty(void){
     recompute_phase_for_bpm(nov_history, history_len, frameRate, fund_avg,
                             &base_phase, g_phase_curve, &g_phase_curve_len);
 
-    double elapsed_sec = (frameRate > 0.0f)
-                            ? ((double)g_nov_total_frames / (double)frameRate)
-                            : 0.0;
-    float phase_shift = (float)fmod(elapsed_sec * (double)g_bpm_hz, 1.0);
+    // Use continuous phase integration instead of elapsed_time*bpm:
+    // this avoids large visual jumps when BPM estimate nudges slightly.
+    float phase_shift = g_phase_shift_accum;
     g_bpm_phase = wrap_phase01(base_phase + phase_shift);
 
     g_bpm_list_count = 0;
@@ -724,6 +766,11 @@ static void process_fft_frame(void){
     }
     g_last_frame_time_us = t0;
 
+    // Advance phase continuously with current BPM estimate.
+    if (g_bpm_hz > 0.0f && frame_dt_sec > 0.0f){
+        g_phase_shift_accum = wrap_phase01(g_phase_shift_accum + g_bpm_hz * frame_dt_sec);
+    }
+
     // --------- FFT magnitude (full-resolution, used for all DSP) ---------
     float logmag[FFT_SIZE/2 + 1];
 
@@ -748,10 +795,10 @@ static void process_fft_frame(void){
     if (nov > kNoveltyZeroThreshold) {
         nov = 0.0f;
     }
-    apply_novelty_backfill_hole();
-    if (g_nov_hole_future_frames > 0){
+    apply_novelty_suppression_to_recent_history();
+    if (g_nov_suppress_future_frames > 0){
         nov = 0.0f;
-        g_nov_hole_future_frames--;
+        g_nov_suppress_future_frames--;
     }
 
     float local = novelty_local_mean(nov);
@@ -815,8 +862,6 @@ static void process_fft_frame(void){
         float avg_us = (float)g_prof_accum_us / (float)g_prof_frame_count;
         float hop_us = (g_hop_rate_hz_est > 1.0f) ? (1e6f / g_hop_rate_hz_est) : (1e6f / kHopRate_nominal);
         g_last_load_pct = (hop_us > 0.0f) ? (avg_us / hop_us * 100.0f) : 0.0f;
-        ESP_LOGI(TAG, "FFT frame avg %.2f ms (%.1f%% of hop), hop_est=%.1f Hz",
-                 avg_us / 1000.0f, g_last_load_pct, (double)g_hop_rate_hz_est);
         g_prof_accum_us = 0;
         g_prof_frame_count = 0;
     }
@@ -940,6 +985,10 @@ bool fft_receive_beat(fft_beat_event_t *evt, TickType_t timeout_ticks){
 
 void fft_set_display_enabled(bool enabled){
     fft_render_set_display_enabled(enabled);
+}
+
+void fft_copy_frame(uint8_t *dst_fb, size_t dst_len){
+    fft_render_copy_frame(dst_fb, dst_len);
 }
 
 // ------------------- Public API: get list of confident BPMs -------------------

@@ -31,6 +31,7 @@ extern const shell_legend_t LEDS_LEGEND;
 void fft_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void fft_app_init(shell_app_context_t *ctx);
 void fft_app_deinit(shell_app_context_t *ctx);
+void fft_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t FFT_LEGEND;
 
 void music_app_init(shell_app_context_t *ctx);
@@ -47,15 +48,18 @@ extern const shell_legend_t BT_AUDIO_LEGEND;
 void flappy_app_init(shell_app_context_t *ctx);
 void flappy_app_deinit(shell_app_context_t *ctx);
 void flappy_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
+void flappy_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t FLAPPY_LEGEND;
 
 void t2048_app_init(shell_app_context_t *ctx);
 void t2048_app_deinit(shell_app_context_t *ctx);
 void t2048_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
+void t2048_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t T2048_LEGEND;
 
 void tetris_app_init(shell_app_context_t *ctx);
 void tetris_app_deinit(shell_app_context_t *ctx);
+void tetris_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t TETRIS_LEGEND;
 
 void snake_app_init_wrapper(shell_app_context_t *ctx);

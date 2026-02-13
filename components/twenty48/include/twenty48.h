@@ -1,5 +1,6 @@
 // 1bpp 2048 renderer for the 64x128 OLED.
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -32,6 +33,7 @@ void t48_render(const uint16_t grid_old[4][4],
 // regularly (e.g., every ~12–16 ms) from your main loop.
 void t48_game_init(void);
 void t48_game_tick(void);
+void t48_game_copy_frame(uint8_t *dst_fb, size_t dst_len);
 
 #ifdef __cplusplus
 }

@@ -4,6 +4,7 @@
 #include "freertos/task.h"
 
 #include "twenty48.h"
+#include "oled.h"
 
 #if configNUMBER_OF_CORES > 1
 #define APP_TASK_CORE 1
@@ -53,4 +54,15 @@ void t2048_app_deinit(shell_app_context_t *ctx)
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     s_t2048_task = NULL;
+}
+
+void t2048_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)
+{
+    (void)ctx;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    if (!fb) return;
+    t48_game_copy_frame(fb, PANEL_W * PANEL_H / 8);
 }

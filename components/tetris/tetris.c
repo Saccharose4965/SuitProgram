@@ -232,7 +232,6 @@ void tetris_run(void)
         int len = (int)strlen(buf);
         oled_draw_text3x5(g_fb, PANEL_W - 4*len - 2, 1, buf);
 
-        oled_blit_full(g_fb);
         vTaskDelay(pdMS_TO_TICKS(30));
     }
 }
@@ -240,4 +239,9 @@ void tetris_run(void)
 void tetris_request_stop(void)
 {
     s_tetris_stop = true;
+}
+
+void tetris_copy_frame(uint8_t *dst_fb, size_t dst_len){
+    if (!dst_fb || dst_len < sizeof(g_fb)) return;
+    memcpy(dst_fb, g_fb, sizeof(g_fb));
 }

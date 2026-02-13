@@ -10,7 +10,8 @@
 
 static const char *TAG = "input";
 #define INPUT_LOG_EVENTS 0
-#define INPUT_AUDIO_HOLE_FRAMES 6
+#define INPUT_NOVELTY_LATENCY_GUARD_MS 20
+#define INPUT_NOVELTY_FUTURE_FRAMES 2
 #define INPUT_DEBOUNCE_MS 25
 #define INPUT_LONG_PRESS_MS 1200
 #define INPUT_LEVEL_TOL_MV 220
@@ -116,9 +117,12 @@ bool input_poll(input_event_t *out_event, TickType_t now_ticks)
 
 
     if (cur != s_prev_btn) {
-        // Any ladder transition means input activity; drop a short novelty
-        // window so button noise does not pollute beat tracking.
-        fft_punch_novelty_hole(INPUT_AUDIO_HOLE_FRAMES);
+        // Any ladder transition means input activity. Backfill novelty suppression to the
+        // moment the voltage level first changed (candidate_tick), not just now.
+        TickType_t latency_ticks = now_ticks - s_candidate_tick;
+        int latency_ms = (int)(latency_ticks * portTICK_PERIOD_MS);
+        int backfill_ms = latency_ms + INPUT_NOVELTY_LATENCY_GUARD_MS;
+        fft_suppress_novelty_timed_ms(backfill_ms, INPUT_NOVELTY_FUTURE_FRAMES);
 
         // Long-press timing always restarts when the logical button changes.
         s_prev_tick = now_ticks;

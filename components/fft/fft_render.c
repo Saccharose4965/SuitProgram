@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "oled.h"
 #include "fft.h"   // NEW: for fft_get_confident_bpms & BPM range
 #include "esp_timer.h"
@@ -53,6 +54,7 @@ static fft_render_packet_t g_render_pkt; // avoid large per-task stack usage
 
 static QueueHandle_t s_render_queue = NULL;
 static TaskHandle_t s_render_task = NULL;
+static SemaphoreHandle_t s_fb_mutex = NULL;
 
 #define FFT_RENDER_CORE 1
 #define FFT_RENDER_PRIO 3
@@ -68,6 +70,13 @@ static void render_beat_spectrum(const fft_render_packet_t *pkt);
 static void render_phase_comb(void);
 static void render_active_view(const fft_render_packet_t *pkt);
 static void render_task(void *arg);
+
+static void render_three_lines_fb(const char *l1, const char *l2, const char *l3){
+    fb_clear();
+    if (l1 && l1[0]) oled_draw_text3x5(g_fb, 0, 0, l1);
+    if (l2 && l2[0]) oled_draw_text3x5(g_fb, 0, 10, l2);
+    if (l3 && l3[0]) oled_draw_text3x5(g_fb, 0, 20, l3);
+}
 
 static void render_beat_spectrum(const fft_render_packet_t *pkt){
     char l1[32], l2[32], l3[32];
@@ -102,7 +111,7 @@ static void render_beat_spectrum(const fft_render_packet_t *pkt){
                  pkt ? pkt->bpm_phase : 0.0f);
         snprintf(l3, sizeof(l3), "B:%c", flash);
 
-        oled_render_three_lines(l1, l2, l3);
+        render_three_lines_fb(l1, l2, l3);
         return;
     }
 
@@ -134,7 +143,7 @@ static void render_beat_spectrum(const fft_render_packet_t *pkt){
              pkt ? pkt->bpm_phase : 0.0f,
              pkt ? pkt->bpm_conf  : 0.0f);
 
-    oled_render_three_lines(l1, l2, l3);
+    render_three_lines_fb(l1, l2, l3);
 }
 
 static void render_active_view(const fft_render_packet_t *pkt){
@@ -179,7 +188,6 @@ static void render_log_spectrum(const float *logmag){
         int h = (int)(norm * (float)(PANEL_H-1) + 0.5f);
         for (int y=0; y<=h; ++y) fb_pset(x, PANEL_H-1 - y);
     }
-    oled_blit_full(g_fb);
 }
 
 static void render_spectrogram(void){
@@ -198,7 +206,6 @@ static void render_spectrogram(void){
             fb_pset(px, py);
         }
     }
-    oled_blit_full(g_fb);
 }
 
 // Plot raw spectral flux as bars and its rolling mean as a dotted line (full 128px).
@@ -230,7 +237,6 @@ static void render_novelty_peaks(void){
         // Local mean as a dotted marker (every other pixel)
         if ((g & 1) == 0) fb_pset(x, y_mean);
     }
-    oled_blit_full(g_fb);
 }
 
 // Plot cleaned novelty (flux): raw - mean, clamped at 0, as filled bars.
@@ -266,7 +272,6 @@ static void render_flux_view(void){
         }
     }
 
-    oled_blit_full(g_fb);
 }
 
 // Show raw temporal FFT spectrum (no capacitor smoothing).
@@ -283,7 +288,6 @@ static void render_tempo_raw(void){
         int h = (int)(norm * (float)(PANEL_H-1) + 0.5f);
         for (int y=0; y<=h; ++y) fb_pset(x, PANEL_H-1 - y);
     }
-    oled_blit_full(g_fb);
 }
 
 // Show temporal FFT (beat spectrum) bars only (no BPM marker overlays).
@@ -320,7 +324,6 @@ static void render_tempo_spectrum(void){
         fb_pset(x, y_avg);
         if (y_avg > 0) fb_pset(x, y_avg - 1); // 2px thickness for visibility
     }
-    oled_blit_full(g_fb);
 }
 
 // Comb correlation vs phase: for each phase offset (0..1), correlate novelty with a smooth comb.
@@ -328,7 +331,7 @@ static void render_phase_comb(void){
     fb_clear();
 
     float maxv = g_phase_corr_peak;
-    if (maxv < 1e-6f) { oled_blit_full(g_fb); return; }
+    if (maxv < 1e-6f) return;
 
     // Static plot: phase 0..1 maps directly left→right
     for (int x = 0; x < PANEL_W; ++x){
@@ -341,7 +344,6 @@ static void render_phase_comb(void){
         }
     }
 
-    oled_blit_full(g_fb);
 }
 
 static void render_task(void *arg){
@@ -359,7 +361,9 @@ static void render_task(void *arg){
                 continue; // drop intermediate frames; queue is overwrite-based
             }
             if (g_render_enabled){
+                if (s_fb_mutex) xSemaphoreTake(s_fb_mutex, portMAX_DELAY);
                 render_active_view(&g_render_pkt);
+                if (s_fb_mutex) xSemaphoreGive(s_fb_mutex);
                 last_draw_us = esp_timer_get_time();
             }
         }
@@ -427,6 +431,19 @@ void fft_render_push_novelty_display(float raw, float local_mean, float cleaned)
 
     g_nov_disp_idx = (g_nov_disp_idx + 1) % PANEL_W;
     if (g_nov_disp_count < PANEL_W) g_nov_disp_count++;
+}
+
+void fft_render_suppress_recent_novelty(int frames){
+    if (frames <= 0 || g_nov_disp_count <= 0) return;
+    if (frames > g_nov_disp_count) frames = g_nov_disp_count;
+
+    for (int i = 0; i < frames; ++i){
+        int idx = g_nov_disp_idx - 1 - i;
+        while (idx < 0) idx += PANEL_W;
+        g_nov_disp_raw[idx]   = 0.0f;
+        g_nov_disp_mean[idx]  = 0.0f;
+        g_nov_disp_clean[idx] = 0.0f;
+    }
 }
 
 void fft_render_update_tempo_spectrum(const float *bpm_spec_bc){
@@ -527,6 +544,10 @@ void fft_render_set_display_enabled(bool enabled){
 }
 
 esp_err_t fft_render_init(void){
+    if (!s_fb_mutex){
+        s_fb_mutex = xSemaphoreCreateMutex();
+        if (!s_fb_mutex) return ESP_ERR_NO_MEM;
+    }
     if (!s_render_queue){
         s_render_queue = xQueueCreate(1, sizeof(fft_render_packet_t));
         if (!s_render_queue) return ESP_ERR_NO_MEM;
@@ -545,6 +566,20 @@ void fft_render_submit(const fft_render_packet_t *pkt){
     if (s_render_queue){
         xQueueOverwrite(s_render_queue, pkt);
     } else if (g_render_enabled){
+        if (s_fb_mutex) xSemaphoreTake(s_fb_mutex, portMAX_DELAY);
         render_active_view(pkt);
+        if (s_fb_mutex) xSemaphoreGive(s_fb_mutex);
+    }
+}
+
+void fft_render_copy_frame(uint8_t *dst_fb, size_t dst_len){
+    if (!dst_fb || dst_len < sizeof(g_fb)) return;
+
+    if (s_fb_mutex){
+        if (xSemaphoreTake(s_fb_mutex, pdMS_TO_TICKS(2)) != pdTRUE) return;
+    }
+    memcpy(dst_fb, g_fb, sizeof(g_fb));
+    if (s_fb_mutex){
+        xSemaphoreGive(s_fb_mutex);
     }
 }

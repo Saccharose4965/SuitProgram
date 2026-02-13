@@ -222,7 +222,6 @@ static void render(void){
     snprintf(buf, sizeof(buf), " %u", (unsigned)g_high_score);
     oled_draw_text3x5(g_fb, 2, 20, buf);
 
-    oled_blit_full(g_fb);
 }
 
 // -------------------------------------------------------------------
@@ -277,4 +276,9 @@ void t48_game_tick(void){
             render();
         }
     }
+}
+
+void t48_game_copy_frame(uint8_t *dst_fb, size_t dst_len){
+    if (!dst_fb || dst_len < sizeof(g_fb)) return;
+    memcpy(dst_fb, g_fb, sizeof(g_fb));
 }

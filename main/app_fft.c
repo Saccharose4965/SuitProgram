@@ -4,6 +4,7 @@
 #include "esp_log.h"
 
 #include "fft.h"
+#include "oled.h"
 
 static const char *TAG = "shell";
 
@@ -49,4 +50,15 @@ void fft_app_deinit(shell_app_context_t *ctx)
 {
     (void)ctx;
     fft_set_display_enabled(false);
+}
+
+void fft_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)
+{
+    (void)ctx;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    if (!fb) return;
+    fft_copy_frame(fb, PANEL_W * PANEL_H / 8);
 }

@@ -4,6 +4,7 @@
 #include "freertos/task.h"
 
 #include "flappy.h"
+#include "oled.h"
 
 #if configNUMBER_OF_CORES > 1
 #define APP_TASK_CORE 1
@@ -51,4 +52,15 @@ void flappy_app_deinit(shell_app_context_t *ctx)
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     s_flappy_task = NULL;
+}
+
+void flappy_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)
+{
+    (void)ctx;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    if (!fb) return;
+    flappy_copy_frame(fb, PANEL_W * PANEL_H / 8);
 }

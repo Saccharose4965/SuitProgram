@@ -1,5 +1,7 @@
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -13,6 +15,9 @@ void flappy_request_stop(void);
 
 // Feed one-shot press triggers from the shell input layer.
 void flappy_trigger_press(void);
+
+// Copy latest rendered frame (PANEL_W*PANEL_H/8 bytes) into dst_fb.
+void flappy_copy_frame(uint8_t *dst_fb, size_t dst_len);
 
 #ifdef __cplusplus
 }

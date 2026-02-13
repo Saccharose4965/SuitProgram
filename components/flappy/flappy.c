@@ -101,6 +101,12 @@ static void draw_score(int x, int y, int score){
     }
 }
 
+static void draw_menu_placeholder(void){
+    fb_clear();
+    oled_draw_text3x5(gfb, 0, 0, "MENU");
+    oled_draw_text3x5(gfb, 0, 10, "(placeholder)");
+}
+
 // ----------------- Game params -----------------
 enum { FPS = 30 };
 #define DT          (1.0f / (float)FPS)
@@ -226,8 +232,7 @@ void flappy_run(void)
 {
     g_stop = false;
     s_press_pending = false;
-    // Shell owns OLED initialization; this app only renders.
-    oled_clear();
+    fb_clear();
 
     // --- splash screen ---
     {
@@ -244,8 +249,6 @@ void flappy_run(void)
         rect_fill(14, PANEL_H - 20, 60, 1);
         rect_fill(8, PANEL_H - 10, 3, 3);
         rect_fill(14, PANEL_H - 12, 42, 1);
-
-        oled_blit_full(gfb);
 
         // wait for button press trigger
         while (!button_take_press()) {
@@ -351,8 +354,7 @@ void flappy_run(void)
             if (settle_frames > 0) settle_frames--;
             else {
                 // placeholder menu
-                oled_clear();
-                oled_render_three_lines("MENU", "(placeholder)", "");
+                draw_menu_placeholder();
                 running = false;
             }
         }
@@ -394,10 +396,13 @@ void flappy_run(void)
     draw_score(2, 2, score);                   // current
     draw_score(PANEL_W - 4*3 - 2, 2, best);    // best
 
-        oled_blit_full(gfb);
-
         vTaskDelay(frame_delay);
     }
 
     ESP_LOGI(TAG, "Flappy: exited");
+}
+
+void flappy_copy_frame(uint8_t *dst_fb, size_t dst_len){
+    if (!dst_fb || dst_len < sizeof(gfb)) return;
+    memcpy(dst_fb, gfb, sizeof(gfb));
 }
