@@ -42,6 +42,7 @@ static size_t   s_bt_buf_count  = 0;
 static uint8_t  s_bt_feeder_chunk[BT_FEEDER_CHUNK_BYTES];
 static volatile bool s_bt_file_eof    = false;
 static volatile bool s_bt_feeder_stop = false;
+static volatile bool s_bt_stream_paused = false;
 static volatile bool s_bt_direct_stream = false;
 static TaskHandle_t  s_bt_feeder_task = NULL;
 static portMUX_TYPE  s_bt_buf_mux     = portMUX_INITIALIZER_UNLOCKED;
@@ -289,6 +290,11 @@ static void bt_file_feeder_task(void *arg)
     (void)arg;
 
     while (!s_bt_feeder_stop) {
+        if (s_bt_stream_paused) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+
         FILE *fp_local = s_bt_fp;
         if (!fp_local) break;
 
@@ -368,6 +374,7 @@ static void close_bt_file_locked(void)
     }
     s_bt_bytes_left = 0;
     s_bt_file_eof = false;
+    s_bt_stream_paused = false;
     s_bt_direct_stream = false;
     bt_buf_reset();
 }
@@ -403,6 +410,11 @@ size_t bt_audio_stream_queued_frames(void)
 int32_t bt_audio_a2dp_data_cb(uint8_t *data, int32_t len)
 {
     if (!data || len <= 0) return 0;
+
+    if (s_bt_stream_paused) {
+        memset(data, 0, len);
+        return len;
+    }
 
     if (s_bt_bytes_left == 0 || (s_bt_file_eof && bt_buf_level() == 0)) {
         memset(data, 0, len);
@@ -544,6 +556,7 @@ esp_err_t bt_audio_play_wav(FILE *fp,
     bt_buf_reset();
     s_bt_file_eof = false;
     s_bt_feeder_stop = false;
+    s_bt_stream_paused = false;
     s_bt_direct_stream = !use_buffered_stream;
     unlock_fp();
 
@@ -647,4 +660,9 @@ void bt_audio_volume_down(void)
 {
     // step size: 5%, saturating at 0.
     bt_audio_volume_set_percent(s_bt_volume_percent - 5);
+}
+
+void bt_audio_stream_set_paused(bool paused)
+{
+    s_bt_stream_paused = paused;
 }

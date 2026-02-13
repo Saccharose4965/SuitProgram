@@ -733,6 +733,7 @@ esp_err_t bt_audio_start_stream(void){
     }
     s_user_streaming = true;
     if (s_streaming) {
+        bt_audio_stream_set_paused(false);
         set_state(BT_AUDIO_STATE_STREAMING);
         return ESP_OK;
     }
@@ -744,6 +745,7 @@ esp_err_t bt_audio_start_stream(void){
     s_media_cmd_inflight = ESP_A2D_MEDIA_CTRL_START;
     esp_err_t err = esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_START);
     if (err == ESP_OK){
+        bt_audio_stream_set_paused(false);
         s_streaming = true;
         set_state(BT_AUDIO_STATE_STREAMING);
     } else {
@@ -757,6 +759,7 @@ esp_err_t bt_audio_stop_stream(void){
     if (!s_stack_ready) return ESP_ERR_INVALID_STATE;
     // Keep stop path responsive for shell/input context; feeder exits
     // asynchronously if SD read is momentarily blocked.
+    bt_audio_stream_set_paused(false);
     bt_audio_stream_close();
     if (s_state != BT_AUDIO_STATE_CONNECTED && s_state != BT_AUDIO_STATE_STREAMING){
         return ESP_OK;
@@ -789,6 +792,7 @@ esp_err_t bt_audio_pause_stream(void){
         return ESP_OK;
     }
     s_user_streaming = false;
+    bt_audio_stream_set_paused(true);
     if (!s_streaming) {
         set_state(BT_AUDIO_STATE_CONNECTED);
         return ESP_OK;
@@ -801,6 +805,7 @@ esp_err_t bt_audio_pause_stream(void){
     s_media_cmd_inflight = ESP_A2D_MEDIA_CTRL_SUSPEND;
     esp_err_t err = esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_SUSPEND);
     if (err != ESP_OK) {
+        bt_audio_stream_set_paused(false);
         s_media_cmd_pending = false;
         s_media_cmd_inflight = ESP_A2D_MEDIA_CTRL_NONE;
         return err;
