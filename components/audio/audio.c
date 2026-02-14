@@ -269,13 +269,13 @@ float audio_get_volume(void) { return (float)s_vol_q15 / 32767.f; }
 // ====================== Playback: WAV from file ======================
 //
 // Uses audio_wav_parse_file() so BT + local speaker share one parser.
-// Supports mono or stereo PCM16. For the embedded speaker we always
-// output mono: stereo is downmixed and duplicated to L/R I2S.
+// Supports mono PCM16 only. For the embedded speaker we duplicate mono
+// into both L/R I2S slots.
 //
 // ====================== Local playback using parsed WAV header ======================
 //
-// Uses audio_wav_info_t (parsed by audio_wav_parse_file) to play mono/stereo
-// PCM16 data via the mono I2S speaker. Stereo is mixed down to mono.
+// Uses audio_wav_info_t (parsed by audio_wav_parse_file) to play mono PCM16
+// data via the speaker path (duplicated to stereo I2S slots).
 //
 #define AUDIO_RING_BYTES (32 * 1024) // PSRAM-backed ring (must hold even number of samples)
 
@@ -338,7 +338,7 @@ static size_t ring_read(audio_ring_t *r, uint8_t *dst, size_t n){
     return rd;
 }
 
-// Local WAV playback using I2S speaker (mono or stereo PCM16)
+// Local WAV playback using I2S speaker (mono PCM16 only)
 esp_err_t audio_play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
 {
     if (!s_tx || !f || !info) {
@@ -347,8 +347,7 @@ esp_err_t audio_play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
 
     const audio_wav_fmt_t *fmt = &info->fmt;
 
-    if (fmt->audio_format != 1 || fmt->bits_per_sample != 16 ||
-        (fmt->num_channels != 1 && fmt->num_channels != 2)) {
+    if (fmt->audio_format != 1 || fmt->bits_per_sample != 16 || fmt->num_channels != 1) {
         ESP_LOGW(TAG, "local_stream: unsupported fmt=%u ch=%u bits=%u",
                  fmt->audio_format, fmt->num_channels, fmt->bits_per_sample);
         return ESP_ERR_NOT_SUPPORTED;
@@ -371,7 +370,7 @@ esp_err_t audio_play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
     // 3) Streaming loop: read PCM16 frames (with PSRAM ring), convert to stereo s32, write to I2S
 
     const size_t FRAMES_PER_CHUNK = 512;  // audio frames per chunk
-    const size_t IN_SAMPLES       = FRAMES_PER_CHUNK * fmt->num_channels;
+    const size_t IN_SAMPLES       = FRAMES_PER_CHUNK;
 
     int16_t *in  = (int16_t *)malloc(IN_SAMPLES * sizeof(int16_t));           // input PCM16
     int32_t *out = (int32_t *)malloc(FRAMES_PER_CHUNK * 2 * sizeof(int32_t)); // stereo s32
@@ -440,27 +439,17 @@ esp_err_t audio_play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
             break;  // EOF or read error
         }
 
-        // Convert bytes → samples → frames
-        size_t samples = rd / sizeof(int16_t);              // PCM16 samples read
-        size_t frames  = samples / fmt->num_channels;       // audio frames
+        // Convert bytes -> samples -> frames (mono source)
+        size_t samples = rd / sizeof(int16_t);
+        size_t frames  = samples;
 
         if (frames == 0) {
             break;
         }
 
-        // Build stereo s32 from mono/stereo PCM16
+        // Build stereo s32 from mono PCM16
         for (size_t i = 0; i < frames; ++i) {
-            int32_t s;
-
-            if (fmt->num_channels == 1) {
-                // Mono file → duplicate to L/R
-                s = in[i];
-            } else {
-                // Stereo file: mix L+R to mono for the single physical speaker
-                int32_t l = in[2 * i + 0];
-                int32_t r = in[2 * i + 1];
-                s = (l + r) / 2;
-            }
+            int32_t s = in[i];
 
             // Apply volume (Q15), then convert s16 → s32 MSB-justified
             int32_t vs  = (int32_t)((s * (int64_t)s_vol_q15) >> 15);
@@ -543,7 +532,7 @@ esp_err_t audio_play_wav_file(const char* path){
         return ESP_ERR_NOT_SUPPORTED;
     }
 
-    if (info.fmt.num_channels != 1 && info.fmt.num_channels != 2) {
+    if (info.fmt.num_channels != 1) {
         ESP_LOGW(TAG, "Unsupported channel count: %u", info.fmt.num_channels);
         fclose(f);
         return ESP_ERR_NOT_SUPPORTED;
@@ -563,9 +552,8 @@ esp_err_t audio_play_wav_file(const char* path){
         return ESP_FAIL;
     }
 
-    const int   channels  = info.fmt.num_channels;
     const size_t FRAMES   = 1024; // frames per chunk
-    int16_t *in  = (int16_t*)malloc(FRAMES * channels * sizeof(int16_t));
+    int16_t *in  = (int16_t*)malloc(FRAMES * sizeof(int16_t));
     int32_t *out = (int32_t*)malloc(FRAMES * 2 * sizeof(int32_t)); // stereo s32 out
     if (!in || !out) {
         free(in); free(out);
@@ -582,39 +570,24 @@ esp_err_t audio_play_wav_file(const char* path){
             continue;
         }
         size_t frames_to_read = FRAMES;
-        size_t bytes_to_read  = frames_to_read * channels * sizeof(int16_t);
+        size_t bytes_to_read  = frames_to_read * sizeof(int16_t);
         if (bytes_left < bytes_to_read) {
-            frames_to_read = bytes_left / (channels * sizeof(int16_t));
-            bytes_to_read  = frames_to_read * channels * sizeof(int16_t);
+            frames_to_read = bytes_left / sizeof(int16_t);
+            bytes_to_read  = frames_to_read * sizeof(int16_t);
         }
         if (frames_to_read == 0) break;
 
         size_t rd = fread_retry(in, 1, bytes_to_read, f);
         if (rd == 0) break;
 
-        size_t frames = rd / (channels * sizeof(int16_t));
-
-        if (channels == 1) {
-            // Mono in → mono out (duplicated into both I2S slots)
-            for (size_t i = 0; i < frames; ++i) {
-                int32_t v  = in[i];
-                int32_t vs = (int32_t)((v * (int64_t)s_vol_q15) >> 15); // s16
-                int32_t v32 = vs << 16;                                 // s16->s32 MSB
-                out[2*i + 0] = v32;
-                out[2*i + 1] = v32;
-            }
-        } else { // channels == 2
-            // Stereo in → downmix to mono: (L+R)/2, then duplicate to L/R
-            int16_t *st = in;
-            for (size_t i = 0; i < frames; ++i) {
-                int32_t L  = st[2*i + 0];
-                int32_t R  = st[2*i + 1];
-                int32_t m  = (L + R) / 2; // simple average
-                int32_t vs = (int32_t)((m * (int64_t)s_vol_q15) >> 15);
-                int32_t v32 = vs << 16;
-                out[2*i + 0] = v32;
-                out[2*i + 1] = v32;
-            }
+        size_t frames = rd / sizeof(int16_t);
+        // Mono in -> mono out (duplicated into both I2S slots)
+        for (size_t i = 0; i < frames; ++i) {
+            int32_t v  = in[i];
+            int32_t vs = (int32_t)((v * (int64_t)s_vol_q15) >> 15); // s16
+            int32_t v32 = vs << 16;                                 // s16->s32 MSB
+            out[2*i + 0] = v32;
+            out[2*i + 1] = v32;
         }
 
         size_t bytes_out = frames * 2 * sizeof(int32_t);

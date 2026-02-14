@@ -19,7 +19,6 @@ static const char *TAG = "bt_audio";
 static FILE    *s_bt_fp               = NULL;
 static uint32_t s_bt_src_bytes_left   = 0; // bytes left in source WAV payload
 static uint32_t s_bt_bytes_left       = 0; // bytes left to output to A2DP (stereo)
-static uint16_t s_bt_channels         = 2; // source channels: 1 or 2
 static SemaphoreHandle_t s_bt_fp_lock = NULL; // protects FILE access
 
 #define BT_STREAM_BUF_BYTES_MAX        (256 * 1024)
@@ -289,36 +288,6 @@ static inline void bt_feeder_notify(void)
     }
 }
 
-static void bt_apply_gain_pcm16(uint8_t *buf, size_t bytes)
-{
-    if (!buf || bytes < 2 || s_bt_vol_q15 == 32767) return;
-
-    size_t samples = (bytes & ~(size_t)1) / sizeof(int16_t);
-    int16_t *pcm = (int16_t*)buf;
-    int32_t gain = s_bt_vol_q15;
-    for (size_t i = 0; i < samples; ++i) {
-        int32_t v = (int32_t)pcm[i] * gain;
-        v >>= 15;
-        if (v > 32767) v = 32767;
-        else if (v < -32768) v = -32768;
-        pcm[i] = (int16_t)v;
-    }
-}
-
-static size_t bt_read_stereo_chunk_locked(size_t want_out_bytes)
-{
-    if (!s_bt_feeder_chunk || !s_bt_fp || s_bt_src_bytes_left == 0 || want_out_bytes == 0) return 0;
-
-    size_t want = want_out_bytes;
-    if (want > s_bt_src_bytes_left) want = s_bt_src_bytes_left;
-    size_t rd = fread(s_bt_feeder_chunk, 1, want, s_bt_fp);
-    if (rd > 0) {
-        s_bt_src_bytes_left -= (uint32_t)rd;
-        bt_apply_gain_pcm16(s_bt_feeder_chunk, rd);
-    }
-    return rd;
-}
-
 static size_t bt_read_mono_to_stereo_chunk_locked(size_t want_out_bytes)
 {
     if (!s_bt_feeder_chunk || !s_bt_feeder_mono_chunk ||
@@ -355,21 +324,6 @@ static size_t bt_read_mono_to_stereo_chunk_locked(size_t want_out_bytes)
     }
 
     return frames * 4;
-}
-
-static size_t bt_direct_read_stereo_locked(uint8_t *dst, size_t want_out_bytes)
-{
-    if (!s_bt_fp || s_bt_src_bytes_left == 0 || !dst || want_out_bytes == 0) return 0;
-
-    size_t want = want_out_bytes;
-    if (want > s_bt_src_bytes_left) want = s_bt_src_bytes_left;
-
-    size_t rd = fread(dst, 1, want, s_bt_fp);
-    if (rd > 0) {
-        s_bt_src_bytes_left -= (uint32_t)rd;
-        bt_apply_gain_pcm16(dst, rd);
-    }
-    return rd;
 }
 
 static size_t bt_direct_read_mono_locked(uint8_t *dst, size_t want_out_bytes)
@@ -467,11 +421,7 @@ static void bt_file_feeder_task(void *arg)
         size_t produced = 0;
         if (lock_fp(pdMS_TO_TICKS(20))) {
             if (s_bt_fp) {
-                if (s_bt_channels == 2) {
-                    produced = bt_read_stereo_chunk_locked(want_out);
-                } else {
-                    produced = bt_read_mono_to_stereo_chunk_locked(want_out);
-                }
+                produced = bt_read_mono_to_stereo_chunk_locked(want_out);
             }
             unlock_fp();
         } else {
@@ -600,11 +550,7 @@ int32_t bt_audio_a2dp_data_cb(uint8_t *data, int32_t len)
         size_t got = 0;
         if (lock_fp(0)) {
             if (s_bt_fp) {
-                if (s_bt_channels == 2) {
-                    got = bt_direct_read_stereo_locked(data + copied, want_out);
-                } else {
-                    got = bt_direct_read_mono_locked(data + copied, want_out);
-                }
+                got = bt_direct_read_mono_locked(data + copied, want_out);
             }
             unlock_fp();
         }
@@ -645,7 +591,10 @@ esp_err_t bt_audio_play_wav(FILE *fp,
 {
     if (!fp || data_size == 0) return ESP_ERR_INVALID_ARG;
     if (bits_per_sample != 16) return ESP_ERR_NOT_SUPPORTED;
-    if (num_channels != 1 && num_channels != 2) return ESP_ERR_NOT_SUPPORTED;
+    if (num_channels != 1) {
+        ESP_LOGW(TAG, "bt_audio_play_wav: mono-only, got ch=%u", num_channels);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
     if (bt_audio_media_cmd_pending()) return ESP_ERR_INVALID_STATE;
 
     int peer_rate = bt_audio_get_peer_sample_rate();
@@ -664,7 +613,7 @@ esp_err_t bt_audio_play_wav(FILE *fp,
     if (!use_buffered_stream) {
         ESP_LOGW(TAG, "bt_audio_play_wav: stream buffer alloc failed, using direct stream fallback");
     }
-    if (use_buffered_stream && !bt_ensure_feeder_buffers(num_channels == 1)) {
+    if (use_buffered_stream && !bt_ensure_feeder_buffers(true)) {
         ESP_LOGW(TAG, "bt_audio_play_wav: feeder buffer alloc failed, using direct stream fallback");
         use_buffered_stream = false;
     }
@@ -682,9 +631,7 @@ esp_err_t bt_audio_play_wav(FILE *fp,
         return ESP_ERR_TIMEOUT;
     }
 
-    uint64_t out_total = (num_channels == 1)
-        ? ((uint64_t)data_size * 2ULL)
-        : (uint64_t)data_size;
+    uint64_t out_total = (uint64_t)data_size * 2ULL;
     if (out_total > UINT32_MAX) {
         ESP_LOGW(TAG, "bt_audio_play_wav: stream too large (%llu bytes)",
                  (unsigned long long)out_total);
@@ -701,7 +648,6 @@ esp_err_t bt_audio_play_wav(FILE *fp,
     s_bt_fp               = fp;
     s_bt_src_bytes_left   = data_size;
     s_bt_bytes_left       = (uint32_t)out_total;
-    s_bt_channels         = num_channels;
     bt_buf_reset();
     s_bt_file_eof = false;
     s_bt_feeder_stop = false;
@@ -748,7 +694,7 @@ esp_err_t bt_audio_play_wav(FILE *fp,
         }
     }
 
-    if (s_bt_direct_stream && num_channels == 1 && !bt_ensure_direct_mono_buffer()) {
+    if (s_bt_direct_stream && !bt_ensure_direct_mono_buffer()) {
         ESP_LOGW(TAG, "bt_audio_play_wav: direct mono buffer alloc failed");
         if (lock_fp(pdMS_TO_TICKS(100))) {
             if (s_bt_fp == fp) {
