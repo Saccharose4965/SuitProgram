@@ -30,6 +30,7 @@ static const int   kFlashFrames   = 5;      // frames to hold beat flash
 static const float kNoveltyMeanOffset = 0.02f; // lifts rolling mean slightly to gate quiet peaks
 static const float kHopRate_nominal = (float)SAMPLE_RATE_HZ / (float)HOP_SAMPLES; // nominal hop rate (62.5 Hz)
 static const int   kTempoUpdateIntervalFrames = FPS/2; // update tempo estimate twice per second
+static const float kBlinkPhaseTarget = 0.85f; // trigger blink when beat phase reaches this point
 #define BPM_SCORE_WINDOW_UPDATES 8 // ~4s at 2 tempo updates/sec
 #define PHASE_SLOTS     32     // downsampled phase bins for display
 
@@ -45,6 +46,17 @@ static inline float wrap_phase01(float phase){
     phase -= floorf(phase);
     if (phase < 0.0f) phase += 1.0f;
     return phase;
+}
+
+static inline bool phase_crossed_forward(float prev, float curr, float target){
+    prev = wrap_phase01(prev);
+    curr = wrap_phase01(curr);
+    target = wrap_phase01(target);
+
+    if (curr >= prev){
+        return (target > prev && target <= curr);
+    }
+    return (target > prev || target <= curr);
 }
 
 static void shift_phase_curve_circular(float *vals, uint8_t count, float shift_norm){
@@ -138,6 +150,7 @@ static float    g_blink_bpm_hz = 0.0f;  // latched BPM that drives the blinker u
 static float    g_blink_rate_hz = 0.0f; // actual blink rate used for display
 static float    g_beat_phase = 0.0f;    // phase accumulator for main beat blinker
 static int      g_tempo_update_countdown = 0;
+static int      g_tempo_update_hold = 0; // tempo update cycles to skip after novelty suppression
 static QueueHandle_t s_beat_queue = NULL;
 static volatile int g_nov_suppress_backfill_frames = 0;  // recent frames to suppress
 static volatile int g_nov_suppress_future_frames = 0;    // upcoming frames to suppress
@@ -193,6 +206,7 @@ static void bpm_soft_decay_and_reset(void){
     g_blink_bpm_hz = 0.0f;
     g_blink_rate_hz = 0.0f;
     g_beat_phase = 0.0f;
+    g_tempo_update_hold = 0;
     memset(g_family_spec_smooth, 0, sizeof(g_family_spec_smooth));
     memset(g_bpm_score_hist, 0, sizeof(g_bpm_score_hist));
     memset(g_bpm_score_sum, 0, sizeof(g_bpm_score_sum));
@@ -228,8 +242,19 @@ static void apply_novelty_suppression_to_recent_history(void){
 
     // Suppression must affect downstream novelty logic too, not only history arrays.
     reset_novelty_baseline_state();
-    bpm_soft_decay_and_reset();
-    g_tempo_update_countdown = 0;
+
+    // Do not reset BPM/phase on button-hole punching: keep the current phase lock.
+    // Instead, skip a few tempo re-estimates so damaged novelty frames don't jerk phase.
+    int total_supp_frames = frames + g_nov_suppress_future_frames;
+    int hold_updates = (total_supp_frames + kTempoUpdateIntervalFrames - 1) / kTempoUpdateIntervalFrames;
+    hold_updates += 1; // extra guard update after suppression window
+    if (hold_updates > 10) hold_updates = 10;
+    if (hold_updates > g_tempo_update_hold){
+        g_tempo_update_hold = hold_updates;
+    }
+    if (g_tempo_update_countdown <= 0){
+        g_tempo_update_countdown = kTempoUpdateIntervalFrames;
+    }
 }
 
 void fft_suppress_novelty_frames(int frames){
@@ -805,7 +830,11 @@ static void process_fft_frame(void){
     push_novelty(nov, local);
 
     if (g_tempo_update_countdown <= 0){
-        update_bpm_from_novelty();
+        if (g_tempo_update_hold > 0){
+            g_tempo_update_hold--;
+        } else {
+            update_bpm_from_novelty();
+        }
         g_tempo_update_countdown = kTempoUpdateIntervalFrames;
     } else {
         g_tempo_update_countdown--;
@@ -821,9 +850,9 @@ static void process_fft_frame(void){
         g_blink_rate_hz = target_bpm_hz;
         if (g_blink_rate_hz < 0.1f) g_blink_rate_hz = 0.1f;
 
-        g_beat_phase += g_blink_rate_hz * frame_dt_sec;
-        if (g_beat_phase >= 1.0f) {
-            g_beat_phase -= floorf(g_beat_phase);
+        float prev_phase = g_beat_phase;
+        g_beat_phase = wrap_phase01(g_beat_phase + g_blink_rate_hz * frame_dt_sec);
+        if (phase_crossed_forward(prev_phase, g_beat_phase, kBlinkPhaseTarget)) {
             fft_render_trigger_flash(kFlashFrames);
             beat_triggered = true;
         }
