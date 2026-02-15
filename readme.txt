@@ -1,322 +1,285 @@
 SuitProgram (ESP32 wearable shell)
 ==================================
 
-This repository is an ESP-IDF firmware project for a wearable OLED + audio + LED platform.
-The app is organized around a shell (`main/app_shell.c`) that owns startup, input polling,
-frame composition, and app switching.
+This repository is an ESP-IDF firmware project for an ESP32 wearable platform
+with OLED, audio, Bluetooth, IMU/orientation, LEDs, SD card, and menu-driven
+apps.
 
-What this README covers
------------------------
-- Current runtime architecture (as implemented now)
-- Startup sequence and service ownership
-- Input model and global combos
-- App registry and menu mapping
-- Hardware mapping and shared buses
-- Central files to read first
-- Known caveats and next cleanup targets
+The runtime is centered around the shell in `main/app_shell.c`.
 
 
 Build and flash
 ---------------
 Environment:
-- ESP-IDF (same toolchain used by your workspace)
+- ESP-IDF from `/home/anotherone/Documents/suit/esp-idf`
 
 Typical commands:
 - `source /home/anotherone/Documents/suit/esp-idf/export.sh`
 - `idf.py -p /dev/ttyUSB0 -b 115200 flash monitor`
-
-Notes:
-- `app_main()` launches the shell task pinned to CPU1.
-- UART0 is shared with GPS in this project. If GPS is enabled, console output on UART0 must be disabled.
 
 
 Current runtime architecture
 ----------------------------
 Entry point:
 - `main/app_main.c`
-  - Creates `shell_task` on core 1 (priority 5)
+  - Creates `shell_task` pinned to core 1
+  - Task config: stack `12288`, priority `5`
   - `shell_task` calls `app_shell_start()`
 
-Shell ownership:
-- `main/app_shell.c`
-  - Owns app registry (`s_builtin_apps`)
-  - Owns current app state and switch queue
-  - Polls input and dispatches events
-  - Draws HUD + content + legend (for non-external apps)
-  - Submits frames to OLED worker task
+Shell ownership (`main/app_shell.c`):
+- App registry (`s_builtin_apps`)
+- App switching queue/state
+- Global input handling
+- Frame composition (HUD/content/legend)
+- OLED submit path
 
-Startup sequence in `app_shell_start()`:
+Shell frame cadence:
+- `shell_run_loop()` targets `33 ms` period (~30 FPS)
+
+
+Startup sequence (exact current flow)
+-------------------------------------
+`app_shell_start()` does:
 1. `shell_init_hw_and_display()`
    - `hw_spi2_init_once()`
    - `hw_gpio_init()`
-   - `oled_init()` + `oled_clear()`
+   - `oled_init()`
+   - `oled_clear()`
    - starts `oled_task`
    - `shell_audio_init_if_needed()`
+   - starts async startup tone task (`audio_play_tone(440, 1000)`)
    - `orientation_service_start()`
 2. `system_state_init()`
 3. `app_settings_init()`
 4. `shell_setup_link()`
    - `link_init(...)`
-   - `link_set_frame_rx(...)`
-   - `link_start_info_broadcast(1000)`
-   - `storage_mount_sd()`
-   - `audio_rx_start(AUDIO_RX_DEFAULT_PORT)`
+   - if successful: `link_set_frame_rx(...)` and `link_start_info_broadcast(1000)`
 5. `shell_seed_initial_system_state()`
 6. `shell_init_input_and_apps()`
-7. `shell_run_loop()` (33 ms frame cadence)
+7. `shell_profiler_init()`
+8. `shell_run_loop()`
 
-Intentionally disabled in startup right now (commented out):
+Intentionally commented out in startup:
 - `led_modes_start()`
 - `power_monitor_start()`
 - `gps_services_start(9600)`
 
-Important nuance:
-- LED service still starts on demand when entering the LEDs app (`main/app_leds.c` calls `led_modes_start()` in `leds_app_init`).
+Important:
+- `shell_setup_link()` does not mount SD and does not start `audio_rx`.
+- File reception is now on-demand through the `file_rx` app.
 
 
-Framebuffer and OLED flow
--------------------------
-Shell-side frame buffers in `main/app_shell.c`:
-- `s_fb`: shell render buffer (apps draw here)
-- `s_fb_oled_a` / `s_fb_oled_b`: staging buffers for OLED task handoff
-
-Why two OLED staging buffers:
-- Shell can keep rendering into `s_fb` while OLED task is transmitting previous staged frame.
-- `oled_submit_frame()` copies `s_fb` into alternating A/B buffers and notifies `oled_task`.
-
-OLED driver behavior (`components/oled/oled.c`):
-- Uses shared SPI2 bus
-- `oled_blit_full()` converts framebuffer layout and performs per-page diff updates
-- If a page changed heavily, sends whole page; otherwise sends changed runs only
-- This reduces SPI traffic versus always-full-page writes
-
-
-Input model (single ADC ladder)
--------------------------------
-Input component:
+Input model
+-----------
+Input source:
 - `components/input/input.c`
-- Events emitted: `INPUT_EVENT_PRESS`, `INPUT_EVENT_LONG_PRESS`
+- Events: `INPUT_EVENT_PRESS`, `INPUT_EVENT_LONG_PRESS`
 - No release events
 
-Decoded logical buttons:
-- `A`, `B`, `C`, `D`
-- `AB combo` (around 1.1V)
-- `BC combo` (around 2.2V)
+Button decode levels (mV targets):
+- `A`: 825
+- `AB combo`: 1100
+- `B`: 1650
+- `BC combo`: 2200
+- `C`: 2475
+- `D`: 3300
 
-Defaults in code:
-- Debounce: 25 ms
-- Long press: 1200 ms
-- Ladder tolerance: +/- 220 mV
+Timing constants:
+- Debounce: `25 ms`
+- Long press: `1200 ms`
+- Level tolerance: `+/-220 mV`
 
-Global shell actions (handled before app handlers):
+Global shell actions (pre-app):
 - Long `AB combo` -> switch to `menu`
-- Long `BC combo` -> `esp_restart()`
-
-Implication:
-- App-local long-press handling for `BC combo` will not run, because shell consumes it globally.
+- Long `BC combo` -> restart (`esp_restart()`)
 
 
-App registry and menu mapping
------------------------------
-Registered shell apps (`main/app_shell.c` -> `s_builtin_apps`):
-- `title` (blank)
+App registry (current)
+----------------------
+From `main/app_shell.c` (`s_builtin_apps`):
+- `title`
 - `menu`
 - `status`
 - `volume`
-- `leds`
+- `leds_audio`
+- `leds_custom`
 - `music`
 - `bt`
+- `file_rx`
 - `keyboard`
-- `fft` (external)
+- `fft`
 - `fluid`
 - `threedee`
 - `pong`
 - `snake`
-- `flappy` (external)
-- `t2048` (external)
-- `tetris` (external)
+- `flappy`
+- `t2048`
+- `tetris`
 
-Boot behavior:
-- Shell boots directly into `menu` (not `title`).
+Boot app:
+- Shell boots directly to `menu`.
 
-Menu structure (`main/app_menu.c`):
-- Root: Settings, Games, Simulations, Comm, LEDs, Music
-- Settings: Status, Bluetooth, Volume, Keyboard, Restart
-- Simulations: GPS, FFT, Fluid, 3D Render
-- Games: Flappy, 2048, Tetris, Pong, Snake
-- Comm: Message, Call
-- LED: LED Modes
-
-Current stubs:
-- `gps`, `message`, `call` are present in menu but not registered apps.
-- Selecting them issues a switch request to unknown app id (logged warning) and stays in menu.
+Flag note:
+- No app currently sets `SHELL_APP_FLAG_EXTERNAL`.
 
 
-Per-app control summary (current wiring)
-----------------------------------------
-Menu:
-- `A` up, `B` down, `D` select
+Menu map (current)
+------------------
+From `main/app_menu.c`:
 
-Status:
-- Read-only view of `system_state`
+Root:
+- Settings
+- Games
+- Simulations
+- Comm
+- LEDs
+- Music
 
-Volume:
-- `A` louder, `B` quieter, `D` mute toggle
-- Persisted to `/sdcard/suit_settings.txt`
-- Applies to both local audio and BT percent mapping
+Settings:
+- Back
+- Status
+- Bluetooth
+- Volume
+- Keyboard
+- Restart
 
-LEDs:
-- Menu-driven LED mode selection (audio-reactive and custom pages)
-- Starts LED service on entry
+Simulations:
+- Back
+- GPS
+- FFT
+- Fluid
+- 3D Render
 
-Music:
-- Scans `/sdcard` for `.wav`
-- `A/B` move selection
-- `C` play/pause (or start selected)
-- `D` restart selected track
-- long `D` stop
+Games:
+- Back
+- Flappy
+- 2048
+- Tetris
+- Pong
+- Snake
 
-Bluetooth app:
-- `A/B` select device
-- `C` scan
-- `D` connect/disconnect logic on current selection
+Comm:
+- Back
+- Bluetooth
+- Message
+- Call
+- File RX
 
-FFT app:
-- `A` previous view, `B` next view
-- Views cycle through `FFT_VIEW_COUNT`
+LED:
+- Back
+- Audio Reactive
+- Custom
 
-3D app:
-- `D` recenter orientation
+Current menu stubs (not registered as apps):
+- `gps`
+- `message`
+- `call`
 
-Snake:
-- `A` left, `B` up, `C` right, `D` down
+Selecting these logs an unknown app warning and remains in menu.
 
-Pong:
-- `A` pause toggle
-- `B/C` paddle movement
-- `D` toggle host/client role
 
-External apps:
-- `flappy`, `t2048`, `tetris` run their own task/loop and draw directly
-- Shell skips framebuffer draw path while external app active
+Per-app controls (current wiring)
+---------------------------------
+Menu (`main/app_menu.c`):
+- `A`: up
+- `B`: down
+- `D`: select
+
+Status (`main/app_status.c`):
+- Read-only status view
+
+Volume (`main/app_volume.c`):
+- `A`: volume +0.1
+- `B`: volume -0.1
+- `D`: mute toggle
+
+LED Audio / LED Custom (`main/app_leds.c`):
+- `A`: up in list
+- `B`: down in list
+- `D`:
+  - on `Back`: return to `menu`
+  - on mode item: apply selected mode
+
+Music (`main/app_music.c`):
+- `A/B`: list navigation
+- `C`: play/pause (or start selected if inactive)
+- `D` press: restart selected
+- `D` long press: stop playback
+
+Bluetooth (`components/bt_audio/bt_audio_app.c`):
+- `A/B`: select discovered device
+- `C`: scan
+- `D`: connect/disconnect based on selection and state
+
+File RX (`main/app_file_rx.c`):
+- `C`: start/stop `audio_rx`
+- `D`: return to `menu`
+- On start, mounts SD if needed, then calls `audio_rx_start(AUDIO_RX_DEFAULT_PORT)`
+
+FFT (`main/app_fft.c`):
+- `A`: previous FFT view
+- `B`: next FFT view
+
+Keyboard/Fluid/3D/Pong/Snake/Flappy/2048/Tetris:
+- Shell forwards input/tick/draw to their app/component handlers.
+
+
+Link and file reception
+-----------------------
+Link service (`components/link` via `shell_setup_link()`):
+- Initialized once at startup
+- Starts periodic info broadcast when init succeeds
+
+Audio RX service (`components/audio_rx`):
+- Not started at boot
+- Controlled by `file_rx` app only
+- Default TCP port: `5000`
+- Output path pattern: `/sdcard/rx_rec_XXXXX.wav`
 
 
 Hardware map (from `components/hw/include/hw.h`)
 -------------------------------------------------
-SPI2 shared bus:
-- MOSI 23, MISO 19, CLK 18
-- CS: OLED 5, SD 21, IMU1 14, IMU2 26, IMU3 27
-- OLED DC 13, RST NC
+SPI2:
+- MOSI `23`, MISO `19`, CLK `18`
+- CS: OLED `5`, SD `21`, IMU1 `14`, IMU2 `26`, IMU3 `27`
+- OLED DC `13`, OLED RST `NC`
 
 I2S:
-- BCLK 4, LRCK 22, DOUT 25, DIN 36
+- BCLK `4`, LRCK `22`, DOUT `25`, DIN `36`
 
 ADC:
-- Hall A 34, Hall B 35, Buttons ladder 39
+- Hall A `34`, Hall B `35`, buttons ladder `39`
 
 LED strips:
-- GPIO32 / GPIO33
+- GPIO `32`, GPIO `33`
 
 GPS UART:
-- UART0 TX 1, RX 3
+- UART0 TX `1`, RX `3`
 
 SD mount point:
 - `/sdcard`
 
 
-Shared buses and service boundaries
------------------------------------
-SPI2:
-- Shared by OLED, SD, and MPU6500 devices
-- Arbitration is through ESP-IDF SPI bus/device handles
-- OLED transfers are staged via OLED task; SD and IMU still compete for bus time
+Repository layout
+-----------------
+`main/`:
+- Shell and app wrappers listed in `main/CMakeLists.txt`
 
-I2S/audio:
-- Single audio subsystem initialized once through `shell_audio_init_if_needed()`
-- Used by local playback, BT source path, FFT sampling, and audio-related components
+`components/`:
+- Reusable modules: hardware, oled, input, audio, bt_audio, fft, link, gps,
+  orientation, storage, games, etc.
 
-System state authority (`components/state`):
-- Shell and services publish to `system_state`
-- HUD/status read snapshots each frame
-
-
-Link and networking
--------------------
-Link module (`components/link`):
-- Tries ESP-NOW first
-- Also tries Wi-Fi telemetry path (SSID/pass/IP/port from `main/Kconfig`)
-- Supports framed messages and optional ACK on ESP-NOW
-- Broadcasts compact system-state info frames periodically
-
-Audio RX service (`components/audio_rx`):
-- TCP listener (default port 5000)
-- Writes received streams to `/sdcard/rx_rec_XXXXX.wav`
-- Uses ring buffer + writer task to decouple socket read and SD writes
+Legacy entrypoint files still present in `main/` but not in build list:
+- `main/old2.c`
+- `main/reciever.c`
+- `main/sender.c`
 
 
-Sensors and orientation
------------------------
-Orientation service (`components/orientation/orientation_service.c`):
-- Starts IMU on SPI2 (CS IMU1)
-- Runs sampler + orientation update task (~200 Hz)
-- Exposes shared orientation context via `orientation_service_ctx()`
-
-Used by:
-- `threedee` app (view orientation)
-- `fluid` app (acceleration-driven gravity in sim)
-
-GPS component (`components/gps`):
-- Has service APIs (`gps_service_start`, `gps_services_start`, time bridge)
-- Not started by shell right now (startup call commented)
-
-
-Central files (read first)
---------------------------
-If you need to understand behavior quickly, start here in order:
-1. `main/app_main.c` - shell task bootstrap
-2. `main/app_shell.c` - startup, registry, input dispatch, frame loop
-3. `main/app_menu.c` - menu tree and navigation
-4. `components/input/input.c` - ladder decode and event model
-5. `components/oled/oled.c` - OLED SPI write strategy (diff/page runs)
-6. `components/hw/include/hw.h` - canonical pin map
-7. `components/link/link.c` - ESP-NOW/Wi-Fi framing
-8. `components/audio/audio.c` + `main/shell_audio.c` - shared audio bus init/use
-9. `components/orientation/orientation_service.c` - IMU orientation service
-10. `components/gps/gps.c` - GPS parsing/service APIs (currently not started)
-
-App wrappers and shell app APIs:
-- `main/shell_apps.h`
-- `main/app_*.c`
-
-
-Repository layout at a glance
------------------------------
-- `main/`:
-  - Shell orchestration and app wrappers
-  - Includes active app files listed in `main/CMakeLists.txt`
-- `components/`:
-  - Reusable modules (hw, oled, input, audio, bt_audio, fft, link, gps, orientation, games, etc.)
-- `main/old.c`, `main/old2.c`, `main/sender.c`, `main/reciever.c`:
-  - Legacy/experimental entrypoints, not in active main build list
-
-
-Known caveats (current code state)
-----------------------------------
-- `gps`, `message`, `call` menu entries are stubs (not registered shell apps).
-- Global long `BC combo` restart preempts any app-local long `BC` behavior.
-- LED/power/GPS boot services are intentionally disabled in shell start (commented), so startup state is partly seeded/default.
-- Heavy OLED updates plus SD/IMU activity can still produce contention and timing pressure despite OLED diff writes.
-
-
-Short-term cleanup suggestions
-------------------------------
-- Register real apps or hide stub menu items (`gps`, `message`, `call`).
-- Decide whether global long `BC` restart should remain hard-reserved.
-- Move commented startup toggles to explicit runtime config or a single service init table.
-- Consider a small bus/service dashboard in status view (SPI load hints, audio_rx state, GPS state).
-
-
-
+Known caveats (current code)
+----------------------------
+- `gps`, `message`, and `call` menu entries are stubs (unregistered app IDs).
+- Global long `BC combo` restart is reserved by shell and preempts app-local handling.
+- `led_modes_start()`, `power_monitor_start()`, and `gps_services_start(9600)` are still commented out in shell startup.
 
 
 Legacy notes from original README
