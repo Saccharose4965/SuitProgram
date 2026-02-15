@@ -61,8 +61,9 @@ static const menu_entry_t g_menu_comm_entries[] = {
     { "file_rx",   "File RX"   },
 };
 static const menu_entry_t g_menu_led_entries[] = {
-    { "menu_root", "Back" },
-    { "leds",      "LED Modes" }
+    { "menu_root",   "Back"           },
+    { "leds_audio",  "Audio Reactive" },
+    { "leds_custom", "Custom"         },
 };
 
 static void menu_page_info(const menu_state_t *st, const menu_entry_t **entries, size_t *count, const char **title)

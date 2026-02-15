@@ -12,16 +12,11 @@ const shell_legend_t LEDS_LEGEND = {
 };
 
 enum {
-    LEDS_PAGE_ROOT = 0,
-    LEDS_PAGE_AUDIO = 1,
-    LEDS_PAGE_CUSTOM = 2,
+    LEDS_PAGE_AUDIO = 0,
+    LEDS_PAGE_CUSTOM = 1,
 };
 
 static const char *TAG = "app_leds";
-static const shell_menu_entry_t s_root_entries[] = {
-    { "audio", "Audio Reactive" },
-    { "custom", "Custom" },
-};
 
 #define LEDS_MAX_AUDIO_ENTRIES 8
 #define LEDS_MAX_CUSTOM_ENTRIES 20
@@ -30,7 +25,6 @@ static shell_menu_entry_t s_custom_entries[1 + LEDS_MAX_CUSTOM_ENTRIES];
 
 typedef struct {
     int page;
-    size_t root_sel;
     size_t audio_sel;  // includes "Back" at index 0
     size_t custom_sel; // includes "Back" at index 0
     int audio_mode;
@@ -106,7 +100,7 @@ static void leds_apply_custom(void)
     system_state_set_led_mode(s_leds.custom_mode, name ? name : "custom");
 }
 
-void leds_app_init(shell_app_context_t *ctx)
+static void leds_init_page(shell_app_context_t *ctx, int page)
 {
     (void)ctx;
     esp_err_t err = led_modes_start();
@@ -114,8 +108,7 @@ void leds_app_init(shell_app_context_t *ctx)
         ESP_LOGW(TAG, "led_modes_start failed: %s", esp_err_to_name(err));
     }
 
-    s_leds.page = LEDS_PAGE_ROOT;
-    s_leds.root_sel = 0;
+    s_leds.page = page;
     int audio_count = led_beat_anim_count();
     int custom_count = led_modes_count();
     s_leds.audio_mode = (audio_count > 0) ? clamp_int((int)led_beat_anim_get(), 0, audio_count - 1) : 0;
@@ -123,32 +116,27 @@ void leds_app_init(shell_app_context_t *ctx)
     s_leds.audio_sel = (size_t)s_leds.audio_mode + 1;
     s_leds.custom_sel = (size_t)s_leds.custom_mode + 1;
 
-    // Default LED behavior on entry: audio-reactive flash.
-    s_leds.audio_mode = LED_BEAT_ANIM_FLASH;
-    s_leds.audio_sel = (size_t)s_leds.audio_mode + 1;
-    leds_apply_audio();
-    shell_ui_menu_reset(s_leds.root_sel);
+    if (s_leds.page == LEDS_PAGE_AUDIO) {
+        shell_ui_menu_reset(s_leds.audio_sel);
+    } else {
+        shell_ui_menu_reset(s_leds.custom_sel);
+    }
+}
+
+void leds_audio_app_init(shell_app_context_t *ctx)
+{
+    leds_init_page(ctx, LEDS_PAGE_AUDIO);
+}
+
+void leds_custom_app_init(shell_app_context_t *ctx)
+{
+    leds_init_page(ctx, LEDS_PAGE_CUSTOM);
 }
 
 void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 {
     if (!ctx || !ev) return;
     if (ev->type != INPUT_EVENT_PRESS) return;
-
-    if (s_leds.page == LEDS_PAGE_ROOT) {
-        size_t count = sizeof(s_root_entries) / sizeof(s_root_entries[0]);
-        if (ev->button == INPUT_BTN_A && s_leds.root_sel > 0) {
-            s_leds.root_sel--;
-            shell_ui_menu_reset(s_leds.root_sel);
-        } else if (ev->button == INPUT_BTN_B && (s_leds.root_sel + 1) < count) {
-            s_leds.root_sel++;
-            shell_ui_menu_reset(s_leds.root_sel);
-        } else if (ev->button == INPUT_BTN_D) {
-            s_leds.page = (s_leds.root_sel == 0) ? LEDS_PAGE_AUDIO : LEDS_PAGE_CUSTOM;
-            shell_ui_menu_reset((s_leds.page == LEDS_PAGE_AUDIO) ? s_leds.audio_sel : s_leds.custom_sel);
-        }
-        return;
-    }
 
     shell_menu_entry_t *entries = NULL;
     size_t count = 0;
@@ -173,8 +161,9 @@ void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
         shell_ui_menu_reset(*sel);
     } else if (ev->button == INPUT_BTN_D) {
         if (*sel == 0) {
-            s_leds.page = LEDS_PAGE_ROOT;
-            shell_ui_menu_reset(s_leds.root_sel);
+            if (ctx->request_switch) {
+                ctx->request_switch("menu", ctx->request_user_data);
+            }
             return;
         }
         if (s_leds.page == LEDS_PAGE_AUDIO) {
@@ -192,10 +181,10 @@ void leds_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, i
     (void)ctx;
     if (!fb) return;
 
-    const shell_menu_entry_t *entries = s_root_entries;
-    size_t count = sizeof(s_root_entries) / sizeof(s_root_entries[0]);
-    size_t selected = s_leds.root_sel;
-    const char *title = "LED";
+    const shell_menu_entry_t *entries = NULL;
+    size_t count = 0;
+    size_t selected = 0;
+    const char *title = NULL;
 
     if (s_leds.page == LEDS_PAGE_AUDIO) {
         count = build_audio_entries();
@@ -203,15 +192,12 @@ void leds_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, i
         selected = clamp_sel(s_leds.audio_sel, count);
         s_leds.audio_sel = selected;
         title = "LED / AUDIO";
-    } else if (s_leds.page == LEDS_PAGE_CUSTOM) {
+    } else {
         count = build_custom_entries();
         entries = s_custom_entries;
         selected = clamp_sel(s_leds.custom_sel, count);
         s_leds.custom_sel = selected;
         title = "LED / CUSTOM";
-    } else {
-        s_leds.root_sel = clamp_sel(s_leds.root_sel, count);
-        selected = s_leds.root_sel;
     }
 
     shell_menu_view_t view = {
