@@ -54,9 +54,11 @@ static const menu_entry_t g_menu_games_entries[] = {
     { "snake",     "Snake"  },
 };
 static const menu_entry_t g_menu_comm_entries[] = {
-    { "menu_root", "Back" },
-    { "message",   "Message"},
-    { "call",      "Call" }
+    { "menu_root", "Back"      },
+    { "bt",        "Bluetooth" },
+    { "message",   "Message"   },
+    { "call",      "Call"      },
+    { "file_rx",   "File RX"   },
 };
 static const menu_entry_t g_menu_led_entries[] = {
     { "menu_root", "Back" },

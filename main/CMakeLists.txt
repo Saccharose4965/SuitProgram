@@ -10,6 +10,7 @@ idf_component_register(
         "app_fft.c"
         "app_music.c"
         "app_bt.c"
+        "app_file_rx.c"
         "app_flappy.c"
         "app_t2048.c"
         "app_tetris.c"

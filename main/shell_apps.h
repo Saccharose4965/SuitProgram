@@ -45,6 +45,11 @@ void bt_handle_input_wrapper(shell_app_context_t *ctx, const input_event_t *ev);
 void bt_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t BT_AUDIO_LEGEND;
 
+void file_rx_app_init(shell_app_context_t *ctx);
+void file_rx_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
+void file_rx_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
+extern const shell_legend_t FILE_RX_LEGEND;
+
 void flappy_app_init(shell_app_context_t *ctx);
 void flappy_app_deinit(shell_app_context_t *ctx);
 void flappy_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev);

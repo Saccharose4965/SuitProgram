@@ -21,9 +21,7 @@
 #include "led_modes.h"
 #include "power.h"
 #include "link.h"
-#include "audio_rx.h"
 #include "bt_audio.h"
-#include "storage_sd.h"
 #include "orientation_service.h"
 #include "pong.h"
 
@@ -297,6 +295,17 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .draw   = bt_draw_wrapper,
     },
     {
+        .id     = "file_rx",
+        .name   = "File RX",
+        .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &FILE_RX_LEGEND,
+        .init   = file_rx_app_init,
+        .deinit = NULL,
+        .tick   = NULL,
+        .handle_input = file_rx_app_handle_input,
+        .draw   = file_rx_app_draw,
+    },
+    {
         .id     = "keyboard",
         .name   = "Keyboard",
         .flags  = 0,
@@ -498,21 +507,6 @@ static void shell_setup_link(void)
     if (link_ok) {
         (void)link_set_frame_rx(link_frame_handler, NULL);
         (void)link_start_info_broadcast(1000);
-
-        // Make sure SD is mounted before audio_rx tries to write to it
-        esp_err_t sd = storage_mount_sd();
-        if (sd != ESP_OK) {
-            ESP_LOGW(TAG, "SD mount failed (%s); audio_rx recording disabled",
-                    esp_err_to_name(sd));
-        } else {
-            ESP_LOGI(TAG, "SD mounted; audio_rx recordings will be written to /sdcard");
-        }
-        
-        // Start audio receiver once lwIP / Wi-Fi stack is up
-        esp_err_t ar = audio_rx_start(AUDIO_RX_DEFAULT_PORT);
-        if (ar != ESP_OK) {
-            ESP_LOGW(TAG, "audio_rx_start failed: %s", esp_err_to_name(ar));
-        }
     }
 }
 
