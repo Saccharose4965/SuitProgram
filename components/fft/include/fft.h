@@ -56,8 +56,6 @@ typedef struct {
 
 bool fft_receive_beat(fft_beat_event_t *evt, TickType_t timeout_ticks);
 
-int fft_get_confident_bpms(float *bpm_out, float *conf_out, int max_out);
-
 // Enable or disable OLED rendering; beat detection and sampling keep running.
 void fft_set_display_enabled(bool enabled);
 

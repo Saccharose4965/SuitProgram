@@ -10,7 +10,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "oled.h"
-#include "fft.h"   // NEW: for fft_get_confident_bpms & BPM range
+#include "fft.h"
 #include "esp_timer.h"
 
 static const float kDispPeakHold = 0.95f;  // decay for display peak tracking
@@ -79,63 +79,23 @@ static void render_beat_spectrum(const fft_render_packet_t *pkt){
     char flash = ' ';
     if (esp_timer_get_time() <= g_beat_flash_until_us) flash = '*';
 
-    // Try to get a list of confident BPMs
-    float bpms[3];
-    float confs[3];
-    int n = fft_get_confident_bpms(bpms, confs, 3);
+    float bpm_est = pkt ? pkt->bpm_est : 0.0f;
+    if (!isfinite(bpm_est) || bpm_est < 0.0f) bpm_est = 0.0f;
 
-    if (n <= 0) {
-        // --- Fallback: original single-BPM display ---
+    // Smooth the displayed BPM so it's readable
+    static float s_bpm_display = 0.0f;
+    const float alpha = 0.15f; // smaller = smoother, larger = more responsive
 
-        float bpm_est = pkt ? pkt->bpm_est : 0.0f;
-        if (!isfinite(bpm_est) || bpm_est < 0.0f) bpm_est = 0.0f;
+    if (s_bpm_display <= 0.0f)
+        s_bpm_display = bpm_est;
+    else
+        s_bpm_display = (1.0f - alpha) * s_bpm_display + alpha * bpm_est;
 
-        // Smooth the displayed BPM so it's readable
-        static float s_bpm_display = 0.0f;
-        const float alpha = 0.15f; // smaller = smoother, larger = more responsive
-
-        if (s_bpm_display <= 0.0f)
-            s_bpm_display = bpm_est;
-        else
-            s_bpm_display = (1.0f - alpha) * s_bpm_display + alpha * bpm_est;
-
-        snprintf(l1, sizeof(l1), "BPM: %.1f", s_bpm_display);
-        snprintf(l2, sizeof(l2), "conf:%.2f ph:%.2f",
-                 pkt ? pkt->bpm_conf : 0.0f,
-                 pkt ? pkt->bpm_phase : 0.0f);
-        snprintf(l3, sizeof(l3), "B:%c", flash);
-
-        render_three_lines_fb(l1, l2, l3);
-        return;
-    }
-
-    // --- New: list of confident BPMs ---
-    if (n > 3) n = 3;
-
-    // Line 1: BPMs (ordered as provided: fundamental, double, special)
-    size_t off = 0;
-    off += snprintf(l1 + off, sizeof(l1) - off, "B:");
-    for (int i = 0; i < n && off < sizeof(l1); ++i){
-        off += snprintf(l1 + off, sizeof(l1) - off, " %5.1f", bpms[i]);
-    }
-    if (off < sizeof(l1) - 2){
-        l1[off++] = ' ';
-        l1[off++] = flash;
-        l1[off]   = '\0';
-    }
-
-    // Line 2: confidences
-    off = 0;
-    off += snprintf(l2 + off, sizeof(l2) - off, "C:");
-    for (int i = 0; i < n && off < sizeof(l2); ++i){
-        off += snprintf(l2 + off, sizeof(l2) - off, " %4.2f", confs[i]);
-    }
-    l2[sizeof(l2) - 1] = '\0';
-
-    // Line 3: phase + overall confidence
-    snprintf(l3, sizeof(l3), "ph:%.2f conf:%.2f",
-             pkt ? pkt->bpm_phase : 0.0f,
-             pkt ? pkt->bpm_conf  : 0.0f);
+    snprintf(l1, sizeof(l1), "BPM: %.1f", s_bpm_display);
+    snprintf(l2, sizeof(l2), "conf:%.2f ph:%.2f",
+             pkt ? pkt->bpm_conf : 0.0f,
+             pkt ? pkt->bpm_phase : 0.0f);
+    snprintf(l3, sizeof(l3), "B:%c", flash);
 
     render_three_lines_fb(l1, l2, l3);
 }
