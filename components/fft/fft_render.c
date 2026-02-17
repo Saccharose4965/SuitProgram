@@ -13,6 +13,15 @@
 #include "fft.h"   // NEW: for fft_get_confident_bpms & BPM range
 #include "esp_timer.h"
 
+enum {
+    FFT_SIZE       = 1024,
+    FPS            = 16000 / 256,
+    BPM_MIN        = 30,
+    BPM_MAX        = 300,
+    TARGET_BPM_MIN = 64,
+    TARGET_BPM_MAX = 127
+};
+
 static const float kDispPeakHold = 0.95f;  // decay for display peak tracking
 static const float kDispPeakMin  = 1.0f;   // minimum display peak to avoid blowing up noise
 
@@ -33,18 +42,12 @@ static inline void fb_pset(int x,int y){
 static uint8_t g_spec_hist[PANEL_H][PANEL_W]; // spectrogram history (normalized 0..255)
 static int     g_spec_col_idx = 0;
 static float   g_disp_peak = 1.0f;     // running peak for display normalization (logmag)
-static float   g_cap_disp_peak = 1.0f; // running peak for beat spectrum display
 static float   g_nov_disp_clean[PANEL_W];
 static float   g_nov_disp_mean[PANEL_W];
 static float   g_nov_disp_raw[PANEL_W];
 static int     g_nov_disp_idx=0;
 static int     g_nov_disp_count=0;
 static float   g_tempo_spec_raw[PANEL_W];
-static float   g_tempo_spec_bc[PANEL_W];   // baseline-corrected (for logic + display)
-static float   g_tempo_spec_bc_hist[6][PANEL_W]; // last 6 frames of baseline-corrected spectra
-static float   g_tempo_spec_bc_sum[PANEL_W];     // running sum over history for averaging
-static int     g_tempo_hist_idx = 0;
-static int     g_tempo_hist_count = 0;
 static float   g_phase_corr[PANEL_W];
 static float   g_phase_corr_peak = 1.0f;
 static int64_t g_beat_flash_until_us = 0;
@@ -65,7 +68,6 @@ static void render_spectrogram(void);
 static void render_novelty_peaks(void);
 static void render_flux_view(void);
 static void render_tempo_raw(void);
-static void render_tempo_spectrum(void);
 static void render_beat_spectrum(const fft_render_packet_t *pkt);
 static void render_phase_comb(void);
 static void render_active_view(const fft_render_packet_t *pkt);
@@ -153,7 +155,6 @@ static void render_active_view(const fft_render_packet_t *pkt){
         case FFT_VIEW_NOVELTY_PEAKS:  render_novelty_peaks(); break;
         case FFT_VIEW_FLUX:           render_flux_view(); break;
         case FFT_VIEW_TEMPO_RAW:      render_tempo_raw(); break;
-        case FFT_VIEW_TEMPO_SPECTRUM: render_tempo_spectrum(); break;
         case FFT_VIEW_PHASE_COMB:     render_phase_comb(); break;
         case FFT_VIEW_BPM_TEXT:
         case FFT_VIEW_COUNT:
@@ -290,42 +291,6 @@ static void render_tempo_raw(void){
     }
 }
 
-// Show temporal FFT (beat spectrum) bars only (no BPM marker overlays).
-static void render_tempo_spectrum(void){
-    fb_clear();
-    float maxv = 1e-3f;
-    float sumv = 0.0f;
-    for (int x=0; x<PANEL_W; ++x){
-        float v = g_tempo_spec_bc[x];   // baseline-corrected
-        if (v > maxv) maxv = v;
-        sumv += v;
-    }
-    // Track a running peak so silence doesn't auto-stretch to full height
-    g_cap_disp_peak *= kDispPeakHold;
-    if (maxv > g_cap_disp_peak) g_cap_disp_peak = maxv;
-    float scale = g_cap_disp_peak;
-    if (scale < kDispPeakMin) scale = kDispPeakMin;
-    float avgv = (PANEL_W > 0) ? (sumv / (float)PANEL_W) : 0.0f;
-    float avg_norm = (scale > 0.0f) ? ((10.0f * avgv) / scale) : 0.0f; // 10× average level
-    if (avg_norm > 1.0f) avg_norm = 1.0f;
-    if (avg_norm < 0.0f) avg_norm = 0.0f;
-    int y_avg = PANEL_H - 1 - (int)(avg_norm * (float)(PANEL_H - 1) + 0.5f);
-    if (y_avg < 0) y_avg = 0;
-    if (y_avg >= PANEL_H) y_avg = PANEL_H - 1;
-
-    for (int x=0; x<PANEL_W; ++x){
-        float norm = g_tempo_spec_bc[x] / scale;
-        if (norm > 1.0f) norm = 1.0f;
-        int h = (int)(norm * (float)(PANEL_H-1) + 0.5f);
-        for (int y=0; y<=h; ++y) fb_pset(x, PANEL_H-1 - y);
-    }
-    // Draw average line on top so it's visible even over tall bars
-    for (int x=0; x<PANEL_W; ++x){
-        fb_pset(x, y_avg);
-        if (y_avg > 0) fb_pset(x, y_avg - 1); // 2px thickness for visibility
-    }
-}
-
 // Comb correlation vs phase: for each phase offset (0..1), correlate novelty with a smooth comb.
 static void render_phase_comb(void){
     fb_clear();
@@ -452,15 +417,8 @@ void fft_render_update_tempo_spectrum(const float *bpm_spec_bc){
 
     if (!bpm_spec_bc){
         memset(g_tempo_spec_raw, 0, sizeof(g_tempo_spec_raw));
-        memset(g_tempo_spec_bc, 0, sizeof(g_tempo_spec_bc));
-        memset(g_tempo_spec_bc_hist, 0, sizeof(g_tempo_spec_bc_hist));
-        memset(g_tempo_spec_bc_sum, 0, sizeof(g_tempo_spec_bc_sum));
-        g_tempo_hist_idx = 0;
-        g_tempo_hist_count = 0;
         return;
     }
-
-    int next_count = (g_tempo_hist_count < 6) ? (g_tempo_hist_count + 1) : 6;
 
     for (int x=0; x < PANEL_W; ++x){
         // Display only 64..127 BPM; on 128px panels this gives exactly 2 px per BPM.
@@ -475,18 +433,8 @@ void fft_render_update_tempo_spectrum(const float *bpm_spec_bc){
         if (bin >= bpm_count) bin = bpm_count - 1;
 
         float val = bpm_spec_bc[bin];
-
-        // Update running average over last 6 frames for display
-        float old = (g_tempo_hist_count < 6) ? 0.0f : g_tempo_spec_bc_hist[g_tempo_hist_idx][x];
-        g_tempo_spec_bc_hist[g_tempo_hist_idx][x] = val;
-        g_tempo_spec_bc_sum[x] += val - old;
-
         g_tempo_spec_raw[x] = val;
-        g_tempo_spec_bc[x]  = g_tempo_spec_bc_sum[x] / (float)next_count;
     }
-
-    g_tempo_hist_idx = (g_tempo_hist_idx + 1) % 6;
-    g_tempo_hist_count = next_count;
 }
 
 void fft_render_update_phase_curve(const float *vals, int count){

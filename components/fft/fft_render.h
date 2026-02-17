@@ -5,10 +5,13 @@
 
 #include "esp_err.h"
 #include "fft.h"
-#include "fft_internal.h"
+
+enum {
+    FFT_RENDER_LOGMAG_BINS = 1024 / 2 + 1
+};
 
 typedef struct {
-    float logmag[FFT_SIZE / 2 + 1];
+    float logmag[FFT_RENDER_LOGMAG_BINS];
     float bpm_est;
     float bpm_conf;
     float bpm_phase;
