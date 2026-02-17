@@ -101,6 +101,11 @@ void bad_apple_app_tick(shell_app_context_t *ctx, float dt_sec);
 void bad_apple_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t BAD_APPLE_LEGEND;
 
+void calculator_app_init(shell_app_context_t *ctx);
+void calculator_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
+void calculator_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
+extern const shell_legend_t CALCULATOR_LEGEND;
+
 #ifdef __cplusplus
 }
 #endif

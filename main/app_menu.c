@@ -29,6 +29,7 @@ static const menu_entry_t g_menu_root_entries[] = {
     { "menu_comm",     "Comm"        },
     { "menu_led",      "LEDs"        },
     { "music",         "Music"       },
+    { "calculator",    "Calculator"  },
 };
 static const menu_entry_t g_menu_settings_entries[] = {
     { "menu_root", "Back"      },

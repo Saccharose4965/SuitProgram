@@ -262,6 +262,17 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .draw   = volume_draw,
     },
     {
+        .id     = "calculator",
+        .name   = "Calculator",
+        .flags  = SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &CALCULATOR_LEGEND,
+        .init   = calculator_app_init,
+        .deinit = NULL,
+        .tick   = NULL,
+        .handle_input = calculator_app_handle_input,
+        .draw   = calculator_app_draw,
+    },
+    {
         .id     = "leds_audio",
         .name   = "LED Audio",
         .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
