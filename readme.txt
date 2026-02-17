@@ -318,12 +318,10 @@ for me :
 - test and fix bad apple (+add audio)
 - measure real value adc to check ladder expected values
 - check again to make sure we are doing it right but i think we got it: zero out audio data upon button press and release to remove parasitic spikes
+- check don't blink when not confident or when silence
 for ai:
-- don't blink when not confident or when silence
-- separate the volume settings between volume for the imbeded speaker and the bluetooth volume
 - games sfx
 - add scores to games, stored on sd card (maybe score is its own component ? conflict with audio player playing sfx ?)
-- add calculator
 for later:
 - implement blink phase tune in: improve it, we got a good measure of phase but the drift isn't handled correctly. (hard problem) -> blinking at 2x freq might eliviate 90° uncertainty
 - try to optimize fluid further without impacting on behavior, (we already managed to get it to run smooth on one core)

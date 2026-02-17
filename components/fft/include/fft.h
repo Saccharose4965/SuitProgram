@@ -19,6 +19,20 @@ extern "C" {
 esp_err_t fft_visualizer_start(void);
 void fft_visualizer_stop(void);
 
+// Shared FFT pipeline configuration (single source of truth for fft.c/fft_render.c).
+enum {
+    FFT_CFG_SAMPLE_RATE_HZ = 16000,
+    FFT_CFG_HOP_SAMPLES    = 256,   // 16 ms hop
+    FFT_CFG_SIZE           = 1024,  // 64 ms window
+    FFT_CFG_NOVELTY_WIN    = 32,    // local mean window for novelty (~0.5 s)
+    FFT_CFG_NOV_RING_FRAMES =
+        (6 * FFT_CFG_SAMPLE_RATE_HZ + (FFT_CFG_HOP_SAMPLES / 2)) / FFT_CFG_HOP_SAMPLES, // ~6 s
+    FFT_CFG_BPM_MIN        = 32,
+    FFT_CFG_BPM_MAX        = 255,
+    FFT_CFG_TARGET_BPM_MIN = 64,
+    FFT_CFG_TARGET_BPM_MAX = 127
+};
+
 typedef enum {
     FFT_VIEW_BPM_TEXT = 0,   // existing 3-line BPM/delta/flash view
     FFT_VIEW_SPECTRUM,       // per-frame log-magnitude spectrum (bars)

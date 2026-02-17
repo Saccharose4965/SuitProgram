@@ -27,6 +27,7 @@ typedef enum {
     KEY_ICON_SQRT,
     KEY_ICON_EXP_X,
     KEY_ICON_X_SQ,
+    KEY_ICON_BACKSPACE,
 } key_icon_t;
 
 typedef struct {
@@ -37,7 +38,7 @@ typedef struct {
 } calc_key_t;
 
 static const calc_key_t k_keys[CALC_ROWS][CALC_COLS] = {
-    { {"DEL",  KEY_ACT_BACKSPACE, NULL,    KEY_ICON_TEXT }, {"(",   KEY_ACT_INSERT, "("   , KEY_ICON_TEXT }, {")",   KEY_ACT_INSERT, ")"   , KEY_ICON_TEXT }, {"mod",  KEY_ACT_INSERT, "%"   , KEY_ICON_TEXT }, {"sqrt", KEY_ACT_INSERT, "sqrt(", KEY_ICON_SQRT } },
+    { {"DEL",  KEY_ACT_BACKSPACE, NULL,    KEY_ICON_BACKSPACE }, {"(",   KEY_ACT_INSERT, "("   , KEY_ICON_TEXT }, {")",   KEY_ACT_INSERT, ")"   , KEY_ICON_TEXT }, {"%",    KEY_ACT_INSERT, "%"   , KEY_ICON_TEXT }, {"sqrt", KEY_ACT_INSERT, "sqrt(", KEY_ICON_SQRT } },
     { {"7",    KEY_ACT_INSERT,    "7",     KEY_ICON_TEXT }, {"8",   KEY_ACT_INSERT, "8"   , KEY_ICON_TEXT }, {"9",   KEY_ACT_INSERT, "9"   , KEY_ICON_TEXT }, {"/",    KEY_ACT_INSERT, "/"   , KEY_ICON_TEXT }, {"x^2",  KEY_ACT_INSERT, "^2"  , KEY_ICON_X_SQ } },
     { {"4",    KEY_ACT_INSERT,    "4",     KEY_ICON_TEXT }, {"5",   KEY_ACT_INSERT, "5"   , KEY_ICON_TEXT }, {"6",   KEY_ACT_INSERT, "6"   , KEY_ICON_TEXT }, {"*",    KEY_ACT_INSERT, "*"   , KEY_ICON_TEXT }, {"ln",   KEY_ACT_INSERT, "ln(" , KEY_ICON_TEXT } },
     { {"1",    KEY_ACT_INSERT,    "1",     KEY_ICON_TEXT }, {"2",   KEY_ACT_INSERT, "2"   , KEY_ICON_TEXT }, {"3",   KEY_ACT_INSERT, "3"   , KEY_ICON_TEXT }, {"-",    KEY_ACT_INSERT, "-"   , KEY_ICON_TEXT }, {"e^x",  KEY_ACT_INSERT, "exp(", KEY_ICON_EXP_X } },
@@ -731,10 +732,10 @@ static void draw_icon_pi(uint8_t *fb, int x, int y)
 {
     static const uint8_t rows[5] = {
         0x1Fu,
-        0x15u,
-        0x15u,
-        0x04u,
-        0x04u,
+        0x0Au,
+        0x0Au,
+        0x0Au,
+        0x0Au,
     };
     for (int dy = 0; dy < 5; ++dy) {
         for (int dx = 0; dx < 5; ++dx) {
@@ -743,6 +744,16 @@ static void draw_icon_pi(uint8_t *fb, int x, int y)
             }
         }
     }
+}
+
+static void draw_icon_backspace(uint8_t *fb, int x, int y)
+{
+    // Left-pointing delete arrow.
+    fb_hline(fb, x + 2, x + 8, y + 2);
+    fb_pset(fb, x + 1, y + 2);
+    fb_pset(fb, x + 2, y + 1);
+    fb_pset(fb, x + 2, y + 3);
+    fb_pset(fb, x + 0, y + 2);
 }
 
 static void draw_icon_sqrt(uint8_t *fb, int x, int y)
@@ -773,6 +784,14 @@ static void draw_key_label(uint8_t *fb, int x0, int y0, int w, int h, const calc
 {
     if (!fb || !key || w <= 0 || h <= 0) return;
 
+    if (key->icon == KEY_ICON_BACKSPACE) {
+        int iw = 9;
+        int ih = 5;
+        int tx = x0 + (w - iw) / 2;
+        int ty = y0 + (h - ih) / 2;
+        draw_icon_backspace(fb, tx, ty);
+        return;
+    }
     if (key->icon == KEY_ICON_PI) {
         int iw = 5;
         int ih = 5;
@@ -813,6 +832,27 @@ static void draw_key_label(uint8_t *fb, int x0, int y0, int w, int h, const calc
     if (tx < x0) tx = x0;
     if (ty < y0) ty = y0;
     oled_draw_text3x5(fb, tx, ty, label);
+}
+
+static void draw_selected_marker(uint8_t *fb, int x0, int y0, int w, int h)
+{
+    if (!fb || w < 5 || h < 5) return;
+
+    // Draw a thin dotted inner rectangle so shared key borders never thicken.
+    int l = x0 + 1;
+    int r = x0 + w - 2;
+    int t = y0 + 1;
+    int b = y0 + h - 2;
+    if (l >= r || t >= b) return;
+
+    for (int x = l; x <= r; x += 2) {
+        fb_pset(fb, x, t);
+        fb_pset(fb, x, b);
+    }
+    for (int y = t; y <= b; y += 2) {
+        fb_pset(fb, l, y);
+        fb_pset(fb, r, y);
+    }
 }
 
 void calculator_draw(uint8_t *fb, int x, int y, int w, int h)
@@ -877,9 +917,12 @@ void calculator_draw(uint8_t *fb, int x, int y, int w, int h)
         for (int c = 0; c < CALC_COLS; ++c) {
             int cell_x0 = x_edges[c] + 1;
             int cell_y0 = y_edges[r] + 1;
-            int cell_w = x_edges[c + 1] - x_edges[c] - 1;
+            int cell_w = x_edges[c + 1] - x_edges[c] - 2; // shrink all keys by 1px horizontally
             int cell_h = y_edges[r + 1] - y_edges[r] - 1;
             if (cell_w >= 3 && cell_h >= 3) {
+                if (r == s_calc.row && c == s_calc.col) {
+                    draw_selected_marker(fb, cell_x0, cell_y0, cell_w, cell_h);
+                }
                 draw_key_label(fb, cell_x0, cell_y0, cell_w, cell_h, &k_keys[r][c]);
             }
         }

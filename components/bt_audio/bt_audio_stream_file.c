@@ -1,6 +1,7 @@
 #include "bt_audio.h"
 #include "bt_audio_internal.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -12,6 +13,7 @@
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 
 static const char *TAG = "bt_audio";
 
@@ -22,30 +24,59 @@ static uint32_t s_bt_bytes_left       = 0; // bytes left to output to A2DP (ster
 static SemaphoreHandle_t s_bt_fp_lock = NULL; // protects FILE access
 
 #define BT_STREAM_BUF_BYTES_MAX        (256 * 1024)
-#define BT_STREAM_BUF_BYTES_MIN        (64 * 1024)
+#define BT_STREAM_BUF_BYTES_MIN        (128 * 1024)
 #define BT_STREAM_START_WATERMARK      (12 * 1024)
-#define BT_FEEDER_OUT_CHUNK_BYTES      (8 * 1024)
+#define BT_STREAM_LOW_WATERMARK_MAX    (32 * 1024)
+#define BT_STREAM_REFILL_WINDOW_BYTES  (32 * 1024)
+#define BT_FEEDER_OUT_CHUNK_BYTES      (16 * 1024)
 #define BT_FEEDER_MONO_IN_CHUNK_BYTES  (BT_FEEDER_OUT_CHUNK_BYTES / 2)
-#define BT_DIRECT_MONO_CHUNK_BYTES     1024
-#define BT_FEEDER_WAIT_MS              100
-#define BT_FEEDER_TASK_STACK           3072
-#define BT_FEEDER_TASK_PRIO            4
+#define BT_FEEDER_MONO_READ_MAX_BYTES  (4 * 1024)
+#define BT_FEEDER_TASK_STACK           4096
+#define BT_FEEDER_TASK_PRIO            3
 #define BT_FEEDER_TASK_CORE            1
+#define BT_FEEDER_YIELD_EVERY          4
+#define BT_AUDIO_DIAG_LOG_ENABLE       0
+#define BT_DIAG_LOG_MS                 5000
 
 static uint8_t *s_bt_buf                 = NULL;
 static size_t   s_bt_buf_size            = 0;
-static size_t   s_bt_buf_r               = 0;
-static size_t   s_bt_buf_w               = 0;
-static size_t   s_bt_buf_count           = 0;
+static volatile size_t s_bt_buf_r        = 0; // consumer-owned
+static volatile size_t s_bt_buf_w        = 0; // producer-owned
 static uint8_t *s_bt_feeder_chunk         = NULL;
 static uint8_t *s_bt_feeder_mono_chunk    = NULL;
-static uint8_t *s_bt_direct_mono_chunk    = NULL;
 static volatile bool s_bt_file_eof       = false;
 static volatile bool s_bt_feeder_stop    = false;
 static volatile bool s_bt_stream_paused  = false;
-static volatile bool s_bt_direct_stream  = false;
 static TaskHandle_t  s_bt_feeder_task    = NULL;
-static portMUX_TYPE  s_bt_buf_mux        = portMUX_INITIALIZER_UNLOCKED;
+
+typedef struct {
+    volatile uint32_t cb_calls;
+    volatile uint32_t cb_partial_reads;
+    volatile uint32_t cb_underruns;
+    volatile uint32_t cb_req_bytes;
+    volatile uint32_t cb_read_bytes;
+    volatile uint32_t cb_zero_fill_bytes;
+    volatile uint32_t cb_last_us;
+    volatile uint32_t cb_max_us;
+    volatile uint32_t cb_win_max_us;
+
+    volatile uint32_t ring_level_min;
+    volatile uint32_t ring_level_max;
+
+    volatile uint32_t feeder_loops;
+    volatile uint32_t feeder_bytes;
+    volatile uint32_t feeder_wait_pause;
+    volatile uint32_t feeder_wait_high;
+    volatile uint32_t feeder_wait_space;
+    volatile uint32_t feeder_wait_lock;
+    volatile uint32_t feeder_yields;
+} bt_diag_t;
+
+static bt_diag_t s_bt_diag = {0};
+static int64_t s_bt_diag_last_log_us = 0;
+static bt_diag_t s_bt_diag_prev = {0};
+
+static size_t bt_buf_level(void);
 
 // Volume control: 0-100 % mapped to Q15 gain (0-32767)
 static int32_t s_bt_vol_q15 = 32767; // unity gain (Q15)
@@ -73,6 +104,76 @@ static bool lock_fp(TickType_t wait_ticks)
     return xSemaphoreTake(s_bt_fp_lock, wait_ticks) == pdTRUE;
 }
 
+static inline void bt_diag_note_level(size_t level)
+{
+    uint32_t lvl = (uint32_t)level;
+    if (lvl > s_bt_diag.ring_level_max) {
+        s_bt_diag.ring_level_max = lvl;
+    }
+    if (s_bt_diag.ring_level_min == UINT32_MAX || lvl < s_bt_diag.ring_level_min) {
+        s_bt_diag.ring_level_min = lvl;
+    }
+}
+
+static void bt_diag_reset(void)
+{
+    memset((void *)&s_bt_diag, 0, sizeof(s_bt_diag));
+    memset((void *)&s_bt_diag_prev, 0, sizeof(s_bt_diag_prev));
+    s_bt_diag.ring_level_min = UINT32_MAX;
+    s_bt_diag_prev.ring_level_min = UINT32_MAX;
+    s_bt_diag_last_log_us = esp_timer_get_time();
+}
+
+static void bt_diag_log_periodic(void)
+{
+#if !BT_AUDIO_DIAG_LOG_ENABLE
+    return;
+#else
+    int64_t now_us = esp_timer_get_time();
+    if (s_bt_diag_last_log_us != 0 &&
+        (now_us - s_bt_diag_last_log_us) < ((int64_t)BT_DIAG_LOG_MS * 1000LL)) {
+        return;
+    }
+
+    bt_diag_t cur = s_bt_diag;
+    bt_diag_t prev = s_bt_diag_prev;
+    s_bt_diag_prev = cur;
+    int64_t dt_us = now_us - s_bt_diag_last_log_us;
+    s_bt_diag_last_log_us = now_us;
+
+    if (dt_us <= 0) dt_us = 1;
+    uint32_t cb_calls = cur.cb_calls - prev.cb_calls;
+    uint32_t cb_part = cur.cb_partial_reads - prev.cb_partial_reads;
+    uint32_t cb_und = cur.cb_underruns - prev.cb_underruns;
+    uint32_t cb_req = cur.cb_req_bytes - prev.cb_req_bytes;
+    uint32_t cb_rd = cur.cb_read_bytes - prev.cb_read_bytes;
+    uint32_t cb_zf = cur.cb_zero_fill_bytes - prev.cb_zero_fill_bytes;
+    uint32_t feed_bytes = cur.feeder_bytes - prev.feeder_bytes;
+    uint32_t feed_loops = cur.feeder_loops - prev.feeder_loops;
+    uint32_t wp = cur.feeder_wait_pause - prev.feeder_wait_pause;
+    uint32_t wh = cur.feeder_wait_high - prev.feeder_wait_high;
+    uint32_t ws = cur.feeder_wait_space - prev.feeder_wait_space;
+    uint32_t wl = cur.feeder_wait_lock - prev.feeder_wait_lock;
+    uint32_t wy = cur.feeder_yields - prev.feeder_yields;
+
+    uint32_t cb_rate = (uint32_t)((uint64_t)cb_calls * 1000000ULL / (uint64_t)dt_us);
+    uint32_t feed_kb_s = (uint32_t)(((uint64_t)feed_bytes * 1000ULL / 1024ULL) /
+                                    (uint64_t)BT_DIAG_LOG_MS);
+    uint32_t ring_min = (cur.ring_level_min == UINT32_MAX) ? 0 : cur.ring_level_min;
+    uint32_t ring_max = cur.ring_level_max;
+    uint32_t ring_now = (uint32_t)bt_buf_level();
+    uint32_t cb_win_max = cur.cb_win_max_us;
+
+    ESP_LOGI(TAG,
+             "diag: cb=%u/s part=%u und=%u req=%u rd=%u zf=%u maxcb(win/tot)=%u/%uus "
+             "ring(now/min/max)=%u/%u/%u feed=%uKB/s loops=%u waits[p/h/s/l]=%u/%u/%u/%u yld=%u",
+             cb_rate, cb_part, cb_und, cb_req, cb_rd, cb_zf, cb_win_max, cur.cb_max_us,
+             ring_now, ring_min, ring_max, feed_kb_s, feed_loops, wp, wh, ws, wl, wy);
+
+    s_bt_diag.cb_win_max_us = 0;
+#endif
+}
+
 static void unlock_fp(void)
 {
     if (s_bt_fp_lock) {
@@ -80,60 +181,83 @@ static void unlock_fp(void)
     }
 }
 
-static void bt_buf_reset_locked(void)
+static inline size_t bt_buf_load_r(void)
 {
-    s_bt_buf_r = 0;
-    s_bt_buf_w = 0;
-    s_bt_buf_count = 0;
+    return __atomic_load_n(&s_bt_buf_r, __ATOMIC_ACQUIRE);
+}
+
+static inline size_t bt_buf_load_w(void)
+{
+    return __atomic_load_n(&s_bt_buf_w, __ATOMIC_ACQUIRE);
+}
+
+static inline void bt_buf_store_r(size_t r)
+{
+    __atomic_store_n(&s_bt_buf_r, r, __ATOMIC_RELEASE);
+}
+
+static inline void bt_buf_store_w(size_t w)
+{
+    __atomic_store_n(&s_bt_buf_w, w, __ATOMIC_RELEASE);
+}
+
+static inline size_t bt_buf_level_from_rw(size_t r, size_t w, size_t size)
+{
+    if (w >= r) return w - r;
+    return size - (r - w);
 }
 
 static void bt_buf_reset(void)
 {
-    taskENTER_CRITICAL(&s_bt_buf_mux);
-    bt_buf_reset_locked();
-    taskEXIT_CRITICAL(&s_bt_buf_mux);
+    bt_buf_store_r(0);
+    bt_buf_store_w(0);
 }
 
 static size_t bt_buf_level(void)
 {
-    size_t level = 0;
-    taskENTER_CRITICAL(&s_bt_buf_mux);
-    level = s_bt_buf_count;
-    taskEXIT_CRITICAL(&s_bt_buf_mux);
-    return level;
+    size_t size = s_bt_buf_size;
+    if (!s_bt_buf || size == 0) return 0;
+
+    size_t r = bt_buf_load_r();
+    size_t w = bt_buf_load_w();
+    return bt_buf_level_from_rw(r, w, size);
 }
 
 static size_t bt_buf_space(void)
 {
-    size_t space = 0;
-    taskENTER_CRITICAL(&s_bt_buf_mux);
-    space = (s_bt_buf_size > s_bt_buf_count) ? (s_bt_buf_size - s_bt_buf_count) : 0;
-    taskEXIT_CRITICAL(&s_bt_buf_mux);
-    return space;
+    size_t size = s_bt_buf_size;
+    if (!s_bt_buf || size == 0) return 0;
+
+    size_t r = bt_buf_load_r();
+    size_t w = bt_buf_load_w();
+    size_t level = bt_buf_level_from_rw(r, w, size);
+    return (size > level) ? (size - level) : 0;
 }
 
 static size_t bt_buf_write(const uint8_t *src, size_t n)
 {
     if (!src || n == 0 || !s_bt_buf || s_bt_buf_size == 0) return 0;
 
-    taskENTER_CRITICAL(&s_bt_buf_mux);
-
-    size_t space = (s_bt_buf_size > s_bt_buf_count) ? (s_bt_buf_size - s_bt_buf_count) : 0;
+    size_t size = s_bt_buf_size;
+    size_t r = bt_buf_load_r();
+    size_t w = bt_buf_load_w();
+    size_t level = bt_buf_level_from_rw(r, w, size);
+    size_t space = (size > level) ? (size - level) : 0;
     if (n > space) n = space;
+    if (n == 0) return 0;
 
-    size_t first = s_bt_buf_size - s_bt_buf_w;
+    size_t first = size - w;
     if (first > n) first = n;
-    memcpy(s_bt_buf + s_bt_buf_w, src, first);
+    memcpy(s_bt_buf + w, src, first);
 
     size_t second = n - first;
     if (second > 0) {
         memcpy(s_bt_buf, src + first, second);
     }
 
-    s_bt_buf_w = (s_bt_buf_w + n) % s_bt_buf_size;
-    s_bt_buf_count += n;
-
-    taskEXIT_CRITICAL(&s_bt_buf_mux);
+    w += n;
+    if (w >= size) w -= size;
+    bt_buf_store_w(w);
     return n;
 }
 
@@ -141,23 +265,25 @@ static size_t bt_buf_read(uint8_t *dst, size_t n)
 {
     if (!dst || n == 0 || !s_bt_buf || s_bt_buf_size == 0) return 0;
 
-    taskENTER_CRITICAL(&s_bt_buf_mux);
+    size_t size = s_bt_buf_size;
+    size_t r = bt_buf_load_r();
+    size_t w = bt_buf_load_w();
+    size_t level = bt_buf_level_from_rw(r, w, size);
+    if (n > level) n = level;
+    if (n == 0) return 0;
 
-    if (n > s_bt_buf_count) n = s_bt_buf_count;
-
-    size_t first = s_bt_buf_size - s_bt_buf_r;
+    size_t first = size - r;
     if (first > n) first = n;
-    memcpy(dst, s_bt_buf + s_bt_buf_r, first);
+    memcpy(dst, s_bt_buf + r, first);
 
     size_t second = n - first;
     if (second > 0) {
         memcpy(dst + first, s_bt_buf, second);
     }
 
-    s_bt_buf_r = (s_bt_buf_r + n) % s_bt_buf_size;
-    s_bt_buf_count -= n;
-
-    taskEXIT_CRITICAL(&s_bt_buf_mux);
+    r += n;
+    if (r >= size) r -= size;
+    bt_buf_store_r(r);
     return n;
 }
 
@@ -165,6 +291,7 @@ static size_t bt_buf_low_watermark(void)
 {
     if (s_bt_buf_size == 0) return BT_STREAM_START_WATERMARK;
     size_t low = s_bt_buf_size / 4;
+    if (low > BT_STREAM_LOW_WATERMARK_MAX) low = BT_STREAM_LOW_WATERMARK_MAX;
     if (low < BT_STREAM_START_WATERMARK) low = BT_STREAM_START_WATERMARK;
     return low;
 }
@@ -172,7 +299,7 @@ static size_t bt_buf_low_watermark(void)
 static size_t bt_buf_high_watermark(void)
 {
     if (s_bt_buf_size == 0) return BT_STREAM_START_WATERMARK;
-    size_t high = (s_bt_buf_size * 3) / 4;
+    size_t high = bt_buf_low_watermark() + BT_STREAM_REFILL_WINDOW_BYTES;
     size_t min_high = bt_buf_low_watermark() + BT_FEEDER_OUT_CHUNK_BYTES;
     if (high < min_high) high = min_high;
     if (high > s_bt_buf_size) high = s_bt_buf_size;
@@ -223,21 +350,6 @@ static bool bt_ensure_buffer(void)
     return true;
 }
 
-static void bt_release_buffer(void)
-{
-    taskENTER_CRITICAL(&s_bt_buf_mux);
-    s_bt_buf_r = 0;
-    s_bt_buf_w = 0;
-    s_bt_buf_count = 0;
-    taskEXIT_CRITICAL(&s_bt_buf_mux);
-
-    if (s_bt_buf) {
-        free(s_bt_buf);
-        s_bt_buf = NULL;
-    }
-    s_bt_buf_size = 0;
-}
-
 static void *bt_alloc_work_buffer(size_t bytes)
 {
     void *buf = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -268,24 +380,19 @@ static bool bt_ensure_feeder_buffers(bool mono_source)
     return true;
 }
 
-static bool bt_ensure_direct_mono_buffer(void)
-{
-    if (s_bt_direct_mono_chunk) return true;
-    s_bt_direct_mono_chunk = (uint8_t*)bt_alloc_work_buffer(BT_DIRECT_MONO_CHUNK_BYTES);
-    if (!s_bt_direct_mono_chunk) {
-        ESP_LOGE(TAG, "Failed to alloc BT direct mono chunk (%u bytes)",
-                 (unsigned)BT_DIRECT_MONO_CHUNK_BYTES);
-        return false;
-    }
-    return true;
-}
-
 static inline void bt_feeder_notify(void)
 {
     TaskHandle_t t = s_bt_feeder_task;
     if (t) {
         xTaskNotifyGive(t);
     }
+}
+
+static inline void bt_feeder_wait_for_signal(void)
+{
+    // Use a pure notify-driven feeder wakeup: callback/start/stop/resume paths
+    // are responsible for poking this task when more work is needed.
+    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
 
 static size_t bt_read_mono_to_stereo_chunk_locked(size_t want_out_bytes)
@@ -296,6 +403,8 @@ static size_t bt_read_mono_to_stereo_chunk_locked(size_t want_out_bytes)
     size_t frame_cap = want_out_bytes / 4; // output stereo frames
     size_t want_in = frame_cap * sizeof(int16_t);
     if (want_in > BT_FEEDER_MONO_IN_CHUNK_BYTES) want_in = BT_FEEDER_MONO_IN_CHUNK_BYTES;
+    // Keep SD SPI transactions short so other SPI users (OLED) get bus time.
+    if (want_in > BT_FEEDER_MONO_READ_MAX_BYTES) want_in = BT_FEEDER_MONO_READ_MAX_BYTES;
     if (want_in > s_bt_src_bytes_left) want_in = s_bt_src_bytes_left;
     want_in &= ~(size_t)1;
     if (want_in == 0) return 0;
@@ -307,58 +416,27 @@ static size_t bt_read_mono_to_stereo_chunk_locked(size_t want_out_bytes)
     s_bt_src_bytes_left -= (uint32_t)rd;
 
     size_t frames = rd / sizeof(int16_t);
-    int16_t *mono = (int16_t*)s_bt_feeder_mono_chunk;
-    int16_t *out = (int16_t*)s_bt_feeder_chunk;
+    const uint16_t *mono_u16 = (const uint16_t*)s_bt_feeder_mono_chunk;
+    uint32_t *out_u32 = (uint32_t*)s_bt_feeder_chunk;
     int32_t gain = s_bt_vol_q15;
 
-    for (size_t i = 0; i < frames; ++i) {
-        int16_t s = mono[i];
-        if (gain != 32767) {
+    if (gain == 0) {
+        memset(out_u32, 0, frames * sizeof(uint32_t));
+    } else if (gain == 32767) {
+        for (size_t i = 0; i < frames; ++i) {
+            uint32_t s = (uint32_t)mono_u16[i];
+            out_u32[i] = s | (s << 16);
+        }
+    } else {
+        for (size_t i = 0; i < frames; ++i) {
+            int16_t s = (int16_t)mono_u16[i];
             int32_t v = ((int32_t)s * gain) >> 15;
             if (v > 32767) v = 32767;
             else if (v < -32768) v = -32768;
             s = (int16_t)v;
+            uint32_t dup = (uint32_t)(uint16_t)s;
+            out_u32[i] = dup | (dup << 16);
         }
-        out[2 * i + 0] = s;
-        out[2 * i + 1] = s;
-    }
-
-    return frames * 4;
-}
-
-static size_t bt_direct_read_mono_locked(uint8_t *dst, size_t want_out_bytes)
-{
-    if (!s_bt_direct_mono_chunk || !s_bt_fp || s_bt_src_bytes_left < sizeof(int16_t) ||
-        !dst || want_out_bytes < 4) return 0;
-
-    size_t frame_cap = want_out_bytes / 4;
-    size_t want_in = frame_cap * sizeof(int16_t);
-    if (want_in > BT_DIRECT_MONO_CHUNK_BYTES) want_in = BT_DIRECT_MONO_CHUNK_BYTES;
-    if (want_in > s_bt_src_bytes_left) want_in = s_bt_src_bytes_left;
-    want_in &= ~(size_t)1;
-    if (want_in == 0) return 0;
-
-    size_t rd = fread(s_bt_direct_mono_chunk, 1, want_in, s_bt_fp);
-    rd &= ~(size_t)1;
-    if (rd == 0) return 0;
-
-    s_bt_src_bytes_left -= (uint32_t)rd;
-
-    size_t frames = rd / sizeof(int16_t);
-    int16_t *mono = (int16_t*)s_bt_direct_mono_chunk;
-    int16_t *out = (int16_t*)dst;
-    int32_t gain = s_bt_vol_q15;
-
-    for (size_t i = 0; i < frames; ++i) {
-        int16_t s = mono[i];
-        if (gain != 32767) {
-            int32_t v = ((int32_t)s * gain) >> 15;
-            if (v > 32767) v = 32767;
-            else if (v < -32768) v = -32768;
-            s = (int16_t)v;
-        }
-        out[2 * i + 0] = s;
-        out[2 * i + 1] = s;
     }
 
     return frames * 4;
@@ -388,10 +466,14 @@ static bool bt_stop_feeder(TickType_t wait_ticks)
 static void bt_file_feeder_task(void *arg)
 {
     (void)arg;
+    unsigned int yield_ctr = 0;
 
     while (!s_bt_feeder_stop) {
+        s_bt_diag.feeder_loops++;
         if (s_bt_stream_paused) {
-            (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(BT_FEEDER_WAIT_MS));
+            s_bt_diag.feeder_wait_pause++;
+            bt_feeder_wait_for_signal();
+            bt_diag_log_periodic();
             continue;
         }
 
@@ -404,14 +486,19 @@ static void bt_file_feeder_task(void *arg)
         }
 
         size_t level = bt_buf_level();
+        bt_diag_note_level(level);
         if (level >= bt_buf_high_watermark()) {
-            (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(BT_FEEDER_WAIT_MS));
+            s_bt_diag.feeder_wait_high++;
+            bt_feeder_wait_for_signal();
+            bt_diag_log_periodic();
             continue;
         }
 
         size_t space = bt_buf_space();
         if (space < (BT_FEEDER_OUT_CHUNK_BYTES / 2)) {
-            (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(BT_FEEDER_WAIT_MS));
+            s_bt_diag.feeder_wait_space++;
+            bt_feeder_wait_for_signal();
+            bt_diag_log_periodic();
             continue;
         }
 
@@ -425,12 +512,22 @@ static void bt_file_feeder_task(void *arg)
             }
             unlock_fp();
         } else {
+            s_bt_diag.feeder_wait_lock++;
             (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
+            bt_diag_log_periodic();
             continue;
         }
 
         if (produced > 0) {
             (void)bt_buf_write(s_bt_feeder_chunk, produced);
+            s_bt_diag.feeder_bytes += (uint32_t)produced;
+            bt_diag_note_level(bt_buf_level());
+            if (++yield_ctr >= BT_FEEDER_YIELD_EVERY) {
+                yield_ctr = 0;
+                s_bt_diag.feeder_yields++;
+                vTaskDelay(1);
+            }
+            bt_diag_log_periodic();
             continue;
         }
 
@@ -439,6 +536,7 @@ static void bt_file_feeder_task(void *arg)
         if (s_bt_bytes_left > level_now) {
             s_bt_bytes_left = (uint32_t)level_now;
         }
+        bt_diag_log_periodic();
         break;
     }
 
@@ -466,7 +564,6 @@ static void close_bt_file_locked(void)
     s_bt_bytes_left = 0;
     s_bt_file_eof = false;
     s_bt_stream_paused = false;
-    s_bt_direct_stream = false;
     bt_buf_reset();
 }
 
@@ -478,7 +575,6 @@ static bool close_bt_file(TickType_t wait_ticks)
         s_bt_bytes_left = 0;
         s_bt_file_eof = true;
         s_bt_stream_paused = false;
-        s_bt_direct_stream = false;
         bt_buf_reset();
         return false;
     }
@@ -508,6 +604,7 @@ size_t bt_audio_stream_queued_frames(void)
 
 int32_t bt_audio_a2dp_data_cb(uint8_t *data, int32_t len)
 {
+    int64_t cb_start_us = esp_timer_get_time();
     if (!data || len <= 0) return 0;
 
     if (s_bt_stream_paused) {
@@ -520,64 +617,37 @@ int32_t bt_audio_a2dp_data_cb(uint8_t *data, int32_t len)
         return len;
     }
 
-    if (!s_bt_direct_stream) {
-        size_t to_read = (size_t)len;
-        if (to_read > s_bt_bytes_left) to_read = s_bt_bytes_left;
+    size_t to_read = (size_t)len;
+    if (to_read > s_bt_bytes_left) to_read = s_bt_bytes_left;
 
-        size_t rd = bt_buf_read(data, to_read);
-        if (rd < (size_t)len) {
-            memset(data + rd, 0, (size_t)len - rd);
-        }
-
-        if (s_bt_bytes_left >= rd) s_bt_bytes_left -= (uint32_t)rd;
-        else s_bt_bytes_left = 0;
-
-        if (rd > 0 && s_bt_feeder_task && !s_bt_stream_paused) {
-            if (bt_buf_level() <= bt_buf_low_watermark()) {
-                bt_feeder_notify();
-            }
-        }
-
-        return len;
+    size_t rd = bt_buf_read(data, to_read);
+    if (rd < (size_t)len) {
+        memset(data + rd, 0, (size_t)len - rd);
     }
 
-    // Direct fallback mode (no ring buffer/feeder): pull from file in callback.
-    size_t copied = 0;
-    while (copied < (size_t)len && s_bt_bytes_left > 0) {
-        size_t want_out = (size_t)len - copied;
-        if (want_out > s_bt_bytes_left) want_out = s_bt_bytes_left;
+    if (s_bt_bytes_left >= rd) s_bt_bytes_left -= (uint32_t)rd;
+    else s_bt_bytes_left = 0;
 
-        size_t got = 0;
-        if (lock_fp(0)) {
-            if (s_bt_fp) {
-                got = bt_direct_read_mono_locked(data + copied, want_out);
-            }
-            unlock_fp();
-        }
-
-        if (got == 0) {
-            s_bt_file_eof = true;
-            break;
-        }
-
-        copied += got;
-        if (s_bt_bytes_left >= got) s_bt_bytes_left -= (uint32_t)got;
-        else s_bt_bytes_left = 0;
-    }
-
-    if (copied < (size_t)len) {
-        memset(data + copied, 0, (size_t)len - copied);
-    }
-
-    if ((s_bt_bytes_left == 0 || s_bt_src_bytes_left == 0) && s_bt_fp) {
-        if (lock_fp(0)) {
-            if (s_bt_fp) {
-                fclose(s_bt_fp);
-                s_bt_fp = NULL;
-            }
-            unlock_fp();
+    if (s_bt_feeder_task && !s_bt_stream_paused) {
+        if (rd < to_read || bt_buf_level() <= bt_buf_low_watermark()) {
+            bt_feeder_notify();
         }
     }
+
+    s_bt_diag.cb_calls++;
+    s_bt_diag.cb_req_bytes += (uint32_t)to_read;
+    s_bt_diag.cb_read_bytes += (uint32_t)rd;
+    if (rd < to_read) s_bt_diag.cb_partial_reads++;
+    if (rd < (size_t)len) {
+        s_bt_diag.cb_underruns++;
+        s_bt_diag.cb_zero_fill_bytes += (uint32_t)((size_t)len - rd);
+    }
+    bt_diag_note_level(bt_buf_level());
+
+    uint32_t cb_us = (uint32_t)(esp_timer_get_time() - cb_start_us);
+    s_bt_diag.cb_last_us = cb_us;
+    if (cb_us > s_bt_diag.cb_max_us) s_bt_diag.cb_max_us = cb_us;
+    if (cb_us > s_bt_diag.cb_win_max_us) s_bt_diag.cb_win_max_us = cb_us;
 
     return len;
 }
@@ -609,13 +679,13 @@ esp_err_t bt_audio_play_wav(FILE *fp,
         return ESP_FAIL;
     }
 
-    bool use_buffered_stream = bt_ensure_buffer();
-    if (!use_buffered_stream) {
-        ESP_LOGW(TAG, "bt_audio_play_wav: stream buffer alloc failed, using direct stream fallback");
+    if (!bt_ensure_buffer()) {
+        ESP_LOGE(TAG, "bt_audio_play_wav: stream buffer alloc failed");
+        return ESP_ERR_NO_MEM;
     }
-    if (use_buffered_stream && !bt_ensure_feeder_buffers(true)) {
-        ESP_LOGW(TAG, "bt_audio_play_wav: feeder buffer alloc failed, using direct stream fallback");
-        use_buffered_stream = false;
+    if (!bt_ensure_feeder_buffers(true)) {
+        ESP_LOGE(TAG, "bt_audio_play_wav: feeder buffer alloc failed");
+        return ESP_ERR_NO_MEM;
     }
 
     setvbuf(fp, NULL, _IOFBF, 32 * 1024);
@@ -652,10 +722,10 @@ esp_err_t bt_audio_play_wav(FILE *fp,
     s_bt_file_eof = false;
     s_bt_feeder_stop = false;
     s_bt_stream_paused = false;
-    s_bt_direct_stream = !use_buffered_stream;
+    bt_diag_reset();
     unlock_fp();
 
-    if (use_buffered_stream && !s_bt_feeder_task) {
+    if (!s_bt_feeder_task) {
         BaseType_t ok = xTaskCreatePinnedToCore(
             bt_file_feeder_task,
             "bt_feed",
@@ -684,34 +754,27 @@ esp_err_t bt_audio_play_wav(FILE *fp,
 #endif
         if (ok != pdPASS) {
             s_bt_feeder_task = NULL;
-            s_bt_direct_stream = true;
-            bt_release_buffer();
-            ESP_LOGW(TAG,
-                     "BT feeder task create failed, using direct stream fallback "
+            if (lock_fp(pdMS_TO_TICKS(100))) {
+                if (s_bt_fp == fp) {
+                    s_bt_fp = NULL;
+                    s_bt_src_bytes_left = 0;
+                    s_bt_bytes_left = 0;
+                    s_bt_file_eof = false;
+                    s_bt_stream_paused = false;
+                    bt_buf_reset();
+                }
+                unlock_fp();
+            }
+            ESP_LOGE(TAG,
+                     "BT feeder task create failed "
                      "(internal free=%u largest=%u)",
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+            return ESP_ERR_NO_MEM;
         }
     }
 
-    if (s_bt_direct_stream && !bt_ensure_direct_mono_buffer()) {
-        ESP_LOGW(TAG, "bt_audio_play_wav: direct mono buffer alloc failed");
-        if (lock_fp(pdMS_TO_TICKS(100))) {
-            if (s_bt_fp == fp) {
-                s_bt_fp = NULL;
-                s_bt_src_bytes_left = 0;
-                s_bt_bytes_left = 0;
-                s_bt_file_eof = false;
-                s_bt_stream_paused = false;
-                s_bt_direct_stream = false;
-                bt_buf_reset();
-            }
-            unlock_fp();
-        }
-        return ESP_ERR_NO_MEM;
-    }
-
-    if (!s_bt_direct_stream && s_bt_feeder_task) {
+    if (s_bt_feeder_task) {
         bt_feeder_notify();
         TickType_t start_tick = xTaskGetTickCount();
         while (!s_bt_file_eof && bt_buf_level() < BT_STREAM_START_WATERMARK) {

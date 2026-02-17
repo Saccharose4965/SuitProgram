@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -11,6 +12,7 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 
 #include "bt_audio.h"
 #include "audio.h"
@@ -38,6 +40,9 @@ typedef struct {
 #define AUDIO_TASK_STACK (4 * 1024)
 #define AUDIO_TASK_STACK_RETRY (3 * 1024)
 #define AUDIO_TASK_PRIO  2
+#define BT_RESTART_GRACE_MS 300
+#define BT_RESTART_MIN_INTERVAL_MS 1500
+#define BT_PROGRESS_STALL_MS 1200
 #if configNUMBER_OF_CORES > 1
 #define AUDIO_TASK_CORE  1
 #else
@@ -123,6 +128,10 @@ static void audio_play_task(void *arg)
                 s_play_mode = AUDIO_PLAYER_MODE_BT;
                 ESP_LOGI(TAG, "BT playback started");
                 bool drain_stop_requested = false;
+                int64_t stream_down_since_us = 0;
+                int64_t last_restart_req_us = 0;
+                int64_t last_progress_us = esp_timer_get_time();
+                size_t last_queued_frames = SIZE_MAX;
 
                 while (!s_abort) {
                     if (s_paused) {
@@ -131,6 +140,12 @@ static void audio_play_task(void *arg)
                     }
                     bt_audio_status_t st = {0};
                     bt_audio_get_status(&st);
+                    int64_t now_us = esp_timer_get_time();
+                    if (last_queued_frames == SIZE_MAX || st.queued_frames < last_queued_frames) {
+                        last_progress_us = now_us;
+                    }
+                    last_queued_frames = st.queued_frames;
+
                     if (st.queued_frames == 0 && st.streaming) {
                         // Track drained: actively suspend A2DP so BT stack idles
                         // instead of continuously requesting silence.
@@ -139,8 +154,56 @@ static void audio_play_task(void *arg)
                             (void)bt_audio_stop_stream();
                             drain_stop_requested = true;
                         }
+                        stream_down_since_us = 0;
                     } else if (st.queued_frames > 0) {
                         drain_stop_requested = false;
+                    }
+
+                    if (!st.streaming && st.queued_frames > 0) {
+                        if (stream_down_since_us == 0) {
+                            stream_down_since_us = now_us;
+                        }
+
+                        bool grace_elapsed =
+                            (now_us - stream_down_since_us) >= ((int64_t)BT_RESTART_GRACE_MS * 1000LL);
+                        bool restart_due =
+                            (last_restart_req_us == 0) ||
+                            ((now_us - last_restart_req_us) >= ((int64_t)BT_RESTART_MIN_INTERVAL_MS * 1000LL));
+
+                        if (grace_elapsed && restart_due && !bt_audio_media_cmd_pending()) {
+                            esp_err_t restart_err = bt_audio_start_stream();
+                            last_restart_req_us = now_us;
+                            if (restart_err != ESP_OK) {
+                                ESP_LOGW(TAG,
+                                         "BT stream restart request failed: %s "
+                                         "(queued=%u, streaming=%d)",
+                                         esp_err_to_name(restart_err),
+                                         (unsigned)st.queued_frames,
+                                         st.streaming ? 1 : 0);
+                            } else {
+                                ESP_LOGW(TAG,
+                                         "BT stream restarted after stall (queued=%u)",
+                                         (unsigned)st.queued_frames);
+                            }
+                        }
+                    } else if (st.streaming && st.queued_frames > 0) {
+                        bool stalled =
+                            (now_us - last_progress_us) >= ((int64_t)BT_PROGRESS_STALL_MS * 1000LL);
+                        bool restart_due =
+                            (last_restart_req_us == 0) ||
+                            ((now_us - last_restart_req_us) >= ((int64_t)BT_RESTART_MIN_INTERVAL_MS * 1000LL));
+                        if (stalled && restart_due && !bt_audio_media_cmd_pending()) {
+                            ESP_LOGW(TAG,
+                                     "BT stream progress stalled, kick restart "
+                                     "(queued=%u)", (unsigned)st.queued_frames);
+                            (void)bt_audio_pause_stream();
+                            vTaskDelay(pdMS_TO_TICKS(20));
+                            (void)bt_audio_start_stream();
+                            last_restart_req_us = now_us;
+                            last_progress_us = now_us;
+                        }
+                    } else {
+                        stream_down_since_us = 0;
                     }
                     if (!st.streaming && st.queued_frames == 0) {
                         break;

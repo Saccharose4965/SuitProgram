@@ -16,6 +16,7 @@ static const char *TAG = "shell_perf";
 
 #if (configUSE_TRACE_FACILITY == 1) && (configGENERATE_RUN_TIME_STATS == 1)
 #define SHELL_PERF_HAS_RT_STATS 1
+#define SHELL_PERF_TOP_LOG_EVERY 5U
 #else
 #define SHELL_PERF_HAS_RT_STATS 0
 #endif
@@ -49,6 +50,7 @@ static EXT_RAM_BSS_ATTR task_prev_t s_prev[CONFIG_SHELL_PERF_LOG_MAX_TASKS];
 static EXT_RAM_BSS_ATTR task_delta_t s_deltas[CONFIG_SHELL_PERF_LOG_MAX_TASKS];
 static EXT_RAM_BSS_ATTR bool s_used[CONFIG_SHELL_PERF_LOG_MAX_TASKS];
 static size_t s_prev_count = 0;
+static uint32_t s_stats_log_count = 0;
 
 static configRUN_TIME_COUNTER_TYPE diff_counter(configRUN_TIME_COUNTER_TYPE now,
                                                 configRUN_TIME_COUNTER_TYPE prev)
@@ -92,7 +94,7 @@ static void update_prev_from_snapshot(const TaskStatus_t *tasks, UBaseType_t n)
     }
 }
 
-static void log_task_core_stats(void)
+static void log_task_core_stats(bool log_top_tasks)
 {
     configRUN_TIME_COUNTER_TYPE total_runtime = 0;
     UBaseType_t n = capture_tasks(s_tasks, CONFIG_SHELL_PERF_LOG_MAX_TASKS, &total_runtime);
@@ -148,6 +150,10 @@ static void log_task_core_stats(void)
 #else
     ESP_LOGI(TAG, "core load unavailable (enable CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID)");
 #endif
+
+    if (!log_top_tasks) {
+        return;
+    }
 
     memset(s_used, 0, sizeof(s_used));
     int top_count = CONFIG_SHELL_PERF_LOG_TOP_TASKS;
@@ -267,7 +273,9 @@ void shell_profiler_on_frame(const char *app_id,
              avg_draw_ms);
 
 #if SHELL_PERF_HAS_RT_STATS
-    log_task_core_stats();
+    s_stats_log_count++;
+    bool log_top_tasks = (s_stats_log_count % SHELL_PERF_TOP_LOG_EVERY) == 0;
+    log_task_core_stats(log_top_tasks);
 #else
     if (!s_warned_missing_rt_stats) {
         ESP_LOGW(TAG,

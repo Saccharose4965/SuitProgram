@@ -36,16 +36,24 @@ static const char *k_audio_paths[] = {
     "/sdcard/badapple.wav",
 };
 
+#define BAD_APPLE_VIDEO_START_DELAY_SEC 1.0f
+
 typedef struct {
     esp_err_t last_err;
     bool sd_mounted;
     int current_source;
+    bool start_pending;
+    int pending_source;
+    float start_delay_sec;
 } bad_apple_app_state_t;
 
 static bad_apple_app_state_t s_bad_apple_app = {
     .last_err = ESP_OK,
     .sd_mounted = false,
     .current_source = -1,
+    .start_pending = false,
+    .pending_source = -1,
+    .start_delay_sec = 0.0f,
 };
 
 const shell_legend_t BAD_APPLE_LEGEND = {
@@ -75,6 +83,20 @@ static void request_bad_apple_audio_start(void)
         (void)audio_player_play(path);
         return;
     }
+}
+
+static esp_err_t schedule_source_start_delayed(int idx)
+{
+    if (idx < 0 || idx >= (int)(sizeof(k_sources) / sizeof(k_sources[0]))) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    bad_apple_stop();
+    s_bad_apple_app.start_pending = true;
+    s_bad_apple_app.pending_source = idx;
+    s_bad_apple_app.start_delay_sec = BAD_APPLE_VIDEO_START_DELAY_SEC;
+    s_bad_apple_app.last_err = ESP_OK;
+    return ESP_OK;
 }
 
 static esp_err_t start_source_index(int idx)
@@ -134,6 +156,9 @@ void bad_apple_app_init(shell_app_context_t *ctx)
 
     s_bad_apple_app.last_err = ESP_OK;
     s_bad_apple_app.current_source = -1;
+    s_bad_apple_app.start_pending = false;
+    s_bad_apple_app.pending_source = -1;
+    s_bad_apple_app.start_delay_sec = 0.0f;
 
     if (!storage_sd_is_mounted()) {
         s_bad_apple_app.last_err = storage_mount_sd();
@@ -154,7 +179,7 @@ void bad_apple_app_init(shell_app_context_t *ctx)
         return;
     }
 
-    if (start_source_index(idx) == ESP_OK) {
+    if (schedule_source_start_delayed(idx) == ESP_OK) {
         request_bad_apple_audio_start();
     }
 }
@@ -162,6 +187,9 @@ void bad_apple_app_init(shell_app_context_t *ctx)
 void bad_apple_app_deinit(shell_app_context_t *ctx)
 {
     (void)ctx;
+    s_bad_apple_app.start_pending = false;
+    s_bad_apple_app.pending_source = -1;
+    s_bad_apple_app.start_delay_sec = 0.0f;
     bad_apple_stop();
     audio_player_stop();
 }
@@ -178,9 +206,14 @@ void bad_apple_app_handle_input(shell_app_context_t *ctx, const input_event_t *e
     } else if (ev->button == INPUT_BTN_C) {
         bad_apple_toggle_pause();
     } else if (ev->button == INPUT_BTN_D) {
-        s_bad_apple_app.last_err = bad_apple_restart();
-        if (s_bad_apple_app.last_err == ESP_OK) {
-            request_bad_apple_audio_start();
+        int idx = s_bad_apple_app.current_source;
+        if (idx >= 0) {
+            s_bad_apple_app.last_err = schedule_source_start_delayed(idx);
+            if (s_bad_apple_app.last_err == ESP_OK) {
+                request_bad_apple_audio_start();
+            }
+        } else {
+            s_bad_apple_app.last_err = ESP_ERR_INVALID_STATE;
         }
     }
 }
@@ -188,6 +221,18 @@ void bad_apple_app_handle_input(shell_app_context_t *ctx, const input_event_t *e
 void bad_apple_app_tick(shell_app_context_t *ctx, float dt_sec)
 {
     (void)ctx;
+    if (s_bad_apple_app.start_pending) {
+        if (dt_sec > 0.0f) {
+            s_bad_apple_app.start_delay_sec -= dt_sec;
+        }
+        if (s_bad_apple_app.start_delay_sec <= 0.0f) {
+            s_bad_apple_app.start_pending = false;
+            int idx = s_bad_apple_app.pending_source;
+            s_bad_apple_app.pending_source = -1;
+            s_bad_apple_app.start_delay_sec = 0.0f;
+            (void)start_source_index(idx);
+        }
+    }
     bad_apple_tick(dt_sec);
 }
 
@@ -222,6 +267,11 @@ void bad_apple_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int
     }
 
     oled_draw_text3x5(fb, 2, 2, "BAD APPLE");
+
+    if (s_bad_apple_app.start_pending) {
+        oled_draw_text3x5(fb, 2, 10, "Syncing audio...");
+        return;
+    }
 
     if (!s_bad_apple_app.sd_mounted) {
         char line[48];

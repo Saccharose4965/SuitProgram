@@ -7,7 +7,7 @@
 #include "fft.h"
 
 enum {
-    FFT_RENDER_LOGMAG_BINS = 1024 / 2 + 1
+    FFT_RENDER_LOGMAG_BINS = FFT_CFG_SIZE / 2 + 1
 };
 
 typedef struct {

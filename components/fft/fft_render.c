@@ -13,17 +13,9 @@
 #include "fft.h"   // NEW: for fft_get_confident_bpms & BPM range
 #include "esp_timer.h"
 
-enum {
-    FFT_SIZE       = 1024,
-    FPS            = 16000 / 256,
-    BPM_MIN        = 30,
-    BPM_MAX        = 300,
-    TARGET_BPM_MIN = 64,
-    TARGET_BPM_MAX = 127
-};
-
 static const float kDispPeakHold = 0.95f;  // decay for display peak tracking
 static const float kDispPeakMin  = 1.0f;   // minimum display peak to avoid blowing up noise
+static const float kHopRateNominalHz = (float)FFT_CFG_SAMPLE_RATE_HZ / (float)FFT_CFG_HOP_SAMPLES;
 
 #ifndef FFT_RENDER_MAX_FPS
 #define FFT_RENDER_MAX_FPS 20
@@ -168,12 +160,12 @@ static void render_log_spectrum(const float *logmag){
 
     static float cols[PANEL_W];
     float maxv = 1e-3f;
-    const float step = ((float)(FFT_SIZE/2 + 1)) / (float)PANEL_W;
+    const float step = ((float)(FFT_CFG_SIZE/2 + 1)) / (float)PANEL_W;
     for (int x=0; x<PANEL_W; ++x){
         int k0 = (int)floorf(x * step);
         int k1 = (int)floorf((x + 1) * step);
         if (k1 <= k0) k1 = k0 + 1;
-        if (k1 > FFT_SIZE/2 + 1) k1 = FFT_SIZE/2 + 1;
+        if (k1 > FFT_CFG_SIZE/2 + 1) k1 = FFT_CFG_SIZE/2 + 1;
         float acc=0.0f; int cnt=0;
         for (int k=k0; k<k1; ++k){ acc += logmag[k]; cnt++; }
         float v = (cnt>0) ? acc/(float)cnt : 0.0f;
@@ -342,7 +334,7 @@ void fft_render_push_spectrogram(const float *logmag){
     float scale = g_disp_peak;
     if (scale < kDispPeakMin) scale = kDispPeakMin;
 
-    const int num_bins     = FFT_SIZE / 2 + 1; // full resolution
+    const int num_bins     = FFT_CFG_SIZE / 2 + 1; // full resolution
     const int bins_per_row = 4;                // DISPLAY: 2 FFT bins -> 1 pixel row
     const int max_covered  = PANEL_H * bins_per_row;    // max bins we can show
     const int usable_bins  = (num_bins < max_covered) ? num_bins : max_covered;
@@ -381,7 +373,7 @@ void fft_render_push_spectrogram(const float *logmag){
 
     // Update running display peak for spectrum/spectrogram
     float frame_peak = 1e-3f;
-    for (int k = 0; k <= FFT_SIZE/2; ++k){
+    for (int k = 0; k <= FFT_CFG_SIZE/2; ++k){
         if (logmag[k] > frame_peak) frame_peak = logmag[k];
     }
     g_disp_peak *= kDispPeakHold;
@@ -412,8 +404,8 @@ void fft_render_suppress_recent_novelty(int frames){
 }
 
 void fft_render_update_tempo_spectrum(const float *bpm_spec_bc){
-    const int bpm_count = BPM_MAX - BPM_MIN + 1;
-    const int disp_bpm_count = TARGET_BPM_MAX - TARGET_BPM_MIN + 1;
+    const int bpm_count = FFT_CFG_BPM_MAX - FFT_CFG_BPM_MIN + 1;
+    const int disp_bpm_count = FFT_CFG_TARGET_BPM_MAX - FFT_CFG_TARGET_BPM_MIN + 1;
 
     if (!bpm_spec_bc){
         memset(g_tempo_spec_raw, 0, sizeof(g_tempo_spec_raw));
@@ -426,8 +418,8 @@ void fft_render_update_tempo_spectrum(const float *bpm_spec_bc){
         if (disp_idx < 0) disp_idx = 0;
         if (disp_idx >= disp_bpm_count) disp_idx = disp_bpm_count - 1;
 
-        int bpm = TARGET_BPM_MIN + disp_idx;
-        int bin = bpm - BPM_MIN;
+        int bpm = FFT_CFG_TARGET_BPM_MIN + disp_idx;
+        int bin = bpm - FFT_CFG_BPM_MIN;
 
         if (bin < 0) bin = 0;
         if (bin >= bpm_count) bin = bpm_count - 1;
@@ -469,7 +461,7 @@ void fft_render_trigger_flash(uint32_t flash_frames){
     if (flash_frames == 0) flash_frames = 1;
 
     int64_t now_us = esp_timer_get_time();
-    int64_t dur_us = ((int64_t)flash_frames * 1000000LL) / (int64_t)FPS;
+    int64_t dur_us = (int64_t)lroundf(((float)flash_frames * 1000000.0f) / kHopRateNominalHz);
     // Keep marker visible long enough so render FPS jitter doesn't drop beats visually.
     if (dur_us < 120000) dur_us = 120000;
 
