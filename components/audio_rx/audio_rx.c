@@ -7,7 +7,6 @@
 #include <errno.h>
 #include <sys/unistd.h>   // fsync
 #include <sys/stat.h>
-#include <inttypes.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -89,7 +88,6 @@ static const char *TAG = "audio_rx";
 static TaskHandle_t  s_rx_task     = NULL;
 static int           s_listen_sock = -1;
 static bool          s_stop_flag   = false;
-static uint32_t      s_file_index  = 0;
 static uint8_t       s_rx_chunk_buf[AUDIO_RX_CHUNK_SIZE];
 
 // -----------------------------------------------------------------------------
@@ -138,30 +136,6 @@ static void audio_rx_store_last(const char *path)
         return;
     }
     fprintf(f, "%s\n", path);
-    fclose(f);
-}
-
-// Load/save monotonically increasing recording index.
-static void audio_rx_load_index(void)
-{
-    FILE *f = fopen("/sdcard/rx_rec_index.txt", "r");
-    if (!f) return;
-    uint32_t idx = 0;
-    if (fscanf(f, "%" PRIu32, &idx) == 1) {
-        s_file_index = idx;
-        ESP_LOGI(TAG, "audio_rx: restored index %u", (unsigned)s_file_index);
-    }
-    fclose(f);
-}
-
-static void audio_rx_store_index(uint32_t idx)
-{
-    FILE *f = fopen("/sdcard/rx_rec_index.txt", "w");
-    if (!f) {
-        ESP_LOGW(TAG, "audio_rx: failed to persist index %u", (unsigned)idx);
-        return;
-    }
-    fprintf(f, "%u\n", (unsigned)idx);
     fclose(f);
 }
 
@@ -229,34 +203,75 @@ static void audio_rx_sanitize_filename(const char *in, char *out, size_t out_len
     }
 }
 
-// Build paths for the next recording.
-// If name_hint is set, use it as the final output filename (sanitized).
-static uint32_t audio_rx_make_paths(char *path_final, size_t final_len,
-                                    char *path_tmp, size_t tmp_len,
-                                    const char *name_hint)
+static void audio_rx_split_ext(const char *name,
+                               char *stem, size_t stem_len,
+                               char *ext, size_t ext_len)
 {
-    uint32_t idx = s_file_index + 1;
-    snprintf(path_tmp, tmp_len, "/sdcard/rx_rec_%05u.part", (unsigned)idx);
+    if (!stem || stem_len == 0 || !ext || ext_len == 0) return;
+    stem[0] = '\0';
+    ext[0] = '\0';
+    if (!name || !name[0]) return;
+
+    const char *dot = strrchr(name, '.');
+    if (!dot || dot == name || dot[1] == '\0') {
+        snprintf(stem, stem_len, "%s", name);
+        return;
+    }
+
+    size_t n_stem = (size_t)(dot - name);
+    if (n_stem >= stem_len) {
+        n_stem = stem_len - 1;
+    }
+    memcpy(stem, name, n_stem);
+    stem[n_stem] = '\0';
+
+    snprintf(ext, ext_len, "%s", dot);
+}
+
+// Build output and temp paths for a recording.
+// If `name_hint` collides with an existing file, use suffixes "(1)", "(2)", ...
+static void audio_rx_make_paths(char *path_final, size_t final_len,
+                                char *path_tmp, size_t tmp_len,
+                                const char *name_hint)
+{
+    if (!path_final || final_len == 0 || !path_tmp || tmp_len == 0) return;
+    path_final[0] = '\0';
+    path_tmp[0] = '\0';
 
     char safe_name[AUDIO_RX_NAME_MAX];
     audio_rx_sanitize_filename(name_hint, safe_name, sizeof(safe_name));
-    if (safe_name[0]) {
-        snprintf(path_final, final_len, "/sdcard/%s", safe_name);
-        if (audio_rx_path_exists(path_final)) {
-            const char *dot = strrchr(safe_name, '.');
-            if (dot && dot != safe_name) {
-                size_t stem_len = (size_t)(dot - safe_name);
-                snprintf(path_final, final_len, "/sdcard/%.*s_%05u%s",
-                         (int)stem_len, safe_name, (unsigned)idx, dot);
-            } else {
-                snprintf(path_final, final_len, "/sdcard/%s_%05u",
-                         safe_name, (unsigned)idx);
-            }
-        }
-    } else {
-        snprintf(path_final, final_len, "/sdcard/rx_rec_%05u.wav", (unsigned)idx);
+    if (!safe_name[0]) {
+        snprintf(safe_name, sizeof(safe_name), "rx_rec.wav");
     }
-    return idx;
+
+    char stem[AUDIO_RX_NAME_MAX];
+    char ext[AUDIO_RX_NAME_MAX];
+    audio_rx_split_ext(safe_name, stem, sizeof(stem), ext, sizeof(ext));
+    if (!stem[0]) {
+        snprintf(stem, sizeof(stem), "rx_rec");
+    }
+    if (!ext[0]) {
+        snprintf(ext, sizeof(ext), ".wav");
+    }
+
+    uint32_t suffix = 0;
+    while (1) {
+        if (suffix == 0) {
+            snprintf(path_final, final_len, "/sdcard/%s%s", stem, ext);
+        } else {
+            snprintf(path_final, final_len, "/sdcard/%s(%u)%s",
+                     stem, (unsigned)suffix, ext);
+        }
+        if (!audio_rx_path_exists(path_final)) {
+            break;
+        }
+        if (suffix == UINT32_MAX) {
+            break;
+        }
+        ++suffix;
+    }
+
+    snprintf(path_tmp, tmp_len, "%s.part", path_final);
 }
 
 static bool audio_rx_parse_meta_header(const uint8_t *buf, size_t buf_len,
@@ -547,9 +562,6 @@ static void audio_rx_task(void *arg)
 
     s_stop_flag = false;
 
-    // Resume numbering from last successful recording if present.
-    audio_rx_load_index();
-
     s_listen_sock = create_listen_socket(port);
     if (s_listen_sock < 0) {
         ESP_LOGE(TAG, "Failed to create listen socket on port %d", port);
@@ -603,10 +615,10 @@ static void audio_rx_task(void *arg)
 
         // Build file name (write to .part then rename on success).
         char path_final[128];
-        char path_tmp[64];
-        uint32_t idx = audio_rx_make_paths(path_final, sizeof(path_final),
-                                           path_tmp, sizeof(path_tmp),
-                                           name_hint);
+        char path_tmp[160];
+        audio_rx_make_paths(path_final, sizeof(path_final),
+                            path_tmp, sizeof(path_tmp),
+                            name_hint);
         ESP_LOGI(TAG, "Recording will be written to '%s' (tmp '%s')", path_final, path_tmp);
 
         FILE *f = fopen(path_tmp, "wb");
@@ -973,19 +985,15 @@ static void audio_rx_task(void *arg)
         shutdown(client_sock, SHUT_RDWR);
         close(client_sock);
 
-        // If writer completed without error, rename .part → .wav; otherwise remove temp.
+        // If writer completed without error, rename .part -> final name.
         if (!had_error) {
-            // Replace any existing file so rename succeeds on FATFS
-            (void)unlink(path_final);
             if (rename(path_tmp, path_final) != 0) {
                 ESP_LOGE(TAG, "Failed to rename '%s' -> '%s' (errno=%d)",
                          path_tmp, path_final, errno);
                 (void)unlink(path_tmp);
             } else {
-                s_file_index = idx;
-                audio_rx_store_index(idx);
                 audio_rx_store_last(path_final);
-                ESP_LOGI(TAG, "Saved recording '%s' (idx=%u)", path_final, (unsigned)idx);
+                ESP_LOGI(TAG, "Saved recording '%s'", path_final);
             }
         } else {
             ESP_LOGW(TAG, "Transfer failed; keeping temp file '%s' for inspection", path_tmp);

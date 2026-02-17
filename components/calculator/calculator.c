@@ -42,6 +42,7 @@ typedef struct {
     int col;
     char status[24];
     bool status_is_error;
+    bool just_evaluated;
 } calc_state_t;
 
 static calc_state_t s_calc = {0};
@@ -401,6 +402,13 @@ static inline bool expr_ends_with_value(void)
     return isdigit((unsigned char)prev) || prev == ')' || prev == '.' || prev == 'i';
 }
 
+static bool is_operator_insert_token(const char *text)
+{
+    if (!text || !text[0]) return false;
+    if (strcmp(text, "^2") == 0) return true;
+    return (strlen(text) == 1) && is_op(text[0]);
+}
+
 static bool append_raw(const char *text)
 {
     if (!text || !text[0]) return false;
@@ -418,6 +426,16 @@ static bool append_raw(const char *text)
 static void append_insert(const char *text)
 {
     if (!text || !text[0]) return;
+
+    if (s_calc.just_evaluated) {
+        // After "=", numeric/function input starts a fresh expression.
+        // Operator-like input continues from the computed result.
+        if (!is_operator_insert_token(text)) {
+            s_calc.len = 0;
+            s_calc.expr[0] = '\0';
+        }
+        s_calc.just_evaluated = false;
+    }
 
     char prev = expr_prev_char();
     size_t tok_len = strlen(text);
@@ -531,6 +549,7 @@ static void apply_key(const calc_key_t *key)
     if (key->action == KEY_ACT_CLEAR) {
         s_calc.len = 0;
         s_calc.expr[0] = '\0';
+        s_calc.just_evaluated = false;
         set_status("", false);
         return;
     }
@@ -540,6 +559,7 @@ static void apply_key(const calc_key_t *key)
             s_calc.len--;
             s_calc.expr[s_calc.len] = '\0';
         }
+        s_calc.just_evaluated = false;
         set_status("", false);
         return;
     }
@@ -562,6 +582,7 @@ static void apply_key(const calc_key_t *key)
         strncpy(s_calc.expr, tmp, sizeof(s_calc.expr) - 1);
         s_calc.expr[sizeof(s_calc.expr) - 1] = '\0';
         s_calc.len = strlen(s_calc.expr);
+        s_calc.just_evaluated = true;
         set_status("OK", false);
         return;
     }
@@ -577,7 +598,8 @@ void calculator_init(void)
     s_calc.row = 0;
     s_calc.col = 0;
     s_calc.expr[0] = '\0';
-    set_status("A/B row C col D key", false);
+    s_calc.just_evaluated = false;
+    set_status("A< Bv C> D=key", false);
 }
 
 void calculator_handle_input(const input_event_t *ev)
@@ -585,9 +607,9 @@ void calculator_handle_input(const input_event_t *ev)
     if (!ev || ev->type != INPUT_EVENT_PRESS) return;
 
     if (ev->button == INPUT_BTN_A) {
-        s_calc.row--;
-        if (s_calc.row < 0) s_calc.row = CALC_ROWS - 1;
-    } else if (ev->button == INPUT_BTN_B) {
+        s_calc.col--;
+        if (s_calc.col < 0) s_calc.col = CALC_COLS - 1;
+    } else if (ev->button == INPUT_BTN_B || ev->button == INPUT_BTN_BC_COMBO) {
         s_calc.row = (s_calc.row + 1) % CALC_ROWS;
     } else if (ev->button == INPUT_BTN_C) {
         s_calc.col = (s_calc.col + 1) % CALC_COLS;
@@ -630,16 +652,17 @@ void calculator_draw(uint8_t *fb, int x, int y, int w, int h)
     if (!fb || w <= 0 || h <= 0) return;
 
     int pad_gap = 2;
-    int pad_w = (w * 7) / 10;
-    if (pad_w < CALC_COLS * 10) pad_w = CALC_COLS * 10;
-    if (pad_w > w - 12) pad_w = w - 12;
+    int pad_w = (w * 55) / 100; // narrower keypad to leave more room for the window
+    int min_pad_w = CALC_COLS * 8 + (CALC_COLS + 1); // room for keys + 1px inter-key gaps
+    if (pad_w < min_pad_w) pad_w = min_pad_w;
+    if (pad_w > w - 20) pad_w = w - 20;
 
     int window_w = w - pad_w - pad_gap;
-    if (window_w < 10) {
-        window_w = 10;
+    if (window_w < 18) {
+        window_w = 18;
         pad_w = w - window_w - pad_gap;
     }
-    if (pad_w < CALC_COLS * 6) return;
+    if (pad_w < CALC_COLS * 6 || window_w <= 0) return;
 
     int window_x = x;
     int pad_x = window_x + window_w + pad_gap;
@@ -657,33 +680,48 @@ void calculator_draw(uint8_t *fb, int x, int y, int w, int h)
     const calc_key_t *sel = &k_keys[s_calc.row][s_calc.col];
     int key_line_y = y + h - 7;
     if (key_line_y >= y + 26) {
-        draw_window_line(fb, window_x, key_line_y, window_w, "K:", sel->label);
+        draw_window_line(fb, window_x, key_line_y, window_w, "SEL:", sel->label);
     }
 
+    const int key_gap = 1;
+    int grid_x = pad_x + 1;
+    int grid_y = y + 1;
+    int grid_w = pad_w - 2;
+    int grid_h = h - 2;
+    int usable_w = grid_w - key_gap * (CALC_COLS + 1);
+    int usable_h = grid_h - key_gap * (CALC_ROWS + 1);
+    if (usable_w <= 0 || usable_h <= 0) return;
+    int base_w = usable_w / CALC_COLS;
+    int rem_w = usable_w % CALC_COLS;
+    int base_h = usable_h / CALC_ROWS;
+    int rem_h = usable_h % CALC_ROWS;
+
+    int cy = grid_y + key_gap;
     for (int r = 0; r < CALC_ROWS; ++r) {
-        int cy0 = y + (r * h) / CALC_ROWS;
-        int cy1 = y + ((r + 1) * h) / CALC_ROWS - 1;
-        int bh = cy1 - cy0 + 1;
-        if (bh < 5) continue;
+        int bh = base_h + (r < rem_h ? 1 : 0);
 
+        int cx = grid_x + key_gap;
         for (int c = 0; c < CALC_COLS; ++c) {
-            int cx0 = pad_x + (c * pad_w) / CALC_COLS;
-            int cx1 = pad_x + ((c + 1) * pad_w) / CALC_COLS - 1;
-            int bw = cx1 - cx0 + 1;
-            if (bw < 6) continue;
+            int bw = base_w + (c < rem_w ? 1 : 0);
+            int cx0 = cx;
+            int cy0 = cy;
+            if (bw >= 6 && bh >= 5) {
+                fb_rect_outline(fb, cx0, cy0, bw, bh);
+                if (r == s_calc.row && c == s_calc.col && bw > 4 && bh > 4) {
+                    fb_rect_outline(fb, cx0 + 1, cy0 + 1, bw - 2, bh - 2);
+                }
 
-            fb_rect_outline(fb, cx0, cy0, bw, bh);
-            if (r == s_calc.row && c == s_calc.col && bw > 4 && bh > 4) {
-                fb_rect_outline(fb, cx0 + 1, cy0 + 1, bw - 2, bh - 2);
+                const char *label = k_keys[r][c].label;
+                int label_len = (int)strlen(label);
+                int tx = cx0 + (bw - (label_len * 4)) / 2;
+                if (tx < cx0 + 1) tx = cx0 + 1;
+                int ty = cy0 + ((bh - 5) / 2);
+                if (ty < cy0 + 1) ty = cy0 + 1;
+                oled_draw_text3x5(fb, tx, ty, label);
             }
 
-            const char *label = k_keys[r][c].label;
-            int label_len = (int)strlen(label);
-            int tx = cx0 + (bw - (label_len * 4)) / 2;
-            if (tx < cx0 + 1) tx = cx0 + 1;
-            int ty = cy0 + ((bh - 5) / 2);
-            if (ty < cy0 + 1) ty = cy0 + 1;
-            oled_draw_text3x5(fb, tx, ty, label);
+            cx += bw + key_gap;
         }
+        cy += bh + key_gap;
     }
 }
