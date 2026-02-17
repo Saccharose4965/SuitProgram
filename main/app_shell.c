@@ -361,6 +361,17 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .draw   = threedee_draw_wrapper,
     },
     {
+        .id     = "bad_apple",
+        .name   = "Bad Apple",
+        .flags  = 0,
+        .legend = &BAD_APPLE_LEGEND,
+        .init   = bad_apple_app_init,
+        .deinit = bad_apple_app_deinit,
+        .tick   = bad_apple_app_tick,
+        .handle_input = bad_apple_app_handle_input,
+        .draw   = bad_apple_app_draw,
+    },
+    {
         .id     = "pong",
         .name   = "Pong",
         .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,

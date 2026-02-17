@@ -44,6 +44,7 @@ static const menu_entry_t g_menu_sim_entries[] = {
     { "fft",       "FFT"    },
     { "fluid",     "Fluid"  },
     { "threedee",  "3D Render" },
+    { "bad_apple", "Bad Apple" },
 };
 static const menu_entry_t g_menu_games_entries[] = {
     { "menu_root", "Back"   },
