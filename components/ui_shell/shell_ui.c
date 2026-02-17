@@ -68,11 +68,13 @@ static const uint8_t ICONS[][5] = {
     {0b01101, 0b10011, 0b10111, 0b10000, 0b01111}, // CUSTOM1 scan
     {0b11110, 0b00001, 0b01101, 0b11111, 0b01100}, // CUSTOM2 select
     {0b10001, 0b01010, 0b00100, 0b01010, 0b10001}, // MUTE (X)
+    {0b01000, 0b01100, 0b01110, 0b01100, 0b01000}, // PLAY (triangle)
+    {0b11011, 0b11011, 0b11011, 0b11011, 0b11011}, // PAUSE (bars)
 };
 
 static void draw_icon5(uint8_t *fb, int x, int y, shell_icon_id_t icon)
 {
-    if (icon <= SHELL_ICON_NONE || icon > SHELL_ICON_MUTE) return;
+    if (icon <= SHELL_ICON_NONE || icon > SHELL_ICON_PAUSE) return;
     const uint8_t *rows = ICONS[icon];
     for (int r = 0; r < 5; ++r) {
         uint8_t row = rows[r];

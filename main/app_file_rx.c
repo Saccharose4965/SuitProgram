@@ -3,9 +3,15 @@
 #include <stdio.h>
 
 #include "esp_err.h"
+#include "esp_log.h"
 
 #include "audio_rx.h"
+#include "audio_player.h"
+#include "bt_audio.h"
+#include "fft.h"
 #include "storage_sd.h"
+
+static const char *TAG = "app_file_rx";
 
 const shell_legend_t FILE_RX_LEGEND = {
     .slots = { SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_OK, SHELL_ICON_MENU },
@@ -21,6 +27,25 @@ static file_rx_state_t s_file_rx = {
     .sd_mounted = false,
 };
 
+static void file_rx_interrupt_services_if_idle(void)
+{
+    if (audio_player_is_active()) {
+        ESP_LOGI(TAG, "music active; leaving BT/FFT running during file RX");
+        return;
+    }
+
+    // File RX is memory-heavy on DMA/internal heap; stop competing services.
+    fft_set_display_enabled(false);
+    fft_visualizer_stop();
+
+    bt_audio_status_t st = {0};
+    bt_audio_get_status(&st);
+    if (st.state != BT_AUDIO_STATE_DISABLED && st.state != BT_AUDIO_STATE_IDLE) {
+        (void)bt_audio_stop_stream();
+        (void)bt_audio_disconnect();
+    }
+}
+
 static esp_err_t file_rx_start_service(void)
 {
     if (!storage_sd_is_mounted()) {
@@ -31,6 +56,7 @@ static esp_err_t file_rx_start_service(void)
         }
     }
     s_file_rx.sd_mounted = true;
+    file_rx_interrupt_services_if_idle();
     return audio_rx_start(AUDIO_RX_DEFAULT_PORT);
 }
 

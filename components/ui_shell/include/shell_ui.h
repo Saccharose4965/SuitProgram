@@ -28,6 +28,8 @@ typedef enum {
     SHELL_ICON_CUSTOM1,
     SHELL_ICON_CUSTOM2,
     SHELL_ICON_MUTE,
+    SHELL_ICON_PLAY,
+    SHELL_ICON_PAUSE,
 } shell_icon_id_t;
 
 typedef struct {

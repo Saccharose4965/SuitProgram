@@ -32,9 +32,16 @@ typedef struct {
 static music_state_t s_music = {0};
 static const char *TAG = "app_music";
 
-const shell_legend_t MUSIC_LEGEND = {
+shell_legend_t MUSIC_LEGEND = {
     .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_OK, SHELL_ICON_CUSTOM2 },
 };
+
+static void music_update_legend(void)
+{
+    bool active = audio_player_is_active();
+    bool paused = audio_player_is_paused();
+    MUSIC_LEGEND.slots[2] = (active && !paused) ? SHELL_ICON_PAUSE : SHELL_ICON_PLAY;
+}
 
 void music_stop_playback(void)
 {
@@ -79,6 +86,7 @@ void music_app_init(shell_app_context_t *ctx)
     s_music.tried_mount = false;
     s_music.pending = -1;
     music_scan();
+    music_update_legend();
 }
 
 static void music_try_start_pending(void)
@@ -136,12 +144,14 @@ void music_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
             music_stop_playback(); // pause/stop
         }
     }
+    music_update_legend();
 }
 
 void music_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)
 {
     (void)ctx; (void)w; (void)h;
     music_try_start_pending();
+    music_update_legend();
     if (!s_music.mounted && !s_music.tried_mount){
         s_music.tried_mount = true;
         if (storage_mount_sd() == ESP_OK){

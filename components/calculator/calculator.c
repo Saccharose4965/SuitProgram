@@ -21,18 +21,27 @@ typedef enum {
     KEY_ACT_BACKSPACE,
 } key_action_t;
 
+typedef enum {
+    KEY_ICON_TEXT = 0,
+    KEY_ICON_PI,
+    KEY_ICON_SQRT,
+    KEY_ICON_EXP_X,
+    KEY_ICON_X_SQ,
+} key_icon_t;
+
 typedef struct {
     const char *label;
     key_action_t action;
     const char *text;
+    key_icon_t icon;
 } calc_key_t;
 
 static const calc_key_t k_keys[CALC_ROWS][CALC_COLS] = {
-    { {"DEL",  KEY_ACT_BACKSPACE, NULL   }, {"(",   KEY_ACT_INSERT, "("    }, {")",   KEY_ACT_INSERT, ")"    }, {"mod",  KEY_ACT_INSERT, "%"    }, {"sqrt", KEY_ACT_INSERT, "sqrt("} },
-    { {"7",    KEY_ACT_INSERT,    "7"    }, {"8",   KEY_ACT_INSERT, "8"    }, {"9",   KEY_ACT_INSERT, "9"    }, {"/",    KEY_ACT_INSERT, "/"    }, {"x^2",  KEY_ACT_INSERT, "^2"   } },
-    { {"4",    KEY_ACT_INSERT,    "4"    }, {"5",   KEY_ACT_INSERT, "5"    }, {"6",   KEY_ACT_INSERT, "6"    }, {"*",    KEY_ACT_INSERT, "*"    }, {"ln",   KEY_ACT_INSERT, "ln("  } },
-    { {"1",    KEY_ACT_INSERT,    "1"    }, {"2",   KEY_ACT_INSERT, "2"    }, {"3",   KEY_ACT_INSERT, "3"    }, {"-",    KEY_ACT_INSERT, "-"    }, {"e^x",  KEY_ACT_INSERT, "exp(" } },
-    { {"0",    KEY_ACT_INSERT,    "0"    }, {".",   KEY_ACT_INSERT, "."    }, {"pi",  KEY_ACT_INSERT, "pi"   }, {"+",    KEY_ACT_INSERT, "+"    }, {"=",    KEY_ACT_EVAL,   NULL   } },
+    { {"DEL",  KEY_ACT_BACKSPACE, NULL,    KEY_ICON_TEXT }, {"(",   KEY_ACT_INSERT, "("   , KEY_ICON_TEXT }, {")",   KEY_ACT_INSERT, ")"   , KEY_ICON_TEXT }, {"mod",  KEY_ACT_INSERT, "%"   , KEY_ICON_TEXT }, {"sqrt", KEY_ACT_INSERT, "sqrt(", KEY_ICON_SQRT } },
+    { {"7",    KEY_ACT_INSERT,    "7",     KEY_ICON_TEXT }, {"8",   KEY_ACT_INSERT, "8"   , KEY_ICON_TEXT }, {"9",   KEY_ACT_INSERT, "9"   , KEY_ICON_TEXT }, {"/",    KEY_ACT_INSERT, "/"   , KEY_ICON_TEXT }, {"x^2",  KEY_ACT_INSERT, "^2"  , KEY_ICON_X_SQ } },
+    { {"4",    KEY_ACT_INSERT,    "4",     KEY_ICON_TEXT }, {"5",   KEY_ACT_INSERT, "5"   , KEY_ICON_TEXT }, {"6",   KEY_ACT_INSERT, "6"   , KEY_ICON_TEXT }, {"*",    KEY_ACT_INSERT, "*"   , KEY_ICON_TEXT }, {"ln",   KEY_ACT_INSERT, "ln(" , KEY_ICON_TEXT } },
+    { {"1",    KEY_ACT_INSERT,    "1",     KEY_ICON_TEXT }, {"2",   KEY_ACT_INSERT, "2"   , KEY_ICON_TEXT }, {"3",   KEY_ACT_INSERT, "3"   , KEY_ICON_TEXT }, {"-",    KEY_ACT_INSERT, "-"   , KEY_ICON_TEXT }, {"e^x",  KEY_ACT_INSERT, "exp(", KEY_ICON_EXP_X } },
+    { {"0",    KEY_ACT_INSERT,    "0",     KEY_ICON_TEXT }, {".",   KEY_ACT_INSERT, "."   , KEY_ICON_TEXT }, {"pi",  KEY_ACT_INSERT, "pi"  , KEY_ICON_PI   }, {"+",    KEY_ACT_INSERT, "+"   , KEY_ICON_TEXT }, {"=",    KEY_ACT_EVAL,   NULL  , KEY_ICON_TEXT } },
 };
 
 typedef struct {
@@ -69,6 +78,40 @@ static inline void fb_pset(uint8_t *fb, int x, int y)
     if (!fb || !fb_in_bounds(x, y)) return;
     int idx = y * PANEL_W + x;
     fb[idx >> 3] |= (uint8_t)(1u << (7 - (idx & 7)));
+}
+
+static void fb_hline(uint8_t *fb, int x0, int x1, int y)
+{
+    if (!fb) return;
+    if (y < 0 || y >= PANEL_H) return;
+    if (x0 > x1) {
+        int t = x0;
+        x0 = x1;
+        x1 = t;
+    }
+    if (x1 < 0 || x0 >= PANEL_W) return;
+    if (x0 < 0) x0 = 0;
+    if (x1 >= PANEL_W) x1 = PANEL_W - 1;
+    for (int x = x0; x <= x1; ++x) {
+        fb_pset(fb, x, y);
+    }
+}
+
+static void fb_vline(uint8_t *fb, int x, int y0, int y1)
+{
+    if (!fb) return;
+    if (x < 0 || x >= PANEL_W) return;
+    if (y0 > y1) {
+        int t = y0;
+        y0 = y1;
+        y1 = t;
+    }
+    if (y1 < 0 || y0 >= PANEL_H) return;
+    if (y0 < 0) y0 = 0;
+    if (y1 >= PANEL_H) y1 = PANEL_H - 1;
+    for (int y = y0; y <= y1; ++y) {
+        fb_pset(fb, x, y);
+    }
 }
 
 static void fb_rect_outline(uint8_t *fb, int x, int y, int w, int h)
@@ -542,6 +585,26 @@ static void append_insert(const char *text)
     if (append_raw(text)) set_status("", false);
 }
 
+static bool calc_live_result(char *out, size_t out_len)
+{
+    if (!out || out_len == 0) return false;
+    out[0] = '\0';
+    if (s_calc.len == 0) return false;
+
+    char tail = expr_prev_char();
+    if (tail == '\0' || tail == '(' || tail == '.') return false;
+    if (is_op(tail)) return false;
+
+    double result = 0.0;
+    bool div_zero = false;
+    if (!eval_expression(s_calc.expr, &result, &div_zero)) {
+        return false;
+    }
+
+    snprintf(out, out_len, "=%.8g", result);
+    return true;
+}
+
 static void apply_key(const calc_key_t *key)
 {
     if (!key) return;
@@ -583,7 +646,7 @@ static void apply_key(const calc_key_t *key)
         s_calc.expr[sizeof(s_calc.expr) - 1] = '\0';
         s_calc.len = strlen(s_calc.expr);
         s_calc.just_evaluated = true;
-        set_status("OK", false);
+        set_status("", false);
         return;
     }
 
@@ -599,7 +662,7 @@ void calculator_init(void)
     s_calc.col = 0;
     s_calc.expr[0] = '\0';
     s_calc.just_evaluated = false;
-    set_status("A< Bv C> D=key", false);
+    set_status("", false);
 }
 
 void calculator_handle_input(const input_event_t *ev)
@@ -647,81 +710,178 @@ static void draw_window_line(uint8_t *fb, int x, int y, int w, const char *prefi
     oled_draw_text3x5(fb, x + 2, y, line);
 }
 
+static void draw_window_line_right(uint8_t *fb, int x, int y, int w, const char *text)
+{
+    if (!fb || !text || !text[0] || w <= 4) return;
+
+    int max_chars = (w - 4) / 4;
+    if (max_chars <= 0) return;
+
+    int text_len = (int)strlen(text);
+    int start = (text_len > max_chars) ? (text_len - max_chars) : 0;
+    int draw_len = text_len - start;
+    if (draw_len <= 0) return;
+
+    int tx = x + w - 2 - draw_len * 4;
+    if (tx < x + 2) tx = x + 2;
+    oled_draw_text3x5(fb, tx, y, text + start);
+}
+
+static void draw_icon_pi(uint8_t *fb, int x, int y)
+{
+    static const uint8_t rows[5] = {
+        0x1Fu,
+        0x15u,
+        0x15u,
+        0x04u,
+        0x04u,
+    };
+    for (int dy = 0; dy < 5; ++dy) {
+        for (int dx = 0; dx < 5; ++dx) {
+            if (rows[dy] & (1u << (4 - dx))) {
+                fb_pset(fb, x + dx, y + dy);
+            }
+        }
+    }
+}
+
+static void draw_icon_sqrt(uint8_t *fb, int x, int y)
+{
+    fb_pset(fb, x + 0, y + 3);
+    fb_pset(fb, x + 1, y + 4);
+    fb_pset(fb, x + 2, y + 3);
+    fb_pset(fb, x + 3, y + 2);
+    for (int i = 4; i < 8; ++i) {
+        fb_pset(fb, x + i, y + 1);
+    }
+}
+
+static void draw_icon_exp_x(uint8_t *fb, int x, int y)
+{
+    oled_draw_text3x5(fb, x, y + 1, "e");
+    fb_pset(fb, x + 3, y + 1);
+    oled_draw_text3x5(fb, x + 4, y - 1, "x");
+}
+
+static void draw_icon_x_sq(uint8_t *fb, int x, int y)
+{
+    oled_draw_text3x5(fb, x, y + 1, "x");
+    oled_draw_text3x5(fb, x + 4, y - 1, "2");
+}
+
+static void draw_key_label(uint8_t *fb, int x0, int y0, int w, int h, const calc_key_t *key)
+{
+    if (!fb || !key || w <= 0 || h <= 0) return;
+
+    if (key->icon == KEY_ICON_PI) {
+        int iw = 5;
+        int ih = 5;
+        int tx = x0 + (w - iw) / 2;
+        int ty = y0 + (h - ih) / 2;
+        draw_icon_pi(fb, tx, ty);
+        return;
+    }
+    if (key->icon == KEY_ICON_SQRT) {
+        int iw = 8;
+        int ih = 5;
+        int tx = x0 + (w - iw) / 2;
+        int ty = y0 + (h - ih) / 2;
+        draw_icon_sqrt(fb, tx, ty);
+        return;
+    }
+    if (key->icon == KEY_ICON_EXP_X) {
+        int iw = 7;
+        int ih = 6;
+        int tx = x0 + (w - iw) / 2;
+        int ty = y0 + (h - ih) / 2;
+        draw_icon_exp_x(fb, tx, ty);
+        return;
+    }
+    if (key->icon == KEY_ICON_X_SQ) {
+        int iw = 7;
+        int ih = 6;
+        int tx = x0 + (w - iw) / 2;
+        int ty = y0 + (h - ih) / 2;
+        draw_icon_x_sq(fb, tx, ty);
+        return;
+    }
+
+    const char *label = key->label ? key->label : "";
+    int label_len = (int)strlen(label);
+    int tx = x0 + (w - (label_len * 4)) / 2;
+    int ty = y0 + (h - 5) / 2;
+    if (tx < x0) tx = x0;
+    if (ty < y0) ty = y0;
+    oled_draw_text3x5(fb, tx, ty, label);
+}
+
 void calculator_draw(uint8_t *fb, int x, int y, int w, int h)
 {
     if (!fb || w <= 0 || h <= 0) return;
 
-    int pad_gap = 2;
-    int pad_w = (w * 55) / 100; // narrower keypad to leave more room for the window
-    int min_pad_w = CALC_COLS * 8 + (CALC_COLS + 1); // room for keys + 1px inter-key gaps
+    int min_window_w = 44;
+    int min_pad_w = 46;
+    int pad_w = (w * 49) / 100;
     if (pad_w < min_pad_w) pad_w = min_pad_w;
-    if (pad_w > w - 20) pad_w = w - 20;
 
-    int window_w = w - pad_w - pad_gap;
-    if (window_w < 18) {
-        window_w = 18;
-        pad_w = w - window_w - pad_gap;
+    int max_pad_w = w - min_window_w;
+    if (max_pad_w < min_pad_w) {
+        max_pad_w = min_pad_w;
     }
-    if (pad_w < CALC_COLS * 6 || window_w <= 0) return;
+    if (pad_w > max_pad_w) pad_w = max_pad_w;
+    if (pad_w >= w) pad_w = w - 1;
+
+    int window_w = w - pad_w;
+    if (window_w <= 2 || pad_w <= 2) return;
 
     int window_x = x;
-    int pad_x = window_x + window_w + pad_gap;
+    int pad_x = x + window_w;
 
     fb_rect_outline(fb, window_x, y, window_w, h);
     fb_rect_outline(fb, pad_x, y, pad_w, h);
 
-    draw_window_line(fb, window_x, y + 2, window_w, "CALC", NULL);
-    draw_window_line(fb, window_x, y + 10, window_w, "E:", s_calc.len ? s_calc.expr : "0");
-
-    if (s_calc.status[0]) {
-        draw_window_line(fb, window_x, y + 18, window_w, s_calc.status_is_error ? "!" : "", s_calc.status);
+    if (s_calc.len > 0) {
+        draw_window_line(fb, window_x, y + 2, window_w, NULL, s_calc.expr);
     }
 
-    const calc_key_t *sel = &k_keys[s_calc.row][s_calc.col];
-    int key_line_y = y + h - 7;
-    if (key_line_y >= y + 26) {
-        draw_window_line(fb, window_x, key_line_y, window_w, "SEL:", sel->label);
+    if (s_calc.status_is_error && s_calc.status[0]) {
+        draw_window_line(fb, window_x, y + 10, window_w, "!", s_calc.status);
     }
 
-    const int key_gap = 1;
-    int grid_x = pad_x + 1;
-    int grid_y = y + 1;
-    int grid_w = pad_w - 2;
-    int grid_h = h - 2;
-    int usable_w = grid_w - key_gap * (CALC_COLS + 1);
-    int usable_h = grid_h - key_gap * (CALC_ROWS + 1);
-    if (usable_w <= 0 || usable_h <= 0) return;
-    int base_w = usable_w / CALC_COLS;
-    int rem_w = usable_w % CALC_COLS;
-    int base_h = usable_h / CALC_ROWS;
-    int rem_h = usable_h % CALC_ROWS;
-
-    int cy = grid_y + key_gap;
-    for (int r = 0; r < CALC_ROWS; ++r) {
-        int bh = base_h + (r < rem_h ? 1 : 0);
-
-        int cx = grid_x + key_gap;
-        for (int c = 0; c < CALC_COLS; ++c) {
-            int bw = base_w + (c < rem_w ? 1 : 0);
-            int cx0 = cx;
-            int cy0 = cy;
-            if (bw >= 6 && bh >= 5) {
-                fb_rect_outline(fb, cx0, cy0, bw, bh);
-                if (r == s_calc.row && c == s_calc.col && bw > 4 && bh > 4) {
-                    fb_rect_outline(fb, cx0 + 1, cy0 + 1, bw - 2, bh - 2);
-                }
-
-                const char *label = k_keys[r][c].label;
-                int label_len = (int)strlen(label);
-                int tx = cx0 + (bw - (label_len * 4)) / 2;
-                if (tx < cx0 + 1) tx = cx0 + 1;
-                int ty = cy0 + ((bh - 5) / 2);
-                if (ty < cy0 + 1) ty = cy0 + 1;
-                oled_draw_text3x5(fb, tx, ty, label);
-            }
-
-            cx += bw + key_gap;
+    char live[32];
+    if (calc_live_result(live, sizeof(live))) {
+        int live_y = y + h - 7;
+        if (live_y >= y + 2) {
+            draw_window_line_right(fb, window_x, live_y, window_w, live);
         }
-        cy += bh + key_gap;
+    }
+
+    int x_edges[CALC_COLS + 1];
+    int y_edges[CALC_ROWS + 1];
+    int grid_w = pad_w - 1;
+    int grid_h = h - 1;
+    if (grid_w <= 0 || grid_h <= 0) return;
+
+    for (int c = 0; c <= CALC_COLS; ++c) {
+        x_edges[c] = pad_x + (c * grid_w) / CALC_COLS;
+        fb_vline(fb, x_edges[c], y, y + h - 1);
+    }
+    for (int r = 0; r < CALC_ROWS; ++r) {
+        y_edges[r] = y + (r * grid_h) / CALC_ROWS;
+        fb_hline(fb, pad_x, pad_x + pad_w - 1, y_edges[r]);
+    }
+    y_edges[CALC_ROWS] = y + h - 1;
+    fb_hline(fb, pad_x, pad_x + pad_w - 1, y_edges[CALC_ROWS]);
+
+    for (int r = 0; r < CALC_ROWS; ++r) {
+        for (int c = 0; c < CALC_COLS; ++c) {
+            int cell_x0 = x_edges[c] + 1;
+            int cell_y0 = y_edges[r] + 1;
+            int cell_w = x_edges[c + 1] - x_edges[c] - 1;
+            int cell_h = y_edges[r + 1] - y_edges[r] - 1;
+            if (cell_w >= 3 && cell_h >= 3) {
+                draw_key_label(fb, cell_x0, cell_y0, cell_w, cell_h, &k_keys[r][c]);
+            }
+        }
     }
 }
