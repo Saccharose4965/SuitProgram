@@ -59,7 +59,6 @@ static EXT_RAM_BSS_ATTR float window[FFT_CFG_SIZE];
 static EXT_RAM_BSS_ATTR float fft_re[FFT_CFG_SIZE];
 static EXT_RAM_BSS_ATTR float fft_im[FFT_CFG_SIZE];
 static EXT_RAM_BSS_ATTR float prev_logmag[FFT_CFG_SIZE/2+1];
-static bool    prev_logmag_valid=false;
 static float   last_cand_bpm     = 0.0f; // last candidate BPM from spectrum
 static int     bpm_stable_frames = 0;    // how many consecutive frames it's stayed similar
 
@@ -115,7 +114,6 @@ static void fft_reset_runtime_state(void){
     memset(sample_ring, 0, sizeof(sample_ring));
 
     memset(prev_logmag, 0, sizeof(prev_logmag));
-    prev_logmag_valid = false;
     last_cand_bpm = 0.0f;
     bpm_stable_frames = 0;
 
@@ -125,7 +123,7 @@ static void fft_reset_runtime_state(void){
 
     memset(local_mem, 0, sizeof(local_mem));
     local_idx = 0;
-    local_count = 0;
+    local_count = FFT_CFG_NOVELTY_WIN;
     local_sum = 0.0f;
 
     prof_accum_us = 0;
@@ -275,11 +273,17 @@ static void bpm_soft_decay_and_reset(void){
 }
 
 static void reset_novelty_baseline_state(void){
+    float baseline = 0.0f;
+    if (local_count > 0){
+        baseline = local_sum / (float)local_count;
+    }
+
+    for (int i = 0; i < FFT_CFG_NOVELTY_WIN; ++i){
+        local_mem[i] = baseline;
+    }
     local_idx = 0;
-    local_count = 0;
-    local_sum = 0.0f;
-    memset(local_mem, 0, sizeof(local_mem));
-    prev_logmag_valid = false;
+    local_count = FFT_CFG_NOVELTY_WIN;
+    local_sum = baseline * (float)FFT_CFG_NOVELTY_WIN;
 }
 
 static void apply_novelty_suppression_to_recent_history(void){
@@ -360,9 +364,8 @@ void fft_suppress_novelty_timed_ms(int backfill_ms, int future_frames)
 static float compute_novelty(const float *logmag){
     float sum = 0.0f;
 
-    if (!prev_logmag_valid){
+    if (nov_total_frames == 0){
         memcpy(prev_logmag, logmag, sizeof(prev_logmag));
-        prev_logmag_valid = true;
         return 0.0f;
     }
 

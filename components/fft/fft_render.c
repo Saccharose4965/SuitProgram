@@ -330,22 +330,23 @@ static void render_task(void *arg){
 // ------------------- Public interface -------------------
 void fft_render_push_spectrogram(const float *logmag){
     if (!logmag) return;
+    if (!g_render_enabled) return;
 
     float scale = g_disp_peak;
     if (scale < kDispPeakMin) scale = kDispPeakMin;
 
-    const int num_bins     = FFT_CFG_SIZE / 2 + 1; // full resolution
-    const int bins_per_row = 4;                // DISPLAY: 2 FFT bins -> 1 pixel row
-    const int max_covered  = PANEL_H * bins_per_row;    // max bins we can show
+    const int num_bins     = FFT_CFG_SIZE / 2 + 1;
+    const int bins_per_row = 4;
+    const int max_covered  = PANEL_H * bins_per_row;
     const int usable_bins  = (num_bins < max_covered) ? num_bins : max_covered;
-    int rows               = (usable_bins + bins_per_row - 1) / bins_per_row; // ceil
+    int rows               = (usable_bins + bins_per_row - 1) / bins_per_row;
     if (rows > PANEL_H) rows = PANEL_H;
 
     for (int y = 0; y < rows; ++y){
         int b0 = y * bins_per_row;
         int b1 = b0 + bins_per_row - 1;
         if (b0 >= usable_bins) {
-            g_spec_hist[y][g_spec_col_idx] = 0.0f;
+            g_spec_hist[y][g_spec_col_idx] = 0;
             continue;
         }
         if (b1 >= usable_bins) b1 = usable_bins - 1;
@@ -353,7 +354,7 @@ void fft_render_push_spectrogram(const float *logmag){
         float acc = 0.0f;
         int   cnt = 0;
         for (int k = b0; k <= b1; ++k){
-            acc += logmag[k];   // full-res data, only averaged for DISPLAY
+            acc += logmag[k];
             cnt++;
         }
         float v = (cnt > 0) ? acc / (float)cnt : 0.0f;
@@ -364,14 +365,12 @@ void fft_render_push_spectrogram(const float *logmag){
         g_spec_hist[y][g_spec_col_idx] = q;
     }
 
-    // Clear any rows beyond the highest mapped one
     for (int y = rows; y < PANEL_H; ++y){
         g_spec_hist[y][g_spec_col_idx] = 0;
     }
 
     g_spec_col_idx = (g_spec_col_idx + 1) % PANEL_W;
 
-    // Update running display peak for spectrum/spectrogram
     float frame_peak = 1e-3f;
     for (int k = 0; k <= FFT_CFG_SIZE/2; ++k){
         if (logmag[k] > frame_peak) frame_peak = logmag[k];
