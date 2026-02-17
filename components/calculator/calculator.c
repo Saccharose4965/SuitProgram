@@ -11,10 +11,11 @@
 
 #define CALC_EXPR_MAX 64
 #define CALC_ROWS 5
-#define CALC_COLS 4
+#define CALC_COLS 5
+#define CALC_PI 3.14159265358979323846
 
 typedef enum {
-    KEY_ACT_CHAR = 0,
+    KEY_ACT_INSERT = 0,
     KEY_ACT_EVAL,
     KEY_ACT_CLEAR,
     KEY_ACT_BACKSPACE,
@@ -23,15 +24,15 @@ typedef enum {
 typedef struct {
     const char *label;
     key_action_t action;
-    char value;
+    const char *text;
 } calc_key_t;
 
 static const calc_key_t k_keys[CALC_ROWS][CALC_COLS] = {
-    { {"7", KEY_ACT_CHAR, '7'}, {"8", KEY_ACT_CHAR, '8'}, {"9", KEY_ACT_CHAR, '9'}, {"/", KEY_ACT_CHAR, '/'} },
-    { {"4", KEY_ACT_CHAR, '4'}, {"5", KEY_ACT_CHAR, '5'}, {"6", KEY_ACT_CHAR, '6'}, {"*", KEY_ACT_CHAR, '*'} },
-    { {"1", KEY_ACT_CHAR, '1'}, {"2", KEY_ACT_CHAR, '2'}, {"3", KEY_ACT_CHAR, '3'}, {"-", KEY_ACT_CHAR, '-'} },
-    { {"0", KEY_ACT_CHAR, '0'}, {".", KEY_ACT_CHAR, '.'}, {"(", KEY_ACT_CHAR, '('}, {")", KEY_ACT_CHAR, ')'} },
-    { {"C", KEY_ACT_CLEAR, 0},   {"<", KEY_ACT_BACKSPACE, 0}, {"=", KEY_ACT_EVAL, 0},   {"+", KEY_ACT_CHAR, '+'} },
+    { {"DEL",  KEY_ACT_BACKSPACE, NULL   }, {"(",   KEY_ACT_INSERT, "("    }, {")",   KEY_ACT_INSERT, ")"    }, {"mod",  KEY_ACT_INSERT, "%"    }, {"sqrt", KEY_ACT_INSERT, "sqrt("} },
+    { {"7",    KEY_ACT_INSERT,    "7"    }, {"8",   KEY_ACT_INSERT, "8"    }, {"9",   KEY_ACT_INSERT, "9"    }, {"/",    KEY_ACT_INSERT, "/"    }, {"x^2",  KEY_ACT_INSERT, "^2"   } },
+    { {"4",    KEY_ACT_INSERT,    "4"    }, {"5",   KEY_ACT_INSERT, "5"    }, {"6",   KEY_ACT_INSERT, "6"    }, {"*",    KEY_ACT_INSERT, "*"    }, {"ln",   KEY_ACT_INSERT, "ln("  } },
+    { {"1",    KEY_ACT_INSERT,    "1"    }, {"2",   KEY_ACT_INSERT, "2"    }, {"3",   KEY_ACT_INSERT, "3"    }, {"-",    KEY_ACT_INSERT, "-"    }, {"e^x",  KEY_ACT_INSERT, "exp(" } },
+    { {"0",    KEY_ACT_INSERT,    "0"    }, {".",   KEY_ACT_INSERT, "."    }, {"pi",  KEY_ACT_INSERT, "pi"   }, {"+",    KEY_ACT_INSERT, "+"    }, {"=",    KEY_ACT_EVAL,   NULL   } },
 };
 
 typedef struct {
@@ -54,7 +55,7 @@ typedef struct {
 
 static inline bool is_op(char c)
 {
-    return c == '+' || c == '-' || c == '*' || c == '/';
+    return c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '^';
 }
 
 static inline bool fb_in_bounds(int x, int y)
@@ -100,6 +101,32 @@ static void parser_skip_ws(parser_t *p)
 }
 
 static double parser_parse_expr(parser_t *p);
+static double parser_parse_term(parser_t *p);
+static double parser_parse_power(parser_t *p);
+static double parser_parse_unary(parser_t *p);
+static double parser_parse_primary(parser_t *p);
+
+static bool parser_match_kw(parser_t *p, const char *kw)
+{
+    if (!p || !kw) return false;
+    parser_skip_ws(p);
+
+    size_t start = p->pos;
+    size_t n = strlen(kw);
+    size_t remaining = strlen(p->s + start);
+    if (remaining < n) {
+        return false;
+    }
+    if (strncmp(p->s + start, kw, n) != 0) {
+        return false;
+    }
+    char tail = p->s[start + n];
+    if (isalnum((unsigned char)tail) || tail == '_') {
+        return false;
+    }
+    p->pos = start + n;
+    return true;
+}
 
 static double parser_parse_number(parser_t *p)
 {
@@ -118,20 +145,12 @@ static double parser_parse_number(parser_t *p)
     return v;
 }
 
-static double parser_parse_factor(parser_t *p)
+static double parser_parse_primary(parser_t *p)
 {
     if (!p) return 0.0;
     parser_skip_ws(p);
 
     char c = p->s[p->pos];
-    if (c == '+') {
-        p->pos++;
-        return parser_parse_factor(p);
-    }
-    if (c == '-') {
-        p->pos++;
-        return -parser_parse_factor(p);
-    }
     if (c == '(') {
         p->pos++;
         double v = parser_parse_expr(p);
@@ -144,32 +163,152 @@ static double parser_parse_factor(parser_t *p)
         return v;
     }
 
+    if (isalpha((unsigned char)c)) {
+        if (parser_match_kw(p, "pi")) {
+            return CALC_PI;
+        }
+        if (parser_match_kw(p, "sqrt")) {
+            parser_skip_ws(p);
+            if (p->s[p->pos] != '(') {
+                p->ok = false;
+                return 0.0;
+            }
+            p->pos++;
+            double arg = parser_parse_expr(p);
+            parser_skip_ws(p);
+            if (!p->ok || p->s[p->pos] != ')' || arg < 0.0) {
+                p->ok = false;
+                return 0.0;
+            }
+            p->pos++;
+            return sqrt(arg);
+        }
+        if (parser_match_kw(p, "ln")) {
+            parser_skip_ws(p);
+            if (p->s[p->pos] != '(') {
+                p->ok = false;
+                return 0.0;
+            }
+            p->pos++;
+            double arg = parser_parse_expr(p);
+            parser_skip_ws(p);
+            if (!p->ok || p->s[p->pos] != ')' || arg <= 0.0) {
+                p->ok = false;
+                return 0.0;
+            }
+            p->pos++;
+            return log(arg);
+        }
+        if (parser_match_kw(p, "exp")) {
+            parser_skip_ws(p);
+            if (p->s[p->pos] != '(') {
+                p->ok = false;
+                return 0.0;
+            }
+            p->pos++;
+            double arg = parser_parse_expr(p);
+            parser_skip_ws(p);
+            if (!p->ok || p->s[p->pos] != ')') {
+                p->ok = false;
+                return 0.0;
+            }
+            p->pos++;
+            double v = exp(arg);
+            if (!isfinite(v)) {
+                p->ok = false;
+                return 0.0;
+            }
+            return v;
+        }
+        p->ok = false;
+        return 0.0;
+    }
+
     return parser_parse_number(p);
+}
+
+static double parser_parse_unary(parser_t *p)
+{
+    if (!p) return 0.0;
+    parser_skip_ws(p);
+    char c = p->s[p->pos];
+
+    if (c == '+') {
+        p->pos++;
+        return parser_parse_unary(p);
+    }
+    if (c == '-') {
+        p->pos++;
+        return -parser_parse_unary(p);
+    }
+
+    return parser_parse_primary(p);
+}
+
+static double parser_parse_power(parser_t *p)
+{
+    if (!p) return 0.0;
+    double base = parser_parse_unary(p);
+    if (!p->ok) return 0.0;
+
+    parser_skip_ws(p);
+    if (p->s[p->pos] == '^') {
+        p->pos++;
+        double rhs = parser_parse_power(p); // right-associative exponentiation
+        if (!p->ok) return 0.0;
+
+        double v = pow(base, rhs);
+        if (!isfinite(v)) {
+            p->ok = false;
+            return 0.0;
+        }
+        return v;
+    }
+
+    return base;
 }
 
 static double parser_parse_term(parser_t *p)
 {
     if (!p) return 0.0;
-    double v = parser_parse_factor(p);
+    double v = parser_parse_power(p);
 
     while (p->ok) {
         parser_skip_ws(p);
-        char op = p->s[p->pos];
-        if (op != '*' && op != '/') break;
+        char op = '\0';
+        if (p->s[p->pos] == '*' || p->s[p->pos] == '/' || p->s[p->pos] == '%') {
+            op = p->s[p->pos];
+            p->pos++;
+        } else if (parser_match_kw(p, "mod")) {
+            op = '%';
+        } else {
+            break;
+        }
 
-        p->pos++;
-        double rhs = parser_parse_factor(p);
+        double rhs = parser_parse_power(p);
         if (!p->ok) return 0.0;
 
         if (op == '*') {
             v *= rhs;
-        } else {
+        } else if (op == '/') {
             if (fabs(rhs) <= 1e-12) {
                 p->ok = false;
                 p->div_zero = true;
                 return 0.0;
             }
             v /= rhs;
+        } else { // '%'
+            if (fabs(rhs) <= 1e-12) {
+                p->ok = false;
+                p->div_zero = true;
+                return 0.0;
+            }
+            v = fmod(v, rhs);
+        }
+
+        if (!isfinite(v)) {
+            p->ok = false;
+            return 0.0;
         }
     }
 
@@ -238,7 +377,7 @@ static bool can_append_dot(void)
     for (int i = (int)s_calc.len - 1; i >= 0; --i) {
         char c = s_calc.expr[i];
         if (c == '.') return false;
-        if (is_op(c) || c == '(' || c == ')') return true;
+        if (is_op(c) || c == '(' || c == ')' || isalpha((unsigned char)c)) return true;
     }
     return true;
 }
@@ -251,49 +390,69 @@ static void set_status(const char *msg, bool is_error)
     s_calc.status_is_error = is_error;
 }
 
-static void append_char(char c)
+static inline char expr_prev_char(void)
 {
-    if (s_calc.len + 1 >= sizeof(s_calc.expr)) {
+    return (s_calc.len > 0) ? s_calc.expr[s_calc.len - 1] : '\0';
+}
+
+static inline bool expr_ends_with_value(void)
+{
+    char prev = expr_prev_char();
+    return isdigit((unsigned char)prev) || prev == ')' || prev == '.' || prev == 'i';
+}
+
+static bool append_raw(const char *text)
+{
+    if (!text || !text[0]) return false;
+    size_t n = strlen(text);
+    if (s_calc.len + n >= sizeof(s_calc.expr)) {
         set_status("FULL", true);
-        return;
+        return false;
     }
+    memcpy(s_calc.expr + s_calc.len, text, n);
+    s_calc.len += n;
+    s_calc.expr[s_calc.len] = '\0';
+    return true;
+}
 
-    char prev = (s_calc.len > 0) ? s_calc.expr[s_calc.len - 1] : '\0';
+static void append_insert(const char *text)
+{
+    if (!text || !text[0]) return;
 
-    if (isdigit((unsigned char)c)) {
-        if (prev == ')') {
+    char prev = expr_prev_char();
+    size_t tok_len = strlen(text);
+
+    if (tok_len == 1 && isdigit((unsigned char)text[0])) {
+        if (prev == ')' || prev == 'i') {
             set_status("need op", true);
             return;
         }
-        s_calc.expr[s_calc.len++] = c;
-        s_calc.expr[s_calc.len] = '\0';
+        if (append_raw(text)) set_status("", false);
         return;
     }
 
-    if (c == '.') {
-        if (prev == ')' || !can_append_dot()) {
+    if (strcmp(text, ".") == 0) {
+        if (prev == ')' || isalpha((unsigned char)prev) || !can_append_dot()) {
             set_status("dot", true);
             return;
         }
         if (s_calc.len == 0 || is_op(prev) || prev == '(') {
-            s_calc.expr[s_calc.len++] = '0';
+            if (!append_raw("0")) return;
         }
-        s_calc.expr[s_calc.len++] = '.';
-        s_calc.expr[s_calc.len] = '\0';
+        if (append_raw(".")) set_status("", false);
         return;
     }
 
-    if (c == '(') {
-        if (s_calc.len > 0 && (isdigit((unsigned char)prev) || prev == ')' || prev == '.')) {
+    if (strcmp(text, "(") == 0) {
+        if (expr_ends_with_value()) {
             set_status("need *", true);
             return;
         }
-        s_calc.expr[s_calc.len++] = '(';
-        s_calc.expr[s_calc.len] = '\0';
+        if (append_raw("(")) set_status("", false);
         return;
     }
 
-    if (c == ')') {
+    if (strcmp(text, ")") == 0) {
         if (expr_balance_parens() <= 0) {
             set_status(") err", true);
             return;
@@ -302,16 +461,36 @@ static void append_char(char c)
             set_status(") err", true);
             return;
         }
-        s_calc.expr[s_calc.len++] = ')';
-        s_calc.expr[s_calc.len] = '\0';
+        if (append_raw(")")) set_status("", false);
         return;
     }
 
-    if (is_op(c)) {
+    if (strcmp(text, "pi") == 0 ||
+        strcmp(text, "sqrt(") == 0 ||
+        strcmp(text, "ln(") == 0 ||
+        strcmp(text, "exp(") == 0) {
+        if (expr_ends_with_value()) {
+            set_status("need *", true);
+            return;
+        }
+        if (append_raw(text)) set_status("", false);
+        return;
+    }
+
+    if (strcmp(text, "^2") == 0) {
+        if (!expr_ends_with_value()) {
+            set_status("pow err", true);
+            return;
+        }
+        if (append_raw("^2")) set_status("", false);
+        return;
+    }
+
+    if (tok_len == 1 && is_op(text[0])) {
+        char c = text[0];
         if (s_calc.len == 0) {
             if (c == '-') {
-                s_calc.expr[s_calc.len++] = '-';
-                s_calc.expr[s_calc.len] = '\0';
+                if (append_raw("-")) set_status("", false);
             } else {
                 set_status("op err", true);
             }
@@ -320,8 +499,7 @@ static void append_char(char c)
 
         if (prev == '(') {
             if (c == '-') {
-                s_calc.expr[s_calc.len++] = '-';
-                s_calc.expr[s_calc.len] = '\0';
+                if (append_raw("-")) set_status("", false);
             } else {
                 set_status("op err", true);
             }
@@ -330,17 +508,20 @@ static void append_char(char c)
 
         if (is_op(prev)) {
             s_calc.expr[s_calc.len - 1] = c;
+            set_status("", false);
             return;
         }
 
-        if (prev == '.') {
+        if (!expr_ends_with_value()) {
             set_status("op err", true);
             return;
         }
 
-        s_calc.expr[s_calc.len++] = c;
-        s_calc.expr[s_calc.len] = '\0';
+        if (append_raw(text)) set_status("", false);
+        return;
     }
+
+    if (append_raw(text)) set_status("", false);
 }
 
 static void apply_key(const calc_key_t *key)
@@ -385,8 +566,8 @@ static void apply_key(const calc_key_t *key)
         return;
     }
 
-    if (key->action == KEY_ACT_CHAR) {
-        append_char(key->value);
+    if (key->action == KEY_ACT_INSERT) {
+        append_insert(key->text);
     }
 }
 
@@ -415,80 +596,93 @@ void calculator_handle_input(const input_event_t *ev)
     }
 }
 
-static void draw_expr_line(uint8_t *fb, int x, int y, int w)
+static void draw_window_line(uint8_t *fb, int x, int y, int w, const char *prefix, const char *text)
 {
-    char line[40];
-    const int max_chars = (w > 8) ? ((w - 8) / 4) : 1;
-    if (max_chars <= 0) return;
-    if (max_chars <= 2) {
-        oled_draw_text3x5(fb, x + 2, y, "E");
-        return;
-    }
+    if (!fb || w <= 4) return;
 
-    const char *expr = s_calc.expr;
-    size_t len = s_calc.len;
-    if (len == 0) {
-        snprintf(line, sizeof(line), "E:0");
-    } else {
-        size_t keep = len;
-        if ((int)keep > max_chars - 2) {
-            keep = (size_t)(max_chars - 2);
-            expr = s_calc.expr + (len - keep);
-            snprintf(line, sizeof(line), "E:%s", expr);
-            if ((int)strlen(line) > max_chars) {
-                line[max_chars] = '\0';
-            }
-        } else {
-            snprintf(line, sizeof(line), "E:%s", expr);
+    int max_chars = (w - 4) / 4;
+    if (max_chars <= 0) return;
+
+    char line[48];
+    int out = 0;
+
+    if (prefix) {
+        for (const char *p = prefix; *p && out < max_chars; ++p) {
+            line[out++] = *p;
         }
     }
 
+    if (text && out < max_chars) {
+        int text_len = (int)strlen(text);
+        int keep = max_chars - out;
+        int start = (text_len > keep) ? (text_len - keep) : 0;
+        for (int i = start; i < text_len && out < max_chars; ++i) {
+            line[out++] = text[i];
+        }
+    }
+
+    line[out] = '\0';
     oled_draw_text3x5(fb, x + 2, y, line);
 }
 
 void calculator_draw(uint8_t *fb, int x, int y, int w, int h)
 {
-    if (!fb) return;
+    if (!fb || w <= 0 || h <= 0) return;
 
-    oled_draw_text3x5(fb, x + 2, y + 1, "CALC");
-    draw_expr_line(fb, x, y + 8, w);
+    int pad_gap = 2;
+    int pad_w = (w * 7) / 10;
+    if (pad_w < CALC_COLS * 10) pad_w = CALC_COLS * 10;
+    if (pad_w > w - 12) pad_w = w - 12;
+
+    int window_w = w - pad_w - pad_gap;
+    if (window_w < 10) {
+        window_w = 10;
+        pad_w = w - window_w - pad_gap;
+    }
+    if (pad_w < CALC_COLS * 6) return;
+
+    int window_x = x;
+    int pad_x = window_x + window_w + pad_gap;
+
+    fb_rect_outline(fb, window_x, y, window_w, h);
+    fb_rect_outline(fb, pad_x, y, pad_w, h);
+
+    draw_window_line(fb, window_x, y + 2, window_w, "CALC", NULL);
+    draw_window_line(fb, window_x, y + 10, window_w, "E:", s_calc.len ? s_calc.expr : "0");
 
     if (s_calc.status[0]) {
-        char line[24];
-        snprintf(line, sizeof(line), "%s%s", s_calc.status_is_error ? "!" : "", s_calc.status);
-        oled_draw_text3x5(fb, x + 2, y + 14, line);
+        draw_window_line(fb, window_x, y + 18, window_w, s_calc.status_is_error ? "!" : "", s_calc.status);
     }
 
-    int top = y + 22;
-    int avail_h = h - (top - y);
-    if (avail_h < CALC_ROWS * 6) return;
-
-    int cell_w = w / CALC_COLS;
-    if (cell_w < 10) cell_w = 10;
-
-    int cell_h = avail_h / CALC_ROWS;
-    if (cell_h > 8) cell_h = 8;
-    if (cell_h < 6) cell_h = 6;
+    const calc_key_t *sel = &k_keys[s_calc.row][s_calc.col];
+    int key_line_y = y + h - 7;
+    if (key_line_y >= y + 26) {
+        draw_window_line(fb, window_x, key_line_y, window_w, "K:", sel->label);
+    }
 
     for (int r = 0; r < CALC_ROWS; ++r) {
-        for (int c = 0; c < CALC_COLS; ++c) {
-            int cx = x + c * cell_w;
-            int cy = top + r * cell_h;
-            int bw = cell_w - 1;
-            int bh = cell_h - 1;
-            if (bw < 6 || bh < 5) continue;
+        int cy0 = y + (r * h) / CALC_ROWS;
+        int cy1 = y + ((r + 1) * h) / CALC_ROWS - 1;
+        int bh = cy1 - cy0 + 1;
+        if (bh < 5) continue;
 
-            fb_rect_outline(fb, cx, cy, bw, bh);
-            if (r == s_calc.row && c == s_calc.col) {
-                fb_rect_outline(fb, cx + 1, cy + 1, bw - 2, bh - 2);
+        for (int c = 0; c < CALC_COLS; ++c) {
+            int cx0 = pad_x + (c * pad_w) / CALC_COLS;
+            int cx1 = pad_x + ((c + 1) * pad_w) / CALC_COLS - 1;
+            int bw = cx1 - cx0 + 1;
+            if (bw < 6) continue;
+
+            fb_rect_outline(fb, cx0, cy0, bw, bh);
+            if (r == s_calc.row && c == s_calc.col && bw > 4 && bh > 4) {
+                fb_rect_outline(fb, cx0 + 1, cy0 + 1, bw - 2, bh - 2);
             }
 
             const char *label = k_keys[r][c].label;
-            int len = (int)strlen(label);
-            int tx = cx + (bw - (len * 4)) / 2;
-            if (tx < cx + 1) tx = cx + 1;
-            int ty = cy + ((bh - 5) / 2);
-            if (ty < cy + 1) ty = cy + 1;
+            int label_len = (int)strlen(label);
+            int tx = cx0 + (bw - (label_len * 4)) / 2;
+            if (tx < cx0 + 1) tx = cx0 + 1;
+            int ty = cy0 + ((bh - 5) / 2);
+            if (ty < cy0 + 1) ty = cy0 + 1;
             oled_draw_text3x5(fb, tx, ty, label);
         }
     }

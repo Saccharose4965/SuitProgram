@@ -6,6 +6,7 @@
 
 #include "esp_err.h"
 
+#include "audio_player.h"
 #include "bad_apple.h"
 #include "storage_sd.h"
 
@@ -26,6 +27,13 @@ static const bad_apple_source_candidate_t k_sources[] = {
     { "/sdcard/video.uc",           BAD_APPLE_SOURCE_RAW,            "raw"    },
     { "/sdcard/badapple/video.bin", BAD_APPLE_SOURCE_RAW,            "raw"    },
     { "/sdcard/video.bin",          BAD_APPLE_SOURCE_RAW,            "raw"    },
+};
+
+static const char *k_audio_paths[] = {
+    "/sdcard/badapple/BadApple.wav",
+    "/sdcard/BadApple.wav",
+    "/sdcard/badapple/badapple.wav",
+    "/sdcard/badapple.wav",
 };
 
 typedef struct {
@@ -57,6 +65,16 @@ static int find_first_available_source(void)
         if (file_exists(k_sources[i].path)) return (int)i;
     }
     return -1;
+}
+
+static void request_bad_apple_audio_start(void)
+{
+    for (size_t i = 0; i < sizeof(k_audio_paths) / sizeof(k_audio_paths[0]); ++i) {
+        const char *path = k_audio_paths[i];
+        if (!file_exists(path)) continue;
+        (void)audio_player_play(path);
+        return;
+    }
 }
 
 static esp_err_t start_source_index(int idx)
@@ -136,13 +154,16 @@ void bad_apple_app_init(shell_app_context_t *ctx)
         return;
     }
 
-    (void)start_source_index(idx);
+    if (start_source_index(idx) == ESP_OK) {
+        request_bad_apple_audio_start();
+    }
 }
 
 void bad_apple_app_deinit(shell_app_context_t *ctx)
 {
     (void)ctx;
     bad_apple_stop();
+    audio_player_stop();
 }
 
 void bad_apple_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
@@ -158,6 +179,9 @@ void bad_apple_app_handle_input(shell_app_context_t *ctx, const input_event_t *e
         bad_apple_toggle_pause();
     } else if (ev->button == INPUT_BTN_D) {
         s_bad_apple_app.last_err = bad_apple_restart();
+        if (s_bad_apple_app.last_err == ESP_OK) {
+            request_bad_apple_audio_start();
+        }
     }
 }
 
@@ -217,7 +241,8 @@ void bad_apple_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int
         char line[48];
         snprintf(line, sizeof(line), "Src: %s", source_label_for_index(s_bad_apple_app.current_source));
         oled_draw_text3x5(fb, 2, 10, line);
-        snprintf(line, sizeof(line), "File: %s", st.path);
+        const int max_file_chars = (int)sizeof(line) - (int)sizeof("File: ");
+        snprintf(line, sizeof(line), "File: %.*s", max_file_chars, st.path);
         oled_draw_text3x5(fb, 2, 18, line);
     }
 

@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <errno.h>
 #include <sys/unistd.h>   // fsync
 #include <sys/stat.h>
@@ -51,6 +52,11 @@ static const char *TAG = "audio_rx";
 #define AUDIO_RX_LOG_BYTES     (128 * 1024)
 // RX rate limit (bytes/sec). Set to 0 to disable.
 #define AUDIO_RX_RATE_LIMIT_BPS (100 * 1024)  // throttle to ~100 KB/s
+// Optional metadata line prefix sent before file bytes.
+// Format: "SUITRX1 <filename>\n" followed by raw audio bytes.
+#define AUDIO_RX_META_PREFIX "SUITRX1 "
+#define AUDIO_RX_META_MAX_BYTES 256
+#define AUDIO_RX_NAME_MAX 96
 
 // Task priority (keep below the UI / main loop)
 #define AUDIO_RX_TASK_PRIO     1
@@ -159,14 +165,219 @@ static void audio_rx_store_index(uint32_t idx)
     fclose(f);
 }
 
-// Build paths for the next recording (counter only, no directory scan).
+static bool audio_rx_path_exists(const char *path)
+{
+    if (!path || !path[0]) return false;
+    struct stat st;
+    return stat(path, &st) == 0;
+}
+
+static bool audio_rx_has_extension(const char *name)
+{
+    if (!name || !name[0]) return false;
+    const char *dot = strrchr(name, '.');
+    return dot && dot != name && dot[1] != '\0';
+}
+
+static void audio_rx_sanitize_filename(const char *in, char *out, size_t out_len)
+{
+    if (!out || out_len == 0) return;
+    out[0] = '\0';
+    if (!in || !in[0]) return;
+
+    // Drop any path prefix from the sender.
+    const char *base = in;
+    for (const char *p = in; *p; ++p) {
+        if (*p == '/' || *p == '\\') base = p + 1;
+    }
+
+    size_t j = 0;
+    for (const char *p = base; *p && j + 1 < out_len; ++p) {
+        unsigned char ch = (unsigned char)*p;
+        if (isalnum(ch) || ch == '_' || ch == '-' || ch == '.') {
+            out[j++] = (char)ch;
+        } else if (ch == ' ') {
+            out[j++] = '_';
+        } else {
+            out[j++] = '_';
+        }
+    }
+    while (j > 0 && (out[j - 1] == '_' || out[j - 1] == '.')) {
+        --j;
+    }
+    out[j] = '\0';
+
+    if (j == 0) {
+        snprintf(out, out_len, "track.wav");
+        return;
+    }
+
+    if (!audio_rx_has_extension(out)) {
+        size_t n = strlen(out);
+        if (n + 4 < out_len) {
+            memcpy(out + n, ".wav", 5); // includes trailing '\0'
+        } else {
+            while (n > 0 && n + 4 >= out_len) {
+                out[--n] = '\0';
+            }
+            if (n == 0) {
+                snprintf(out, out_len, "track.wav");
+            } else {
+                memcpy(out + n, ".wav", 5);
+            }
+        }
+    }
+}
+
+// Build paths for the next recording.
+// If name_hint is set, use it as the final output filename (sanitized).
 static uint32_t audio_rx_make_paths(char *path_final, size_t final_len,
-                                    char *path_tmp, size_t tmp_len)
+                                    char *path_tmp, size_t tmp_len,
+                                    const char *name_hint)
 {
     uint32_t idx = s_file_index + 1;
-    snprintf(path_final, final_len, "/sdcard/rx_rec_%05u.wav", (unsigned)idx);
-    snprintf(path_tmp,   tmp_len,   "/sdcard/rx_rec_%05u.part", (unsigned)idx);
+    snprintf(path_tmp, tmp_len, "/sdcard/rx_rec_%05u.part", (unsigned)idx);
+
+    char safe_name[AUDIO_RX_NAME_MAX];
+    audio_rx_sanitize_filename(name_hint, safe_name, sizeof(safe_name));
+    if (safe_name[0]) {
+        snprintf(path_final, final_len, "/sdcard/%s", safe_name);
+        if (audio_rx_path_exists(path_final)) {
+            const char *dot = strrchr(safe_name, '.');
+            if (dot && dot != safe_name) {
+                size_t stem_len = (size_t)(dot - safe_name);
+                snprintf(path_final, final_len, "/sdcard/%.*s_%05u%s",
+                         (int)stem_len, safe_name, (unsigned)idx, dot);
+            } else {
+                snprintf(path_final, final_len, "/sdcard/%s_%05u",
+                         safe_name, (unsigned)idx);
+            }
+        }
+    } else {
+        snprintf(path_final, final_len, "/sdcard/rx_rec_%05u.wav", (unsigned)idx);
+    }
     return idx;
+}
+
+static bool audio_rx_parse_meta_header(const uint8_t *buf, size_t buf_len,
+                                       char *out_name, size_t out_name_len,
+                                       size_t *out_data_offset)
+{
+    if (!buf || !out_name || out_name_len == 0 || !out_data_offset) return false;
+    out_name[0] = '\0';
+    *out_data_offset = 0;
+
+    const size_t prefix_len = strlen(AUDIO_RX_META_PREFIX);
+    if (buf_len < prefix_len || memcmp(buf, AUDIO_RX_META_PREFIX, prefix_len) != 0) {
+        return false;
+    }
+
+    size_t scan_limit = buf_len;
+    if (scan_limit > AUDIO_RX_META_MAX_BYTES) {
+        scan_limit = AUDIO_RX_META_MAX_BYTES;
+    }
+    for (size_t i = prefix_len; i < scan_limit; ++i) {
+        if (buf[i] == '\n') {
+            size_t raw_len = i - prefix_len;
+            char raw[AUDIO_RX_NAME_MAX];
+            if (raw_len >= sizeof(raw)) {
+                raw_len = sizeof(raw) - 1;
+            }
+            memcpy(raw, buf + prefix_len, raw_len);
+            raw[raw_len] = '\0';
+            while (raw_len > 0 &&
+                   (raw[raw_len - 1] == '\r' ||
+                    raw[raw_len - 1] == ' ' ||
+                    raw[raw_len - 1] == '\t')) {
+                raw[--raw_len] = '\0';
+            }
+            audio_rx_sanitize_filename(raw, out_name, out_name_len);
+            *out_data_offset = i + 1;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static esp_err_t audio_rx_recv_initial_payload(int sock,
+                                               uint8_t *buf,
+                                               size_t buf_cap,
+                                               size_t *out_len,
+                                               char *out_name,
+                                               size_t out_name_len)
+{
+    if (!buf || buf_cap == 0 || !out_len) return ESP_ERR_INVALID_ARG;
+    *out_len = 0;
+    if (out_name && out_name_len > 0) {
+        out_name[0] = '\0';
+    }
+
+    ssize_t r = recv(sock, buf, buf_cap, 0);
+    if (r == 0) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    if (r < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return ESP_ERR_TIMEOUT;
+        }
+        return ESP_FAIL;
+    }
+
+    size_t used = (size_t)r;
+    const size_t prefix_len = strlen(AUDIO_RX_META_PREFIX);
+    size_t payload_off = 0;
+    bool parsed_meta = false;
+
+    if (used >= prefix_len && memcmp(buf, AUDIO_RX_META_PREFIX, prefix_len) == 0) {
+        int64_t header_wait_start_us = esp_timer_get_time();
+        while (!parsed_meta) {
+            parsed_meta = audio_rx_parse_meta_header(
+                buf, used, out_name, out_name_len, &payload_off);
+            if (parsed_meta) {
+                break;
+            }
+            if (used >= AUDIO_RX_META_MAX_BYTES || used >= buf_cap) {
+                ESP_LOGW(TAG, "RX: metadata header too long; treating as raw payload");
+                payload_off = 0;
+                break;
+            }
+            r = recv(sock, buf + used, buf_cap - used, 0);
+            if (r == 0) {
+                ESP_LOGW(TAG, "RX: connection closed while reading metadata header");
+                payload_off = 0;
+                break;
+            }
+            if (r < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    if (esp_timer_get_time() - header_wait_start_us > 5000000) {
+                        ESP_LOGW(TAG, "RX: metadata header timeout; treating as raw payload");
+                        payload_off = 0;
+                        break;
+                    }
+                    continue;
+                }
+                ESP_LOGW(TAG, "RX: metadata recv error (%d); treating as raw payload", errno);
+                payload_off = 0;
+                break;
+            }
+            used += (size_t)r;
+        }
+    }
+
+    if (parsed_meta && out_name && out_name[0]) {
+        ESP_LOGI(TAG, "RX metadata: name='%s'", out_name);
+    }
+
+    if (payload_off > 0 && payload_off < used) {
+        memmove(buf, buf + payload_off, used - payload_off);
+        used -= payload_off;
+    } else if (payload_off >= used) {
+        used = 0;
+    }
+
+    *out_len = used;
+    return ESP_OK;
 }
 
 typedef struct {
@@ -271,7 +482,7 @@ static void audio_rx_writer_task(void *arg)
 
         size_t item_size = 0;
         uint8_t *item = (uint8_t *)xRingbufferReceiveUpTo(
-            ring_local, &item_size, AUDIO_RX_WRITE_CHUNK, pdMS_TO_TICKS(200));
+            ring_local, &item_size, pdMS_TO_TICKS(200), AUDIO_RX_WRITE_CHUNK);
 
         if (!item) {
             continue;
@@ -365,11 +576,37 @@ static void audio_rx_task(void *arg)
                   addr_str, sizeof(addr_str));
         ESP_LOGI(TAG, "New client from %s", addr_str);
 
-        // Build file name (write to .part then rename on success)
-        char path_final[64];
+        // Optional recv timeout so we don't block forever.
+        struct timeval tv = {
+            .tv_sec  = 5,
+            .tv_usec = 0
+        };
+        setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+        // Read an optional metadata line + first payload bytes.
+        char name_hint[AUDIO_RX_NAME_MAX] = {0};
+        size_t preloaded_len = 0;
+        esp_err_t intro_err = audio_rx_recv_initial_payload(
+            client_sock,
+            s_rx_chunk_buf,
+            sizeof(s_rx_chunk_buf),
+            &preloaded_len,
+            name_hint,
+            sizeof(name_hint));
+        if (intro_err != ESP_OK) {
+            ESP_LOGW(TAG, "RX: no payload from %s (err=%s), closing client",
+                     addr_str, esp_err_to_name(intro_err));
+            shutdown(client_sock, SHUT_RDWR);
+            close(client_sock);
+            continue;
+        }
+
+        // Build file name (write to .part then rename on success).
+        char path_final[128];
         char path_tmp[64];
         uint32_t idx = audio_rx_make_paths(path_final, sizeof(path_final),
-                                           path_tmp, sizeof(path_tmp));
+                                           path_tmp, sizeof(path_tmp),
+                                           name_hint);
         ESP_LOGI(TAG, "Recording will be written to '%s' (tmp '%s')", path_final, path_tmp);
 
         FILE *f = fopen(path_tmp, "wb");
@@ -397,13 +634,6 @@ static void audio_rx_task(void *arg)
         ESP_LOGI(TAG, "audio_rx: rate limit %u KB/s",
                  (unsigned)(AUDIO_RX_RATE_LIMIT_BPS / 1024));
 #endif
-
-        // Optional recv timeout so we don't block forever
-        struct timeval tv = {
-            .tv_sec  = 5,
-            .tv_usec = 0
-        };
-        setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
         RingbufHandle_t ring = xRingbufferCreateWithCaps(
             AUDIO_RX_RING_BYTES, RINGBUF_TYPE_BYTEBUF, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -505,19 +735,25 @@ static void audio_rx_task(void *arg)
                 }
             }
 
-            ssize_t r = recv(client_sock, buf, AUDIO_RX_CHUNK_SIZE, 0);
-            if (r < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    // timeout, keep waiting (yield so UI stays responsive)
-                    audio_rx_yield_wait();
-                    continue;
+            ssize_t r = 0;
+            if (preloaded_len > 0) {
+                r = (ssize_t)preloaded_len;
+                preloaded_len = 0;
+            } else {
+                r = recv(client_sock, buf, AUDIO_RX_CHUNK_SIZE, 0);
+                if (r < 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        // timeout, keep waiting (yield so UI stays responsive)
+                        audio_rx_yield_wait();
+                        continue;
+                    }
+                    ESP_LOGE(TAG, "recv() error from %s: errno=%d", addr_str, errno);
+                    break;
+                } else if (r == 0) {
+                    // client closed
+                    ESP_LOGI(TAG, "Client finished sending '%s'", path_tmp);
+                    break;
                 }
-                ESP_LOGE(TAG, "recv() error from %s: errno=%d", addr_str, errno);
-                break;
-            } else if (r == 0) {
-                // client closed
-                ESP_LOGI(TAG, "Client finished sending '%s'", path_tmp);
-                break;
             }
             total_received += (size_t)r;
 
