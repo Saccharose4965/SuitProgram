@@ -18,8 +18,10 @@
 static const char *TAG = "settings";
 
 static app_settings_t s_settings = {
-    .volume = 1.0f,
-    .muted = false,
+    .speaker_volume = 1.0f,
+    .bt_volume = 1.0f,
+    .speaker_muted = false,
+    .bt_muted = false,
 };
 
 static float clamp_volume(float v)
@@ -40,14 +42,11 @@ static int volume_to_bt_percent(float v)
 static void apply_audio_volume(const app_settings_t *s)
 {
     if (!s) return;
-    float v = clamp_volume(s->volume);
-    if (s->muted) {
-        audio_set_volume(0.0f);
-        bt_audio_volume_set_percent(0);
-        return;
-    }
-    audio_set_volume(v);
-    bt_audio_volume_set_percent(volume_to_bt_percent(v));
+    float spk = clamp_volume(s->speaker_volume);
+    float bt = clamp_volume(s->bt_volume);
+
+    audio_set_volume(s->speaker_muted ? 0.0f : spk);
+    bt_audio_volume_set_percent(s->bt_muted ? 0 : volume_to_bt_percent(bt));
 }
 
 static char *trim(char *s)
@@ -82,16 +81,46 @@ static bool settings_load_from_sd(app_settings_t *out)
         char *key = trim(p);
         char *val = trim(eq + 1);
         if (strcmp(key, "volume") == 0) {
+            // Backward-compat legacy key: apply to both sinks.
             char *end = NULL;
             float v = strtof(val, &end);
             if (end != val) {
-                tmp.volume = clamp_volume(v);
+                float clamped = clamp_volume(v);
+                tmp.speaker_volume = clamped;
+                tmp.bt_volume = clamped;
             }
         } else if (strcmp(key, "muted") == 0) {
+            // Backward-compat legacy key: apply to both sinks.
             char *end = NULL;
             long m = strtol(val, &end, 10);
             if (end != val) {
-                tmp.muted = (m != 0);
+                bool muted = (m != 0);
+                tmp.speaker_muted = muted;
+                tmp.bt_muted = muted;
+            }
+        } else if (strcmp(key, "speaker_volume") == 0) {
+            char *end = NULL;
+            float v = strtof(val, &end);
+            if (end != val) {
+                tmp.speaker_volume = clamp_volume(v);
+            }
+        } else if (strcmp(key, "bt_volume") == 0) {
+            char *end = NULL;
+            float v = strtof(val, &end);
+            if (end != val) {
+                tmp.bt_volume = clamp_volume(v);
+            }
+        } else if (strcmp(key, "speaker_muted") == 0) {
+            char *end = NULL;
+            long m = strtol(val, &end, 10);
+            if (end != val) {
+                tmp.speaker_muted = (m != 0);
+            }
+        } else if (strcmp(key, "bt_muted") == 0) {
+            char *end = NULL;
+            long m = strtol(val, &end, 10);
+            if (end != val) {
+                tmp.bt_muted = (m != 0);
             }
         }
     }
@@ -117,8 +146,10 @@ static void settings_save_to_sd(const app_settings_t *s)
         return;
     }
 
-    fprintf(f, "volume=%.2f\n", s->volume);
-    fprintf(f, "muted=%d\n", s->muted ? 1 : 0);
+    fprintf(f, "speaker_volume=%.2f\n", clamp_volume(s->speaker_volume));
+    fprintf(f, "bt_volume=%.2f\n", clamp_volume(s->bt_volume));
+    fprintf(f, "speaker_muted=%d\n", s->speaker_muted ? 1 : 0);
+    fprintf(f, "bt_muted=%d\n", s->bt_muted ? 1 : 0);
     fflush(f);
     int fd = fileno(f);
     if (fd >= 0) fsync(fd);
@@ -145,10 +176,16 @@ const app_settings_t *app_settings_get(void)
     return &s_settings;
 }
 
-void app_settings_set_volume(float volume, bool muted, bool persist)
+void app_settings_set_audio(float speaker_volume,
+                            bool speaker_muted,
+                            float bt_volume,
+                            bool bt_muted,
+                            bool persist)
 {
-    s_settings.volume = clamp_volume(volume);
-    s_settings.muted = muted;
+    s_settings.speaker_volume = clamp_volume(speaker_volume);
+    s_settings.bt_volume = clamp_volume(bt_volume);
+    s_settings.speaker_muted = speaker_muted;
+    s_settings.bt_muted = bt_muted;
     apply_audio_volume(&s_settings);
     if (persist) {
         settings_save_to_sd(&s_settings);

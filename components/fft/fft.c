@@ -38,6 +38,11 @@ static const float kBlinkPhaseTarget = 0.85f; // trigger blink when beat phase r
 static const float kGlobalCombMin        = 0.01f;
 static const float kNoveltyZeroThreshold = 400.0f;
 static const float kOverallMinConf       = 0.25f;
+static const float kBlinkMinConf         = 0.35f;
+static const float kSilenceFloorMinRms   = 0.0018f;
+static const float kSilenceFloorMargin   = 0.0012f;
+static const float kSilenceFloorScale    = 1.8f;
+static const int   kSilenceHoldFrames    = 8;
 static const float kFamilyTauUpSec       = 0.35f;
 static const float kFamilyTauDownSec     = 1.20f;
 #define MAX_PHASE_EVAL 256
@@ -149,6 +154,10 @@ static float    g_phase_shift_accum = 0.0f; // continuous phase advance (prevent
 static float    g_blink_bpm_hz = 0.0f;  // latched BPM that drives the blinker until next beat
 static float    g_blink_rate_hz = 0.0f; // actual blink rate used for display
 static float    g_beat_phase = 0.0f;    // phase accumulator for main beat blinker
+static float    g_signal_rms_ema = 0.0f;
+static float    g_noise_floor_rms = 0.0f;
+static int      g_silence_frames = 0;
+static bool     g_audio_active = false;
 static int      g_tempo_update_countdown = 0;
 static int      g_tempo_update_hold = 0; // tempo update cycles to skip after novelty suppression
 static QueueHandle_t s_beat_queue = NULL;
@@ -206,6 +215,8 @@ static void bpm_soft_decay_and_reset(void){
     g_blink_bpm_hz = 0.0f;
     g_blink_rate_hz = 0.0f;
     g_beat_phase = 0.0f;
+    g_silence_frames = 0;
+    g_audio_active = false;
     g_tempo_update_hold = 0;
     memset(g_family_spec_smooth, 0, sizeof(g_family_spec_smooth));
     memset(g_bpm_score_hist, 0, sizeof(g_bpm_score_hist));
@@ -776,6 +787,48 @@ static void update_bpm_from_novelty(void){
         g_phase_curve_len);
 }
 
+static bool update_audio_activity(const float *samples, int count)
+{
+    if (!samples || count <= 0) return false;
+
+    float sum_sq = 0.0f;
+    for (int i = 0; i < count; ++i) {
+        float s = samples[i];
+        sum_sq += s * s;
+    }
+    float rms = sqrtf(sum_sq / (float)count);
+
+    if (g_signal_rms_ema <= 0.0f) {
+        g_signal_rms_ema = rms;
+    } else {
+        g_signal_rms_ema = 0.88f * g_signal_rms_ema + 0.12f * rms;
+    }
+
+    if (g_noise_floor_rms <= 0.0f) {
+        g_noise_floor_rms = rms;
+    } else if (rms < g_noise_floor_rms) {
+        // Track drops quickly so silence is recognized promptly.
+        g_noise_floor_rms = 0.94f * g_noise_floor_rms + 0.06f * rms;
+    } else {
+        // Rise very slowly so persistent background hiss doesn't immediately
+        // erase the margin used to detect "real" activity.
+        g_noise_floor_rms = 0.997f * g_noise_floor_rms + 0.003f * rms;
+    }
+
+    float gate = g_noise_floor_rms * kSilenceFloorScale + kSilenceFloorMargin;
+    if (gate < kSilenceFloorMinRms) gate = kSilenceFloorMinRms;
+
+    bool active_now = (g_signal_rms_ema > gate);
+    if (active_now) {
+        g_silence_frames = 0;
+        g_audio_active = true;
+    } else if (++g_silence_frames >= kSilenceHoldFrames) {
+        g_audio_active = false;
+    }
+
+    return g_audio_active;
+}
+
 // ------------------- Processing per FFT frame -------------------
 static void process_fft_frame(void){
     int64_t t0 = esp_timer_get_time();
@@ -840,12 +893,15 @@ static void process_fft_frame(void){
         g_tempo_update_countdown--;
     }
 
+    bool audio_active = update_audio_activity(g_fft_buf, FFT_SIZE);
+
     // --------- Beat blinker ---------
     // Match blinker to the currently found BPM shown to the user.
     float target_bpm_hz = (g_last_cand_bpm > 0.5f) ? (g_last_cand_bpm / 60.0f) : 0.0f;
     bool beat_triggered = false;
+    bool beat_confident = (g_bpm_conf >= kBlinkMinConf);
 
-    if (target_bpm_hz > 0.5f) {
+    if (target_bpm_hz > 0.5f && beat_confident && audio_active) {
         g_blink_bpm_hz = target_bpm_hz;
         g_blink_rate_hz = target_bpm_hz;
         if (g_blink_rate_hz < 0.1f) g_blink_rate_hz = 0.1f;

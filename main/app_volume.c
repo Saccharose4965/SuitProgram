@@ -8,15 +8,27 @@
 #include "oled.h"
 
 const shell_legend_t VOLUME_LEGEND = {
-    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_NONE, SHELL_ICON_MUTE },
+    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_OK, SHELL_ICON_MUTE },
 };
 
 typedef struct {
-    float vol;      // 0.0 .. 2.0
-    float prev_vol; // for mute toggle
-    bool  muted;
+    float speaker_vol;      // 0.0 .. 2.0
+    float bt_vol;           // 0.0 .. 2.0
+    float prev_speaker_vol; // restore point for mute toggle
+    float prev_bt_vol;      // restore point for mute toggle
+    bool  speaker_muted;
+    bool  bt_muted;
+    int   selected;         // 0: speaker, 1: bt
 } volume_state_t;
-static volume_state_t s_volume = { .vol = 1.0f, .prev_vol = 1.0f, .muted = false };
+static volume_state_t s_volume = {
+    .speaker_vol = 1.0f,
+    .bt_vol = 1.0f,
+    .prev_speaker_vol = 1.0f,
+    .prev_bt_vol = 1.0f,
+    .speaker_muted = false,
+    .bt_muted = false,
+    .selected = 0,
+};
 
 static inline void fb_pset(uint8_t *fb, int x, int y)
 {
@@ -60,26 +72,43 @@ static void fb_rect_outline(uint8_t *fb, int x0, int y0, int w, int h)
         fb_pset(fb, x1, y);
     }
 }
-static void volume_apply(float v)
+static float clamp_vol(float v)
 {
-    // Clamp UI volume to 0.0 .. 2.0
     if (v < 0.0f) v = 0.0f;
     if (v > 2.0f) v = 2.0f;
+    return v;
+}
 
-    s_volume.vol = v;
-    app_settings_set_volume(s_volume.vol, s_volume.muted, true);
+static int vol_to_pct(float v)
+{
+    int pct = (int)lroundf(clamp_vol(v) * 100.0f); // 0..200% (0.0..2.0)
+    if (pct < 0) pct = 0;
+    if (pct > 200) pct = 200;
+    return pct;
+}
+
+static void volume_apply_all(bool persist)
+{
+    s_volume.speaker_vol = clamp_vol(s_volume.speaker_vol);
+    s_volume.bt_vol = clamp_vol(s_volume.bt_vol);
+    app_settings_set_audio(s_volume.speaker_vol, s_volume.speaker_muted,
+                           s_volume.bt_vol, s_volume.bt_muted,
+                           persist);
 }
 
 void volume_init(shell_app_context_t *ctx)
 {
     (void)ctx;
     const app_settings_t *settings = app_settings_get();
-    float v = settings ? settings->volume : audio_get_volume();
-    if (v < 0.0f) v = 0.0f;
-    if (v > 2.0f) v = 2.0f;
-    s_volume.vol = v;
-    s_volume.prev_vol = v > 0.0f ? v : 1.0f;
-    s_volume.muted = settings ? settings->muted : false;
+    float spk = settings ? settings->speaker_volume : audio_get_volume();
+    float bt = settings ? settings->bt_volume : spk;
+    s_volume.speaker_vol = clamp_vol(spk);
+    s_volume.bt_vol = clamp_vol(bt);
+    s_volume.prev_speaker_vol = s_volume.speaker_vol > 0.0f ? s_volume.speaker_vol : 1.0f;
+    s_volume.prev_bt_vol = s_volume.bt_vol > 0.0f ? s_volume.bt_vol : 1.0f;
+    s_volume.speaker_muted = settings ? settings->speaker_muted : false;
+    s_volume.bt_muted = settings ? settings->bt_muted : false;
+    s_volume.selected = 0;
 }
 
 void volume_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
@@ -87,19 +116,40 @@ void volume_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
     if (!ctx || !ev) return;
     if (ev->type == INPUT_EVENT_PRESS){
         if (ev->button == INPUT_BTN_A){ // up -> louder
-            volume_apply(s_volume.vol + 0.1f);
-        } else if (ev->button == INPUT_BTN_B){ // down -> quieter
-            volume_apply(s_volume.vol - 0.1f);
-        } else if (ev->button == INPUT_BTN_D){ // mute toggle
-            if (!s_volume.muted){
-                s_volume.prev_vol = s_volume.vol > 0.0f ? s_volume.vol : 1.0f;
-                s_volume.muted = true;
-                app_settings_set_volume(s_volume.vol, s_volume.muted, true);
+            if (s_volume.selected == 0) {
+                s_volume.speaker_vol += 0.1f;
             } else {
-                s_volume.muted = false;
-                s_volume.vol = s_volume.prev_vol;
-                app_settings_set_volume(s_volume.vol, s_volume.muted, true);
+                s_volume.bt_vol += 0.1f;
             }
+            volume_apply_all(true);
+        } else if (ev->button == INPUT_BTN_B){ // down -> quieter
+            if (s_volume.selected == 0) {
+                s_volume.speaker_vol -= 0.1f;
+            } else {
+                s_volume.bt_vol -= 0.1f;
+            }
+            volume_apply_all(true);
+        } else if (ev->button == INPUT_BTN_C){ // switch target
+            s_volume.selected = (s_volume.selected == 0) ? 1 : 0;
+        } else if (ev->button == INPUT_BTN_D){ // mute toggle
+            if (s_volume.selected == 0) {
+                if (!s_volume.speaker_muted) {
+                    s_volume.prev_speaker_vol = s_volume.speaker_vol > 0.0f ? s_volume.speaker_vol : 1.0f;
+                    s_volume.speaker_muted = true;
+                } else {
+                    s_volume.speaker_muted = false;
+                    s_volume.speaker_vol = s_volume.prev_speaker_vol;
+                }
+            } else {
+                if (!s_volume.bt_muted) {
+                    s_volume.prev_bt_vol = s_volume.bt_vol > 0.0f ? s_volume.bt_vol : 1.0f;
+                    s_volume.bt_muted = true;
+                } else {
+                    s_volume.bt_muted = false;
+                    s_volume.bt_vol = s_volume.prev_bt_vol;
+                }
+            }
+            volume_apply_all(true);
         }
     }
 }
@@ -107,20 +157,40 @@ void volume_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 void volume_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)
 {
     (void)ctx; (void)w; (void)h;
+    int spk_pct = vol_to_pct(s_volume.speaker_vol);
+    int bt_pct = vol_to_pct(s_volume.bt_vol);
+
     oled_draw_text3x5(fb, x + 2, y + 2, "VOLUME");
-    int pct = (int)lroundf(s_volume.vol * 100.0f); // 0..200% (0.0..2.0)
-    if (pct < 0) pct = 0;
-    if (pct > 200) pct = 200;
+
     char line[24];
-    snprintf(line, sizeof(line), "Level:%3d%%", pct);
+    snprintf(line, sizeof(line), "Sel:%s", (s_volume.selected == 0) ? "SPK" : "BT");
     oled_draw_text3x5(fb, x + 2, y + 10, line);
 
+    snprintf(line, sizeof(line), "%cSPK:%3d%%%s",
+             (s_volume.selected == 0) ? '>' : ' ',
+             spk_pct,
+             s_volume.speaker_muted ? " M" : "");
+    oled_draw_text3x5(fb, x + 2, y + 18, line);
+
+    snprintf(line, sizeof(line), "%cBT :%3d%%%s",
+             (s_volume.selected == 1) ? '>' : ' ',
+             bt_pct,
+             s_volume.bt_muted ? " M" : "");
+    oled_draw_text3x5(fb, x + 2, y + 26, line);
+
     int bar_w = w - 10;
-    int filled = (pct * (bar_w - 2)) / 200;
     int bar_x = x + 2;
-    int bar_y = y + 30;
-    fb_rect_outline(fb, bar_x, bar_y, bar_w, 5);
-    if (!s_volume.muted && filled > 0){
-        fb_rect_fill(fb, bar_x + 1, bar_y + 1, filled, 3);
+
+    int spk_filled = (spk_pct * (bar_w - 2)) / 200;
+    int bt_filled = (bt_pct * (bar_w - 2)) / 200;
+
+    fb_rect_outline(fb, bar_x, y + 36, bar_w, 5);
+    if (!s_volume.speaker_muted && spk_filled > 0) {
+        fb_rect_fill(fb, bar_x + 1, y + 37, spk_filled, 3);
+    }
+
+    fb_rect_outline(fb, bar_x, y + 44, bar_w, 5);
+    if (!s_volume.bt_muted && bt_filled > 0) {
+        fb_rect_fill(fb, bar_x + 1, y + 45, bt_filled, 3);
     }
 }
