@@ -270,7 +270,6 @@ Repository layout
   orientation, storage, games, etc.
 
 Legacy entrypoint files still present in `main/` but not in build list:
-- `main/old2.c`
 - `main/reciever.c`
 - `main/sender.c`
 
@@ -306,7 +305,6 @@ Extended module inventory (components in tree, not all shell-wired):
 - Audio RX: TCP server to `/sdcard/rx_rec_XXXXX.wav` with persisted `rx_rec_index.txt` and `rx_rec_last.txt`.
 - Standalone comms/call: UDP voice modules (`components/comms`, `components/call`) exist but are not part of shell app registry.
 - IMU/Stick and logo helpers: `components/mpu6500`, `components/stick`, `components/logo` remain available.
-- Transfer script note: original README referenced `transfer.sh`, but that script is not present in this repo snapshot.
 
 Power / thermal notes (legacy hardware sizing):
 - WS2815 original estimate: ~15 W idle, ~24 W pulse, ~40 W full-white for ~5 m at 144 LED/m.
@@ -315,41 +313,34 @@ Power / thermal notes (legacy hardware sizing):
 
 Open TODO / wishlist (legacy backlog)
 -------------------------------------
+for me :
+- observe spi cs pins to get usage and saturation
+- test and fix bad apple (+add audio)
 - measure real value adc to check ladder expected values
-- don't blink when not confident
-- zero out audio data upon button press and release to remove parasitic spikes
-- implement blink phase tune in
-- fix fluid sim (make it as close to goatedfluidsim.txt as possible)
-- would bluetooth and fft be able to run at the same time ?
-- fix led menu, have two sub menus : music synced and not.
+- check again to make sure we are doing it right but i think we got it: zero out audio data upon button press and release to remove parasitic spikes
+for ai:
+- don't blink when not confident or when silence
+- separate the volume settings between volume for the imbeded speaker and the bluetooth volume
+- games sfx
+- add scores to games, stored on sd card (maybe score is its own component ? conflict with audio player playing sfx ?)
+- add calculator
+for later:
+- implement blink phase tune in: improve it, we got a good measure of phase but the drift isn't handled correctly. (hard problem) -> blinking at 2x freq might eliviate 90° uncertainty
+- try to optimize fluid further without impacting on behavior, (we already managed to get it to run smooth on one core)
+- would bluetooth and fft be able to run at the same time ? (i think for that we would need to handle the whole bluetooth processes on core0 to leave enough compute for fft.
+- improve led behavior, add effects, map out limb positions etc
 - do spatial aware led animations based on limb orientation
 - add button press to reset fft on all nearby costumes, need to think of where and when.
 - allow to stop fft from running, first think how and where this should be triggered.
-- check for completion of the todos that come after this one.
-- increase and fix led framerate (might be a cabling issue, first try to do proper cabling.)
-- separate the volume settings between volume for the imbeded speaker and the bluetooth volume
-- games sfx
-- Menu/UI: replace placeholder icons, measure real ladder voltages and tighten combo thresholds; optionally show GPS time status flag and link quality.
-- Shell plumbing: wire GPS/message/call menu items to real apps or hide them; surface audio_rx status/controls.
-- LED/FFT: replace `led_layout.c` with measured coordinates; add richer patterns (planes tied to IMUs, waves from chest ring, randomizer presets), improve FFT noise handling/tempo fallback.
+- Menu/UI: replace placeholder icons, 
+- fix and bring back GPS time and link quality.
+- fix GPS/message/call menu items to real apps
 - Link/comms: define structured bundles (leaderboard/GPS/messages/audio headers), add per-type ACK/retry, and integrate link frames into games/remote LED paint tools.
 - Power: measure divider ratio and per-cell thresholds, add current sensing/export + low-battery guardrails.
-- Games/content: polish Pong host election/ACK UI, add scores/levels to Snake, port more titles (tron/doom/pacman/etc.), add calculator and lightweight 3D renderer/virtual-plane LED effect.
-- Extras: Tournai map on OLED, IMU fusion for limb pose to drive LEDs/stick, task priority/core pinning guidance for FreeRTOS.
-- fix audio recording and calls
+- port more titles (tron/doom/pacman/etc.)
+- polish Pong host election/ACK UI,
+- Extras: Tournai map on OLED, IMU fusion for limb pose to drive LEDs/stick
 - create audio file that when displayed on the spectrogram, spell out words, as hidden messages
 
-Task core pinning / priority notes (legacy tuning reference)
-------------------------------------------------------------
-Core 0 (Wi-Fi/BT friendly, lower contention):
-- `audio_rx_wr` writer task (historical note said prio 3).
-- BT/A2DP and many unpinned networking tasks often end up here.
-- Telemetry RX, call/comms, LED modes, OLED/UI, GPS tasks may float here when unpinned.
 
-Core 1 (heavy DSP/render):
-- `audio_rx_task` (historical note said prio 1).
-- `fft_task` visualizer (historical note said prio 5).
-- `audio_capture_task` and IMU/orientation sampling were historically treated as DSP-side work.
 
-Validation note:
-- Pinning/priority details can drift over time; always confirm with current task creation sites before tuning.
