@@ -13,7 +13,7 @@ esp_err_t led_init(void);
 
 // LED strip length used by effects/rendering and transmission.
 #ifndef LED_STRIP_LENGTH
-#define LED_STRIP_LENGTH 720
+#define LED_STRIP_LENGTH 721 // changed from 720, this
 #endif
 
 // Strip byte order is fixed to RGB for this hardware.
@@ -67,6 +67,7 @@ void sendpulse(uint8_t r, uint8_t g, uint8_t b);
 typedef enum {
     LED_BEAT_ANIM_FLASH = 0,
     LED_BEAT_ANIM_PULSE = 1,
+    LED_BEAT_ANIM_WAVE = 2,
 } led_beat_anim_t;
 
 // Beat animation mode helpers (used by FFT beat trigger path).

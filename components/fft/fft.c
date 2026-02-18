@@ -49,6 +49,7 @@ static const float kBlinkPhaseTarget = 0.85f; // trigger blink when beat phase r
 static const float kGlobalCombMin        = 0.01f;
 static const float kNoveltyZeroThreshold = 400.0f;
 static const float kBlinkMinConf         = 0.25f;
+static const float kDoubleTempoBelowBpm  = 90.0f;
 static const float kScoreTauUpSec        = 0.35f;
 static const float kScoreTauDownSec      = 1.20f;
 #define MAX_PHASE_EVAL 256
@@ -146,6 +147,13 @@ static inline bool phase_crossed_forward(float prev, float curr, float target){ 
         return (target > prev && target <= curr);
     }
     return (target > prev || target <= curr);
+}
+
+static inline float bpm_apply_low_tempo_x2(float bpm){
+    if (bpm > 0.0f && bpm < kDoubleTempoBelowBpm){
+        return bpm * 2.0f;
+    }
+    return bpm;
 }
 
 static void shift_phase_curve_circular(float *vals, uint8_t count, float shift_norm){ // Shift a phase curve by shift_norm (0..1) with circular wraparound and linear interpolation. Modifies vals in-place.
@@ -687,15 +695,16 @@ static void update_bpm_from_novelty(void){
         bpm_soft_decay_and_reset();
         return;
     }
+    float selected_bpm = bpm_apply_low_tempo_x2(fund_avg);
 
     const float kBpmTol = 3.0f;
-    float diff = fabsf(fund_avg - last_cand_bpm);
+    float diff = fabsf(selected_bpm - last_cand_bpm);
     if (last_cand_bpm > 0.0f && diff < kBpmTol){
         bpm_stable_frames++;
     } else {
         bpm_stable_frames = 1;
     }
-    last_cand_bpm = fund_avg;
+    last_cand_bpm = selected_bpm;
 
     // Confidence is mass ratio of winning monotonic cluster vs all target-bin energy.
     float combined_raw_conf = cluster_energy / (target_energy + 1e-6f);
@@ -703,11 +712,11 @@ static void update_bpm_from_novelty(void){
     if (combined_raw_conf > 1.0f) combined_raw_conf = 1.0f;
     bpm_conf = 0.9f * bpm_conf + 0.1f * combined_raw_conf;
 
-    bpm_hz = fund_avg / 60.0f;
+    bpm_hz = selected_bpm / 60.0f;
 
     // Recompute phase from comb offsets at the exact BPM selected for blink driving.
     float base_phase = 0.0f;
-    recompute_phase_for_bpm(nov_history, fund_avg,
+    recompute_phase_for_bpm(nov_history, selected_bpm,
                             &base_phase, phase_curve);
 
     // Use continuous phase integration instead of elapsed_time*bpm:
