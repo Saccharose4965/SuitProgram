@@ -68,6 +68,11 @@ typedef enum {
     LED_BEAT_ANIM_FLASH = 0,
     LED_BEAT_ANIM_PULSE = 1,
     LED_BEAT_ANIM_WAVE = 2,
+    LED_BEAT_ANIM_PULSE_DUAL = 3,
+    LED_BEAT_ANIM_SPARK = 4,
+    LED_BEAT_ANIM_COMET = 5,
+    LED_BEAT_ANIM_SHOCK = 6,
+    LED_BEAT_ANIM_SPARK_RAIN = 7,
 } led_beat_anim_t;
 
 // Beat animation mode helpers (used by FFT beat trigger path).
@@ -80,6 +85,10 @@ bool led_beat_enabled(void);
 
 // Trigger one beat event using currently selected animation mode.
 void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b);
+void led_beat_color_set(uint8_t r, uint8_t g, uint8_t b);
+void led_beat_color_get(uint8_t *r, uint8_t *g, uint8_t *b);
+void led_beat_brightness_set(uint8_t level);
+uint8_t led_beat_brightness_get(void);
 
 // Run a blocking LED hardware test pattern (RGBW + chase).
 // Useful for validating data line / level-shifter / strip power.

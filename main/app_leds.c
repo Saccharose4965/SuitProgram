@@ -8,7 +8,7 @@
 #include "led_modes.h"
 
 const shell_legend_t LEDS_LEGEND = {
-    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_NONE, SHELL_ICON_CUSTOM2 },
+    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_LEFT, SHELL_ICON_CUSTOM2 },
 };
 
 enum {
@@ -16,12 +16,43 @@ enum {
     LEDS_PAGE_CUSTOM = 1,
 };
 
+enum {
+    LEDS_CFG_PRESET = 0,
+    LEDS_CFG_R,
+    LEDS_CFG_G,
+    LEDS_CFG_B,
+    LEDS_CFG_BRIGHTNESS,
+    LEDS_CFG_COUNT,
+};
+
+typedef struct {
+    const char *name;
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+} leds_color_preset_t;
+
+static const leds_color_preset_t s_color_presets[] = {
+    { "tron",    0, 180, 255 },
+    { "ice",   120, 220, 255 },
+    { "magenta",255,  40, 180 },
+    { "amber", 255, 120,   0 },
+    { "white", 220, 220, 220 },
+};
+static const int kColorPresetCount = (int)(sizeof(s_color_presets) / sizeof(s_color_presets[0]));
+
 static const char *TAG = "app_leds";
 
-#define LEDS_MAX_AUDIO_ENTRIES 8
-#define LEDS_MAX_CUSTOM_ENTRIES 20
+#define LEDS_MAX_AUDIO_ENTRIES 16
+#define LEDS_MAX_CUSTOM_ENTRIES 28
 static shell_menu_entry_t s_audio_entries[1 + LEDS_MAX_AUDIO_ENTRIES];
 static shell_menu_entry_t s_custom_entries[1 + LEDS_MAX_CUSTOM_ENTRIES];
+
+static char s_preset_label[24];
+static char s_r_label[12];
+static char s_g_label[12];
+static char s_b_label[12];
+static char s_bright_label[14];
 
 typedef struct {
     int page;
@@ -29,6 +60,11 @@ typedef struct {
     size_t custom_sel; // includes "Back" at index 0
     int audio_mode;
     int custom_mode;
+    int preset_idx; // -1 for manual
+    uint8_t color_r;
+    uint8_t color_g;
+    uint8_t color_b;
+    uint8_t brightness;
 } leds_state_t;
 static leds_state_t s_leds = {0};
 
@@ -46,30 +82,108 @@ static size_t clamp_sel(size_t sel, size_t count)
     return sel;
 }
 
+static int find_preset_exact(uint8_t r, uint8_t g, uint8_t b)
+{
+    for (int i = 0; i < kColorPresetCount; ++i) {
+        if (s_color_presets[i].r == r &&
+            s_color_presets[i].g == g &&
+            s_color_presets[i].b == b) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static uint8_t step_u8_clamp(uint8_t value, int step, uint8_t lo, uint8_t hi)
+{
+    int next = (int)value + step;
+    if (next < (int)lo) next = lo;
+    if (next > (int)hi) next = hi;
+    return (uint8_t)next;
+}
+
+static void apply_preset_idx(int idx)
+{
+    idx = clamp_int(idx, 0, kColorPresetCount - 1);
+    s_leds.preset_idx = idx;
+    s_leds.color_r = s_color_presets[idx].r;
+    s_leds.color_g = s_color_presets[idx].g;
+    s_leds.color_b = s_color_presets[idx].b;
+}
+
+static void leds_apply_color(void)
+{
+    led_beat_color_set(s_leds.color_r, s_leds.color_g, s_leds.color_b);
+    led_beat_brightness_set(s_leds.brightness);
+    led_modes_set_primary_color(s_leds.color_r, s_leds.color_g, s_leds.color_b);
+    led_modes_set_brightness(s_leds.brightness);
+    s_leds.preset_idx = find_preset_exact(s_leds.color_r, s_leds.color_g, s_leds.color_b);
+}
+
+static void leds_load_color_state(void)
+{
+    led_beat_color_get(&s_leds.color_r, &s_leds.color_g, &s_leds.color_b);
+    s_leds.preset_idx = find_preset_exact(s_leds.color_r, s_leds.color_g, s_leds.color_b);
+    s_leds.brightness = led_beat_brightness_get();
+    if (s_leds.brightness < 8) s_leds.brightness = 8;
+}
+
+static void refresh_color_labels(void)
+{
+    const char *preset_name = (s_leds.preset_idx >= 0 && s_leds.preset_idx < kColorPresetCount)
+        ? s_color_presets[s_leds.preset_idx].name
+        : "manual";
+    snprintf(s_preset_label, sizeof(s_preset_label), "preset:%s", preset_name);
+    snprintf(s_r_label, sizeof(s_r_label), "R:%u", (unsigned)s_leds.color_r);
+    snprintf(s_g_label, sizeof(s_g_label), "G:%u", (unsigned)s_leds.color_g);
+    snprintf(s_b_label, sizeof(s_b_label), "B:%u", (unsigned)s_leds.color_b);
+    snprintf(s_bright_label, sizeof(s_bright_label), "bright:%u", (unsigned)s_leds.brightness);
+}
+
+static void append_color_entries(shell_menu_entry_t *entries, size_t *n, size_t cap)
+{
+    if (!entries || !n) return;
+    refresh_color_labels();
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_preset", .label = s_preset_label };
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_r", .label = s_r_label };
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_g", .label = s_g_label };
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_b", .label = s_b_label };
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_brightness", .label = s_bright_label };
+}
+
 static size_t build_audio_entries(void)
 {
     size_t n = 0;
+    const size_t cap = sizeof(s_audio_entries) / sizeof(s_audio_entries[0]);
     s_audio_entries[n++] = (shell_menu_entry_t){ .id = "back", .label = "Back" };
     int count = led_beat_anim_count();
-    for (int i = 0; i < count && n < (sizeof(s_audio_entries) / sizeof(s_audio_entries[0])); ++i) {
+    for (int i = 0; i < count && n < cap; ++i) {
         const char *name = led_beat_anim_name(i);
         if (!name) name = "?";
         s_audio_entries[n++] = (shell_menu_entry_t){ .id = name, .label = name };
     }
+    append_color_entries(s_audio_entries, &n, cap);
     return n;
 }
 
 static size_t build_custom_entries(void)
 {
     size_t n = 0;
+    const size_t cap = sizeof(s_custom_entries) / sizeof(s_custom_entries[0]);
     s_custom_entries[n++] = (shell_menu_entry_t){ .id = "back", .label = "Back" };
     int count = led_modes_count();
-    for (int i = 0; i < count && n < (sizeof(s_custom_entries) / sizeof(s_custom_entries[0])); ++i) {
+    for (int i = 0; i < count && n < cap; ++i) {
         const char *name = led_modes_name(i);
         if (!name) name = "?";
         s_custom_entries[n++] = (shell_menu_entry_t){ .id = name, .label = name };
     }
+    append_color_entries(s_custom_entries, &n, cap);
     return n;
+}
+
+static int mode_count_for_page(int page)
+{
+    return (page == LEDS_PAGE_AUDIO) ? led_beat_anim_count() : led_modes_count();
 }
 
 static void leds_apply_audio(void)
@@ -100,6 +214,51 @@ static void leds_apply_custom(void)
     system_state_set_led_mode(s_leds.custom_mode, name ? name : "custom");
 }
 
+static void leds_apply_mode_for_page(void)
+{
+    if (s_leds.page == LEDS_PAGE_AUDIO) {
+        leds_apply_audio();
+    } else {
+        leds_apply_custom();
+    }
+}
+
+static void leds_cycle_cfg(int cfg_idx, bool inc)
+{
+    const int rgb_step = 16;
+    const int bright_step = 16;
+    switch (cfg_idx) {
+        case LEDS_CFG_PRESET: {
+            int idx = s_leds.preset_idx;
+            if (idx < 0) idx = inc ? 0 : (kColorPresetCount - 1);
+            else idx = (idx + (inc ? 1 : -1) + kColorPresetCount) % kColorPresetCount;
+            apply_preset_idx(idx);
+            break;
+        }
+        case LEDS_CFG_R:
+            s_leds.color_r = step_u8_clamp(s_leds.color_r, inc ? rgb_step : -rgb_step, 0, 255);
+            break;
+        case LEDS_CFG_G:
+            s_leds.color_g = step_u8_clamp(s_leds.color_g, inc ? rgb_step : -rgb_step, 0, 255);
+            break;
+        case LEDS_CFG_B:
+            s_leds.color_b = step_u8_clamp(s_leds.color_b, inc ? rgb_step : -rgb_step, 0, 255);
+            break;
+        case LEDS_CFG_BRIGHTNESS:
+            s_leds.brightness = step_u8_clamp(s_leds.brightness,
+                                              inc ? bright_step : -bright_step,
+                                              8, 255);
+            break;
+        default:
+            return;
+    }
+
+    if (cfg_idx != LEDS_CFG_PRESET) {
+        s_leds.preset_idx = find_preset_exact(s_leds.color_r, s_leds.color_g, s_leds.color_b);
+    }
+    leds_apply_color();
+}
+
 static void leds_init_page(shell_app_context_t *ctx, int page)
 {
     (void)ctx;
@@ -115,6 +274,9 @@ static void leds_init_page(shell_app_context_t *ctx, int page)
     s_leds.custom_mode = (custom_count > 0) ? clamp_int(led_modes_current(), 0, custom_count - 1) : 0;
     s_leds.audio_sel = (size_t)s_leds.audio_mode + 1;
     s_leds.custom_sel = (size_t)s_leds.custom_mode + 1;
+
+    leds_load_color_state();
+    leds_apply_color();
 
     if (s_leds.page == LEDS_PAGE_AUDIO) {
         shell_ui_menu_reset(s_leds.audio_sel);
@@ -156,22 +318,42 @@ void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
     if (ev->button == INPUT_BTN_A && *sel > 0) {
         (*sel)--;
         shell_ui_menu_reset(*sel);
-    } else if (ev->button == INPUT_BTN_B && (*sel + 1) < count) {
+        return;
+    }
+    if (ev->button == INPUT_BTN_B && (*sel + 1) < count) {
         (*sel)++;
         shell_ui_menu_reset(*sel);
-    } else if (ev->button == INPUT_BTN_D) {
+        return;
+    }
+
+    int mode_count = mode_count_for_page(s_leds.page);
+    size_t first_cfg = 1u + (size_t)(mode_count > 0 ? mode_count : 0);
+
+    if (ev->button == INPUT_BTN_D) {
         if (*sel == 0) {
             if (ctx->request_switch) {
                 ctx->request_switch("menu", ctx->request_user_data);
             }
             return;
         }
-        if (s_leds.page == LEDS_PAGE_AUDIO) {
-            s_leds.audio_mode = (int)(*sel - 1);
-            leds_apply_audio();
-        } else {
-            s_leds.custom_mode = (int)(*sel - 1);
-            leds_apply_custom();
+        if (*sel < first_cfg) {
+            if (s_leds.page == LEDS_PAGE_AUDIO) {
+                s_leds.audio_mode = (int)(*sel - 1);
+            } else {
+                s_leds.custom_mode = (int)(*sel - 1);
+            }
+            leds_apply_mode_for_page();
+            return;
+        }
+        int cfg_idx = (int)(*sel - first_cfg);
+        leds_cycle_cfg(cfg_idx, true);
+        return;
+    }
+
+    if (ev->button == INPUT_BTN_C) {
+        if (*sel >= first_cfg) {
+            int cfg_idx = (int)(*sel - first_cfg);
+            leds_cycle_cfg(cfg_idx, false);
         }
     }
 }

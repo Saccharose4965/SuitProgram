@@ -19,13 +19,16 @@ typedef struct {
 } led_mode_desc_t;
 
 static const led_mode_desc_t s_modes[] = {
-    { "off"          },
-    { "solid_orange" },
-    { "blink_white"  },
-    { "blink_orange" },
-    { "chase_white"  },
-    { "chase_orange" },
-    { "pulse_cyan"   },
+    { "off"     },
+    { "solid"   },
+    { "breathe" },
+    { "scanner" },
+    { "mirror"  },
+    { "energy"  },
+    { "blink"   },
+    { "chase"   },
+    { "twinkle" },
+    { "glitch"  },
 };
 static const int kModeCount = sizeof(s_modes) / sizeof(s_modes[0]);
 
@@ -34,6 +37,9 @@ static volatile bool s_enabled = false;
 static TaskHandle_t s_task = NULL;
 static bool s_sync_enabled = true;
 static uint8_t s_brightness = 96;
+static uint8_t s_primary_r = 0;
+static uint8_t s_primary_g = 180;
+static uint8_t s_primary_b = 255;
 
 #if configNUMBER_OF_CORES > 1
 #define BG_TASK_CORE 0
@@ -70,6 +76,16 @@ void led_modes_set_sync(bool enabled) { s_sync_enabled = enabled; }
 bool led_modes_sync_enabled(void) { return s_sync_enabled; }
 void led_modes_set_brightness(uint8_t level) { s_brightness = level; }
 uint8_t led_modes_get_brightness(void) { return s_brightness; }
+void led_modes_set_primary_color(uint8_t r, uint8_t g, uint8_t b) {
+    s_primary_r = r;
+    s_primary_g = g;
+    s_primary_b = b;
+}
+void led_modes_get_primary_color(uint8_t *r, uint8_t *g, uint8_t *b) {
+    if (r) *r = s_primary_r;
+    if (g) *g = s_primary_g;
+    if (b) *b = s_primary_b;
+}
 
 static size_t custom_render_pixels(void)
 {
@@ -118,19 +134,140 @@ static void render_chase(uint8_t *buf, size_t count, float t_sec,
                          uint8_t r, uint8_t g, uint8_t b)
 {
     if (count == 0) return;
-    float pos_f = fmodf(t_sec * 18.0f, (float)count);
+    float pos_f = fmodf(t_sec * 20.0f, (float)count);
     if (pos_f < 0.0f) pos_f += (float)count;
     size_t pos = (size_t)pos_f;
-    led_set_pixel_rgb(buf, pos, r, g, b);
+    for (int t = 0; t < 10; ++t) {
+        size_t idx = (size_t)(((int)pos - t + (int)count) % (int)count);
+        float w = expf(-(float)t / 3.0f);
+        led_set_pixel_rgb(buf, idx,
+                          (uint8_t)((float)r * w),
+                          (uint8_t)((float)g * w),
+                          (uint8_t)((float)b * w));
+    }
 }
 
-static void render_pulse_cyan(uint8_t *buf, size_t count, float t_sec)
+static void render_breathe(uint8_t *buf, size_t count, float t_sec,
+                           uint8_t r, uint8_t g, uint8_t b)
 {
-    float w = 0.5f * (sinf(t_sec * 1.8f) + 1.0f);
-    uint8_t r = 0;
-    uint8_t g = (uint8_t)(8.0f + 42.0f * w);
-    uint8_t b = (uint8_t)(12.0f + 74.0f * w);
-    render_fill(buf, count, r, g, b);
+    float w = 0.5f * (sinf(t_sec * 1.6f) + 1.0f);
+    w = 0.15f + 0.85f * (w * w);
+    render_fill(buf, count,
+                (uint8_t)((float)r * w),
+                (uint8_t)((float)g * w),
+                (uint8_t)((float)b * w));
+}
+
+static void render_scanner(uint8_t *buf, size_t count, float t_sec,
+                           uint8_t r, uint8_t g, uint8_t b)
+{
+    if (count == 0) return;
+    float pos = fmodf(t_sec * 24.0f, (float)count);
+    if (pos < 0.0f) pos += (float)count;
+    for (size_t i = 0; i < count; ++i) {
+        float d = fabsf((float)i - pos);
+        float wrap = (float)count - d;
+        if (wrap < d) d = wrap;
+        float w = expf(-d / 5.0f);
+        if (w < 0.01f) continue;
+        led_set_pixel_rgb(buf, i,
+                          (uint8_t)((float)r * w),
+                          (uint8_t)((float)g * w),
+                          (uint8_t)((float)b * w));
+    }
+}
+
+static void render_mirror(uint8_t *buf, size_t count, float t_sec,
+                          uint8_t r, uint8_t g, uint8_t b)
+{
+    if (count == 0) return;
+    float head_a = fmodf(t_sec * 18.0f, (float)count);
+    if (head_a < 0.0f) head_a += (float)count;
+    float head_b = fmodf((float)count - head_a, (float)count);
+    if (head_b < 0.0f) head_b += (float)count;
+    for (size_t i = 0; i < count; ++i) {
+        float da = fabsf((float)i - head_a);
+        float db = fabsf((float)i - head_b);
+        float wa = expf(-fminf(da, (float)count - da) / 4.0f);
+        float wb = expf(-fminf(db, (float)count - db) / 4.0f);
+        float w = wa + wb;
+        if (w > 1.0f) w = 1.0f;
+        if (w < 0.01f) continue;
+        led_set_pixel_rgb(buf, i,
+                          (uint8_t)((float)r * w),
+                          (uint8_t)((float)g * w),
+                          (uint8_t)((float)b * w));
+    }
+}
+
+static float hashf(float x)
+{
+    return x - floorf(x);
+}
+
+static float noise2(float x, float y)
+{
+    return hashf(sinf(x * 12.9898f + y * 78.233f) * 43758.5453f);
+}
+
+static void render_twinkle(uint8_t *buf, size_t count, float t_sec,
+                           uint8_t r, uint8_t g, uint8_t b)
+{
+    float frame = floorf(t_sec * 18.0f);
+    for (size_t i = 0; i < count; ++i) {
+        float n = noise2((float)i, frame);
+        if (n < 0.90f) continue;
+        float phase = t_sec * (6.0f + 10.0f * (n - 0.90f));
+        float w = 0.5f + 0.5f * sinf(phase + (float)i * 0.13f);
+        w *= w;
+        led_set_pixel_rgb(buf, i,
+                          (uint8_t)((float)r * w),
+                          (uint8_t)((float)g * w),
+                          (uint8_t)((float)b * w));
+    }
+}
+
+static void render_glitch(uint8_t *buf, size_t count, float t_sec,
+                          uint8_t r, uint8_t g, uint8_t b)
+{
+    if (count == 0) return;
+    float head = fmodf(t_sec * 30.0f, (float)count);
+    if (head < 0.0f) head += (float)count;
+    float frame = floorf(t_sec * 26.0f);
+    for (size_t i = 0; i < count; ++i) {
+        float d = fabsf((float)i - head);
+        float w = expf(-fminf(d, (float)count - d) / 8.0f);
+        float n = noise2((float)i * 1.7f, frame);
+        if (n > 0.992f) {
+            w = 1.0f;
+        } else if (n > 0.97f) {
+            w = fmaxf(w, 0.65f);
+        }
+        if (w < 0.01f) continue;
+        float white = (n > 0.992f) ? 1.0f : 0.0f;
+        float rr = (float)r * w + 180.0f * white;
+        float gg = (float)g * w + 180.0f * white;
+        float bb = (float)b * w + 180.0f * white;
+        if (rr > 255.0f) rr = 255.0f;
+        if (gg > 255.0f) gg = 255.0f;
+        if (bb > 255.0f) bb = 255.0f;
+        led_set_pixel_rgb(buf, i, (uint8_t)rr, (uint8_t)gg, (uint8_t)bb);
+    }
+}
+
+static void render_energy(uint8_t *buf, size_t count, float t_sec,
+                          uint8_t r, uint8_t g, uint8_t b)
+{
+    for (size_t i = 0; i < count; ++i) {
+        float x = (float)i * 0.16f - t_sec * 8.5f;
+        float carrier = 0.5f + 0.5f * sinf(x);
+        float ripple = 0.5f + 0.5f * sinf(0.37f * x + 1.7f);
+        float level = carrier * carrier * (0.65f + 0.35f * ripple);
+        led_set_pixel_rgb(buf, i,
+                          (uint8_t)((float)r * level),
+                          (uint8_t)((float)g * level),
+                          (uint8_t)((float)b * level));
+    }
 }
 
 static void led_modes_task(void *arg)
@@ -166,16 +303,22 @@ static void led_modes_task(void *arg)
 
         size_t count = custom_render_pixels();
         memset(frame, 0, sizeof(frame));
+        uint8_t pr = s_primary_r;
+        uint8_t pg = s_primary_g;
+        uint8_t pb = s_primary_b;
 
         int mode = clamp_mode(s_mode);
         switch (mode) {
             case 0: render_fill(frame, count, 0, 0, 0); break;
-            case 1: render_fill(frame, count, 200, 80, 0); break;
-            case 2: render_blink(frame, count, t_sec, 0.16f, 0.55f, 160, 160, 160); break;
-            case 3: render_blink(frame, count, t_sec, 0.20f, 0.65f, 200, 80, 0); break;
-            case 4: render_chase(frame, count, t_sec, 180, 180, 180); break;
-            case 5: render_chase(frame, count, t_sec, 200, 80, 0); break;
-            case 6: render_pulse_cyan(frame, count, t_sec); break;
+            case 1: render_fill(frame, count, pr, pg, pb); break;
+            case 2: render_breathe(frame, count, t_sec, pr, pg, pb); break;
+            case 3: render_scanner(frame, count, t_sec, pr, pg, pb); break;
+            case 4: render_mirror(frame, count, t_sec, pr, pg, pb); break;
+            case 5: render_energy(frame, count, t_sec, pr, pg, pb); break;
+            case 6: render_blink(frame, count, t_sec, 0.14f, 0.46f, pr, pg, pb); break;
+            case 7: render_chase(frame, count, t_sec, pr, pg, pb); break;
+            case 8: render_twinkle(frame, count, t_sec, pr, pg, pb); break;
+            case 9: render_glitch(frame, count, t_sec, pr, pg, pb); break;
             default: render_fill(frame, count, 0, 0, 0); break;
         }
 

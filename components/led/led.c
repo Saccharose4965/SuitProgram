@@ -3,6 +3,7 @@
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "driver/rmt_tx.h"
@@ -21,7 +22,7 @@
 #define LED_RMT_MEM_SYMBOLS   128
 
 #ifndef LED_MAX_FPS
-#define LED_MAX_FPS 30
+#define LED_MAX_FPS 60
 #endif
 
 #define LED_COUNT LED_STRIP_LENGTH
@@ -233,6 +234,14 @@ static uint8_t s_wave_g = 0;
 static uint8_t s_wave_b = 0;
 static float s_wave_phase = 0.0f;
 static float s_wave_amp = 0.0f;
+static uint8_t s_beat_color_r = 255;
+static uint8_t s_beat_color_g = 96;
+static uint8_t s_beat_color_b = 0;
+static uint8_t s_beat_brightness = 96;
+static uint8_t s_spark_r = 255;
+static uint8_t s_spark_g = 96;
+static uint8_t s_spark_b = 0;
+static uint8_t s_spark_energy[LED_COUNT];
 static float s_pulse_period_sec = 60.0f / 120.0f; // default 120 BPM
 static int64_t s_last_pulse_spawn_us = 0;
 
@@ -246,11 +255,16 @@ static const int kLedFlashTicks = 3; // ~48 ms at 16 ms pulse task cadence
 static const float kLedPulseMinPeriodSec = 60.0f / 240.0f; // 240 BPM cap
 static const float kLedPulseMaxPeriodSec = 60.0f / 40.0f;  // 40 BPM floor
 static const float kLedPulseTempoSmooth = 0.25f;
+static const float kLedPulseSnapBpmDelta = 6.0f;
 static const float kLedWaveHz = 5.0f;
 static const float kLedWaveDecay = 0.90f;
 static const float kLedWaveFloor = 0.01f;
 static const float kLedWavePi = 3.1415927f;
 static const float kLedWaveTwoPi = 6.2831853f;
+static const int kLedSparkSeedsPerBeat = 28;
+static const uint8_t kLedSparkSeedEnergy = 255;
+static const uint8_t kLedSparkDecay = 208;
+static const uint8_t kLedSparkFloor = 6;
 
 static inline esp_err_t led_lock(void)
 {
@@ -612,8 +626,14 @@ static void led_pulse_update_period_locked(void){
         if (delta_us > 0){
             const float raw_period_sec = (float)delta_us / 1000000.0f;
             if (raw_period_sec >= kLedPulseMinPeriodSec && raw_period_sec <= kLedPulseMaxPeriodSec){
-                s_pulse_period_sec = (1.0f - kLedPulseTempoSmooth) * s_pulse_period_sec
-                                     + kLedPulseTempoSmooth * raw_period_sec;
+                const float target_bpm = 60.0f / raw_period_sec;
+                const float current_bpm = (s_pulse_period_sec > 0.0f) ? (60.0f / s_pulse_period_sec) : target_bpm;
+                if (fabsf(target_bpm - current_bpm) > kLedPulseSnapBpmDelta){
+                    s_pulse_period_sec = raw_period_sec;
+                } else {
+                    s_pulse_period_sec = (1.0f - kLedPulseTempoSmooth) * s_pulse_period_sec
+                                         + kLedPulseTempoSmooth * raw_period_sec;
+                }
             }
         }
     }
@@ -646,6 +666,18 @@ static void led_pulse_spawn_locked(uint8_t r, uint8_t g, uint8_t b, float start_
     }
 }
 
+static void led_spark_seed_locked(uint8_t r, uint8_t g, uint8_t b)
+{
+    s_spark_r = r;
+    s_spark_g = g;
+    s_spark_b = b;
+    for (int i = 0; i < kLedSparkSeedsPerBeat; ++i){
+        size_t idx = (size_t)(esp_random() % LED_COUNT);
+        uint16_t next = (uint16_t)s_spark_energy[idx] + kLedSparkSeedEnergy;
+        s_spark_energy[idx] = (next > 255u) ? 255u : (uint8_t)next;
+    }
+}
+
 static void led_pulse_spawn(uint8_t r, uint8_t g, uint8_t b){
     if (!led_pulse_lock()) return;
     led_pulse_update_period_locked();
@@ -655,6 +687,7 @@ static void led_pulse_spawn(uint8_t r, uint8_t g, uint8_t b){
 
 static bool led_pulse_step_locked(void){
     bool any_active = false;
+    const float brightness_scale = (float)s_beat_brightness / 255.0f;
     memset(s_pulse_frame, 0, LED_COUNT * 3);
     for (size_t i = 0; i < sizeof(s_pulses)/sizeof(s_pulses[0]); ++i){
         led_pulse_t *p = &s_pulses[i];
@@ -662,8 +695,7 @@ static bool led_pulse_step_locked(void){
         float period_sec = s_pulse_period_sec;
         if (period_sec < kLedPulseMinPeriodSec) period_sec = kLedPulseMinPeriodSec;
         if (period_sec > kLedPulseMaxPeriodSec) period_sec = kLedPulseMaxPeriodSec;
-        const float travel_leds = (float)LED_COUNT + kLedPulseWidth;
-        const float speed = travel_leds / period_sec;
+        const float speed = 0.25f * ((float)LED_COUNT / period_sec);
         p->pos += kLedPulseDt * speed;
         p->amp *= kLedPulseDecay;
         if (p->pos > (float)LED_COUNT + kLedPulseWidth || p->amp < kLedPulseFloor){
@@ -676,7 +708,7 @@ static bool led_pulse_step_locked(void){
             float w = expf(-d / kLedPulseWidth);
             float v = p->amp * w;
             if (v <= 0.0f) continue;
-            float add = v * (float)kLedPulseIntensity;
+            float add = v * (float)kLedPulseIntensity * brightness_scale;
             uint8_t cur_r = 0, cur_g = 0, cur_b = 0;
             led_get_pixel_rgb(s_pulse_frame, (size_t)led, &cur_r, &cur_g, &cur_b);
 
@@ -696,14 +728,18 @@ static bool led_pulse_step_locked(void){
         }
     }
     if (s_flash_ticks > 0){
+        uint8_t fr = (uint8_t)((float)s_flash_r * brightness_scale);
+        uint8_t fg = (uint8_t)((float)s_flash_g * brightness_scale);
+        uint8_t fb = (uint8_t)((float)s_flash_b * brightness_scale);
         for (int led = 0; led < LED_COUNT; ++led){
-            led_set_pixel_rgb(s_pulse_frame, (size_t)led, s_flash_r, s_flash_g, s_flash_b);
+            led_set_pixel_rgb(s_pulse_frame, (size_t)led, fr, fg, fb);
         }
         s_flash_ticks--;
         any_active = true;
     }
     if (s_wave_amp > kLedWaveFloor){
-        float level = s_wave_amp * (0.5f + 0.5f * sinf(s_wave_phase));
+        float level = s_wave_amp * (0.75f + 0.25f * sinf(s_wave_phase)); //better (keep this)
+        level *= brightness_scale;
 
         if (level > 0.0f){
             float wr = level * (float)s_wave_r;
@@ -732,6 +768,30 @@ static bool led_pulse_step_locked(void){
         if (s_wave_amp < kLedWaveFloor){
             s_wave_amp = 0.0f;
         }
+        any_active = true;
+    }
+    bool spark_active = false;
+    for (int led = 0; led < LED_COUNT; ++led){
+        uint8_t e = s_spark_energy[led];
+        if (e < kLedSparkFloor){
+            s_spark_energy[led] = 0;
+            continue;
+        }
+        spark_active = true;
+        float w = ((float)e / 255.0f) * brightness_scale;
+        uint8_t cur_r = 0, cur_g = 0, cur_b = 0;
+        led_get_pixel_rgb(s_pulse_frame, (size_t)led, &cur_r, &cur_g, &cur_b);
+        float next_r = (float)cur_r + w * (float)s_spark_r;
+        float next_g = (float)cur_g + w * (float)s_spark_g;
+        float next_b = (float)cur_b + w * (float)s_spark_b;
+        if (next_r > 255.0f) next_r = 255.0f;
+        if (next_g > 255.0f) next_g = 255.0f;
+        if (next_b > 255.0f) next_b = 255.0f;
+        led_set_pixel_rgb(s_pulse_frame, (size_t)led,
+                          (uint8_t)next_r, (uint8_t)next_g, (uint8_t)next_b);
+        s_spark_energy[led] = (uint8_t)(((uint16_t)e * (uint16_t)kLedSparkDecay) / 255u);
+    }
+    if (spark_active){
         any_active = true;
     }
     return any_active;
@@ -779,7 +839,7 @@ void sendpulse(uint8_t r, uint8_t g, uint8_t b){
 }
 
 int led_beat_anim_count(void){
-    return 3;
+    return 8;
 }
 
 const char *led_beat_anim_name(int idx){
@@ -787,12 +847,24 @@ const char *led_beat_anim_name(int idx){
         case LED_BEAT_ANIM_FLASH: return "flash";
         case LED_BEAT_ANIM_PULSE: return "pulse";
         case LED_BEAT_ANIM_WAVE: return "wave";
+        case LED_BEAT_ANIM_PULSE_DUAL: return "pulse_dual";
+        case LED_BEAT_ANIM_SPARK: return "spark";
+        case LED_BEAT_ANIM_COMET: return "comet";
+        case LED_BEAT_ANIM_SHOCK: return "shock";
+        case LED_BEAT_ANIM_SPARK_RAIN: return "spark_rain";
         default: return NULL;
     }
 }
 
 void led_beat_anim_set(led_beat_anim_t mode){
-    if (mode != LED_BEAT_ANIM_FLASH && mode != LED_BEAT_ANIM_PULSE && mode != LED_BEAT_ANIM_WAVE){
+    if (mode != LED_BEAT_ANIM_FLASH &&
+        mode != LED_BEAT_ANIM_PULSE &&
+        mode != LED_BEAT_ANIM_WAVE &&
+        mode != LED_BEAT_ANIM_PULSE_DUAL &&
+        mode != LED_BEAT_ANIM_SPARK &&
+        mode != LED_BEAT_ANIM_COMET &&
+        mode != LED_BEAT_ANIM_SHOCK &&
+        mode != LED_BEAT_ANIM_SPARK_RAIN){
         mode = LED_BEAT_ANIM_FLASH;
     }
     s_beat_anim = mode;
@@ -810,6 +882,50 @@ bool led_beat_enabled(void){
     return s_beat_enabled;
 }
 
+void led_beat_color_set(uint8_t r, uint8_t g, uint8_t b){
+    if (led_pulse_lock()){
+        s_beat_color_r = r;
+        s_beat_color_g = g;
+        s_beat_color_b = b;
+        led_pulse_unlock();
+    } else {
+        s_beat_color_r = r;
+        s_beat_color_g = g;
+        s_beat_color_b = b;
+    }
+}
+
+void led_beat_color_get(uint8_t *r, uint8_t *g, uint8_t *b){
+    if (led_pulse_lock()){
+        if (r) *r = s_beat_color_r;
+        if (g) *g = s_beat_color_g;
+        if (b) *b = s_beat_color_b;
+        led_pulse_unlock();
+        return;
+    }
+    if (r) *r = s_beat_color_r;
+    if (g) *g = s_beat_color_g;
+    if (b) *b = s_beat_color_b;
+}
+
+void led_beat_brightness_set(uint8_t level){
+    if (led_pulse_lock()){
+        s_beat_brightness = level;
+        led_pulse_unlock();
+    } else {
+        s_beat_brightness = level;
+    }
+}
+
+uint8_t led_beat_brightness_get(void){
+    if (led_pulse_lock()){
+        uint8_t level = s_beat_brightness;
+        led_pulse_unlock();
+        return level;
+    }
+    return s_beat_brightness;
+}
+
 void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
     if (!s_beat_enabled) return;
     if (!s_inited){
@@ -817,12 +933,14 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
             return;
         }
     }
+    led_beat_color_get(&r, &g, &b);
     led_pulse_start_task();
 
     if (s_beat_anim == LED_BEAT_ANIM_PULSE){
         if (!led_pulse_lock()) return;
         s_flash_ticks = 0;
         s_wave_amp = 0.0f;
+        memset(s_spark_energy, 0, sizeof(s_spark_energy));
         led_pulse_unlock();
         led_pulse_spawn(r, g, b);
         return;
@@ -832,8 +950,62 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
     for (size_t i = 0; i < sizeof(s_pulses) / sizeof(s_pulses[0]); ++i){
         s_pulses[i].active = false;
     }
+    if (s_beat_anim == LED_BEAT_ANIM_PULSE_DUAL){
+        s_flash_ticks = 0;
+        s_wave_amp = 0.0f;
+        memset(s_spark_energy, 0, sizeof(s_spark_energy));
+        led_pulse_update_period_locked();
+        led_pulse_spawn_locked(r, g, b, -kLedPulseWidth);
+        led_pulse_spawn_locked(r, g, b, -kLedPulseWidth + 0.5f * (float)LED_COUNT);
+        led_pulse_unlock();
+        return;
+    }
+    if (s_beat_anim == LED_BEAT_ANIM_SPARK){
+        s_flash_ticks = 0;
+        s_wave_amp = 0.0f;
+        led_spark_seed_locked(r, g, b);
+        led_pulse_unlock();
+        return;
+    }
+    if (s_beat_anim == LED_BEAT_ANIM_SPARK_RAIN){
+        s_flash_ticks = 0;
+        s_wave_amp = 0.0f;
+        led_spark_seed_locked(r, g, b);
+        led_spark_seed_locked(r, g, b);
+        led_spark_seed_locked(r, g, b);
+        led_pulse_unlock();
+        return;
+    }
+    if (s_beat_anim == LED_BEAT_ANIM_COMET){
+        s_flash_ticks = 0;
+        s_wave_amp = 0.0f;
+        memset(s_spark_energy, 0, sizeof(s_spark_energy));
+        led_pulse_update_period_locked();
+        const float spacing = (float)LED_COUNT / 3.0f;
+        led_pulse_spawn_locked(r, g, b, -kLedPulseWidth);
+        led_pulse_spawn_locked(r, g, b, -kLedPulseWidth - spacing);
+        led_pulse_spawn_locked(r, g, b, -kLedPulseWidth - 2.0f * spacing);
+        led_pulse_unlock();
+        return;
+    }
+    if (s_beat_anim == LED_BEAT_ANIM_SHOCK){
+        memset(s_spark_energy, 0, sizeof(s_spark_energy));
+        s_flash_r = r;
+        s_flash_g = g;
+        s_flash_b = b;
+        s_flash_ticks = kLedFlashTicks + 3;
+        s_wave_r = r;
+        s_wave_g = g;
+        s_wave_b = b;
+        s_wave_phase = 0.5f * kLedWavePi;
+        s_wave_amp = 1.0f;
+        led_pulse_spawn_locked(r, g, b, -kLedPulseWidth);
+        led_pulse_unlock();
+        return;
+    }
     if (s_beat_anim == LED_BEAT_ANIM_WAVE){
         s_flash_ticks = 0;
+        memset(s_spark_energy, 0, sizeof(s_spark_energy));
         s_wave_r = r;
         s_wave_g = g;
         s_wave_b = b;
@@ -844,6 +1016,7 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
     }
 
     s_wave_amp = 0.0f;
+    memset(s_spark_energy, 0, sizeof(s_spark_energy));
     s_flash_r = r;
     s_flash_g = g;
     s_flash_b = b;

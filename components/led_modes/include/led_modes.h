@@ -26,6 +26,10 @@ bool led_modes_sync_enabled(void);
 void led_modes_set_brightness(uint8_t level);
 uint8_t led_modes_get_brightness(void);
 
+// Primary color used by standalone mode rendering.
+void led_modes_set_primary_color(uint8_t r, uint8_t g, uint8_t b);
+void led_modes_get_primary_color(uint8_t *r, uint8_t *g, uint8_t *b);
+
 #ifdef __cplusplus
 }
 #endif
