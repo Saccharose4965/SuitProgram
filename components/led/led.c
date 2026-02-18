@@ -33,7 +33,7 @@
 #endif
 
 #ifndef LED_TEST_PIXELS
-#define LED_TEST_PIXELS 300
+#define LED_TEST_PIXELS LED_COUNT
 #endif
 
 #ifndef LED_TEST_STEP_MS
@@ -47,7 +47,7 @@
 static const char *TAG = "led";
 
 #ifndef LED_PULSE_SINGLE_MODE
-#define LED_PULSE_SINGLE_MODE 1
+#define LED_PULSE_SINGLE_MODE 0
 #endif
 
 #if CONFIG_FREERTOS_UNICORE
@@ -222,7 +222,7 @@ static SemaphoreHandle_t s_pulse_lock = NULL;
 static TaskHandle_t s_pulse_task = NULL;
 static bool s_pulse_was_on = false;
 static uint8_t *s_pulse_frame = NULL;
-static volatile led_beat_anim_t s_beat_anim = LED_BEAT_ANIM_FLASH;
+static volatile led_beat_anim_t s_beat_anim = LED_BEAT_ANIM_PULSE;
 static volatile bool s_beat_enabled = true;
 static uint8_t s_flash_r = 0;
 static uint8_t s_flash_g = 0;

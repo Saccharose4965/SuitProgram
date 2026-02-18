@@ -60,8 +60,8 @@ static void render_spectrogram(void);
 static void render_novelty_peaks(void);
 static void render_flux_view(void);
 static void render_tempo_raw(void);
-static void render_beat_spectrum(const fft_render_packet_t *pkt);
 static void render_phase_comb(void);
+static void render_bpm_text(const fft_render_packet_t *pkt);
 static void render_active_view(const fft_render_packet_t *pkt);
 static void render_task(void *arg);
 
@@ -72,7 +72,7 @@ static void render_three_lines_fb(const char *l1, const char *l2, const char *l3
     if (l3 && l3[0]) oled_draw_text3x5(g_fb, 0, 20, l3);
 }
 
-static void render_beat_spectrum(const fft_render_packet_t *pkt){
+static void render_bpm_text(const fft_render_packet_t *pkt){
     char l1[32], l2[32], l3[32];
 
     // Beat flash marker (time-based so blink timing is independent of render FPS)
@@ -108,9 +108,8 @@ static void render_active_view(const fft_render_packet_t *pkt){
         case FFT_VIEW_FLUX:           render_flux_view(); break;
         case FFT_VIEW_TEMPO_RAW:      render_tempo_raw(); break;
         case FFT_VIEW_PHASE_COMB:     render_phase_comb(); break;
-        case FFT_VIEW_BPM_TEXT:
-        case FFT_VIEW_COUNT:
-        default:                      render_beat_spectrum(pkt); break;
+        case FFT_VIEW_BPM_TEXT:       render_bpm_text(pkt); break;
+        default:                      render_bpm_text(pkt); break;
     }
 }
 

@@ -28,6 +28,7 @@ typedef enum {
     KEY_ICON_EXP_X,
     KEY_ICON_X_SQ,
     KEY_ICON_BACKSPACE,
+    KEY_ICON_PERCENT,
 } key_icon_t;
 
 typedef struct {
@@ -38,7 +39,7 @@ typedef struct {
 } calc_key_t;
 
 static const calc_key_t k_keys[CALC_ROWS][CALC_COLS] = {
-    { {"DEL",  KEY_ACT_BACKSPACE, NULL,    KEY_ICON_BACKSPACE }, {"(",   KEY_ACT_INSERT, "("   , KEY_ICON_TEXT }, {")",   KEY_ACT_INSERT, ")"   , KEY_ICON_TEXT }, {"%",    KEY_ACT_INSERT, "%"   , KEY_ICON_TEXT }, {"sqrt", KEY_ACT_INSERT, "sqrt(", KEY_ICON_SQRT } },
+    { {"DEL",  KEY_ACT_BACKSPACE, NULL,    KEY_ICON_BACKSPACE }, {"(",   KEY_ACT_INSERT, "("   , KEY_ICON_TEXT }, {")",   KEY_ACT_INSERT, ")"   , KEY_ICON_TEXT }, {"%",    KEY_ACT_INSERT, "%"   , KEY_ICON_PERCENT }, {"sqrt", KEY_ACT_INSERT, "sqrt(", KEY_ICON_SQRT } },
     { {"7",    KEY_ACT_INSERT,    "7",     KEY_ICON_TEXT }, {"8",   KEY_ACT_INSERT, "8"   , KEY_ICON_TEXT }, {"9",   KEY_ACT_INSERT, "9"   , KEY_ICON_TEXT }, {"/",    KEY_ACT_INSERT, "/"   , KEY_ICON_TEXT }, {"x^2",  KEY_ACT_INSERT, "^2"  , KEY_ICON_X_SQ } },
     { {"4",    KEY_ACT_INSERT,    "4",     KEY_ICON_TEXT }, {"5",   KEY_ACT_INSERT, "5"   , KEY_ICON_TEXT }, {"6",   KEY_ACT_INSERT, "6"   , KEY_ICON_TEXT }, {"*",    KEY_ACT_INSERT, "*"   , KEY_ICON_TEXT }, {"ln",   KEY_ACT_INSERT, "ln(" , KEY_ICON_TEXT } },
     { {"1",    KEY_ACT_INSERT,    "1",     KEY_ICON_TEXT }, {"2",   KEY_ACT_INSERT, "2"   , KEY_ICON_TEXT }, {"3",   KEY_ACT_INSERT, "3"   , KEY_ICON_TEXT }, {"-",    KEY_ACT_INSERT, "-"   , KEY_ICON_TEXT }, {"e^x",  KEY_ACT_INSERT, "exp(", KEY_ICON_EXP_X } },
@@ -748,12 +749,36 @@ static void draw_icon_pi(uint8_t *fb, int x, int y)
 
 static void draw_icon_backspace(uint8_t *fb, int x, int y)
 {
-    // Left-pointing delete arrow.
-    fb_hline(fb, x + 2, x + 8, y + 2);
-    fb_pset(fb, x + 1, y + 2);
-    fb_pset(fb, x + 2, y + 1);
-    fb_pset(fb, x + 2, y + 3);
+    // Backspace outline with centered delete cross.
+    fb_hline(fb, x + 2, x + 6, y + 0);
+    fb_hline(fb, x + 2, x + 6, y + 4);
+    fb_vline(fb, x + 6, y + 0, y + 4);
+    fb_vline(fb, x + 2, y + 0, y + 4);
+    fb_pset(fb, x + 1, y + 1);
     fb_pset(fb, x + 0, y + 2);
+    fb_pset(fb, x + 1, y + 3);
+
+    fb_pset(fb, x + 3, y + 1);
+    fb_pset(fb, x + 4, y + 2);
+    fb_pset(fb, x + 5, y + 3);
+    fb_pset(fb, x + 5, y + 1);
+    fb_pset(fb, x + 3, y + 3);
+}
+
+static void draw_icon_percent(uint8_t *fb, int x, int y)
+{
+    // Slim slash with small diagonal dots.
+    fb_pset(fb, x + 0, y + 0);
+    fb_pset(fb, x + 1, y + 1);
+
+    fb_pset(fb, x + 5, y + 0);
+    fb_pset(fb, x + 4, y + 1);
+    fb_pset(fb, x + 3, y + 2);
+    fb_pset(fb, x + 2, y + 3);
+    fb_pset(fb, x + 1, y + 4);
+
+    fb_pset(fb, x + 5, y + 3);
+    fb_pset(fb, x + 6, y + 4);
 }
 
 static void draw_icon_sqrt(uint8_t *fb, int x, int y)
@@ -785,9 +810,9 @@ static void draw_key_label(uint8_t *fb, int x0, int y0, int w, int h, const calc
     if (!fb || !key || w <= 0 || h <= 0) return;
 
     if (key->icon == KEY_ICON_BACKSPACE) {
-        int iw = 9;
+        int iw = 7;
         int ih = 5;
-        int tx = x0 + (w - iw) / 2;
+        int tx = x0 + (w - iw) / 2 + 1;
         int ty = y0 + (h - ih) / 2;
         draw_icon_backspace(fb, tx, ty);
         return;
@@ -795,7 +820,7 @@ static void draw_key_label(uint8_t *fb, int x0, int y0, int w, int h, const calc
     if (key->icon == KEY_ICON_PI) {
         int iw = 5;
         int ih = 5;
-        int tx = x0 + (w - iw) / 2;
+        int tx = x0 + (w - iw) / 2 + 1;
         int ty = y0 + (h - ih) / 2;
         draw_icon_pi(fb, tx, ty);
         return;
@@ -803,7 +828,7 @@ static void draw_key_label(uint8_t *fb, int x0, int y0, int w, int h, const calc
     if (key->icon == KEY_ICON_SQRT) {
         int iw = 8;
         int ih = 5;
-        int tx = x0 + (w - iw) / 2;
+        int tx = x0 + (w - iw) / 2 + 1;
         int ty = y0 + (h - ih) / 2;
         draw_icon_sqrt(fb, tx, ty);
         return;
@@ -811,7 +836,7 @@ static void draw_key_label(uint8_t *fb, int x0, int y0, int w, int h, const calc
     if (key->icon == KEY_ICON_EXP_X) {
         int iw = 7;
         int ih = 6;
-        int tx = x0 + (w - iw) / 2;
+        int tx = x0 + (w - iw) / 2 + 1;
         int ty = y0 + (h - ih) / 2;
         draw_icon_exp_x(fb, tx, ty);
         return;
@@ -819,15 +844,23 @@ static void draw_key_label(uint8_t *fb, int x0, int y0, int w, int h, const calc
     if (key->icon == KEY_ICON_X_SQ) {
         int iw = 7;
         int ih = 6;
-        int tx = x0 + (w - iw) / 2;
+        int tx = x0 + (w - iw) / 2 + 1;
         int ty = y0 + (h - ih) / 2;
         draw_icon_x_sq(fb, tx, ty);
+        return;
+    }
+    if (key->icon == KEY_ICON_PERCENT) {
+        int iw = 7;
+        int ih = 5;
+        int tx = x0 + (w - iw) / 2 + 1;
+        int ty = y0 + (h - ih) / 2;
+        draw_icon_percent(fb, tx, ty);
         return;
     }
 
     const char *label = key->label ? key->label : "";
     int label_len = (int)strlen(label);
-    int tx = x0 + (w - (label_len * 4)) / 2;
+    int tx = x0 + (w - (label_len * 4)) / 2 + 1;
     int ty = y0 + (h - 5) / 2;
     if (tx < x0) tx = x0;
     if (ty < y0) ty = y0;
@@ -836,23 +869,9 @@ static void draw_key_label(uint8_t *fb, int x0, int y0, int w, int h, const calc
 
 static void draw_selected_marker(uint8_t *fb, int x0, int y0, int w, int h)
 {
-    if (!fb || w < 5 || h < 5) return;
-
-    // Draw a thin dotted inner rectangle so shared key borders never thicken.
-    int l = x0 + 1;
-    int r = x0 + w - 2;
-    int t = y0 + 1;
-    int b = y0 + h - 2;
-    if (l >= r || t >= b) return;
-
-    for (int x = l; x <= r; x += 2) {
-        fb_pset(fb, x, t);
-        fb_pset(fb, x, b);
-    }
-    for (int y = t; y <= b; y += 2) {
-        fb_pset(fb, l, y);
-        fb_pset(fb, r, y);
-    }
+    if (!fb || w < 2 || h < 2) return;
+    // Full key-size inner border (1px inset from grid border) for a true 2px selected frame.
+    fb_rect_outline(fb, x0, y0, w + 1, h);
 }
 
 void calculator_draw(uint8_t *fb, int x, int y, int w, int h)
@@ -862,6 +881,8 @@ void calculator_draw(uint8_t *fb, int x, int y, int w, int h)
     int min_window_w = 44;
     int min_pad_w = 46;
     int pad_w = (w * 49) / 100;
+    // Make each of the 5 columns about 2px narrower.
+    pad_w -= (2 * CALC_COLS);
     if (pad_w < min_pad_w) pad_w = min_pad_w;
 
     int max_pad_w = w - min_window_w;
@@ -917,7 +938,7 @@ void calculator_draw(uint8_t *fb, int x, int y, int w, int h)
         for (int c = 0; c < CALC_COLS; ++c) {
             int cell_x0 = x_edges[c] + 1;
             int cell_y0 = y_edges[r] + 1;
-            int cell_w = x_edges[c + 1] - x_edges[c] - 2; // shrink all keys by 1px horizontally
+            int cell_w = x_edges[c + 1] - x_edges[c] - 2; // symmetric 1px inset from grid lines
             int cell_h = y_edges[r + 1] - y_edges[r] - 1;
             if (cell_w >= 3 && cell_h >= 3) {
                 if (r == s_calc.row && c == s_calc.col) {

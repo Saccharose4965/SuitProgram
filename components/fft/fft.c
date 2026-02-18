@@ -549,7 +549,9 @@ static void update_bpm_from_novelty(void){
     }
 
     bpm_family_spectrum_from_bc(bpmSpecBC, bpmFamily);
-    float dt = 1.0f / kHopRateNominalHz;
+    // Scores are smoothed when tempo is re-estimated (not every hop),
+    // so use the tempo-update period as dt.
+    float dt = (float)kTempoUpdateIntervalFrames / kHopRateNominalHz;
     smooth_scores_asym(bpmFamily, bpm_scores, BPM_COUNT, dt);
     fft_render_update_tempo_spectrum(bpm_scores);
 

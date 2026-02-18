@@ -13,7 +13,7 @@ esp_err_t led_init(void);
 
 // LED strip length used by effects/rendering and transmission.
 #ifndef LED_STRIP_LENGTH
-#define LED_STRIP_LENGTH 300
+#define LED_STRIP_LENGTH 720
 #endif
 
 // Strip byte order is fixed to RGB for this hardware.
