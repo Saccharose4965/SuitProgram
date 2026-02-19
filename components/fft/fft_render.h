@@ -29,7 +29,7 @@ void fft_render_push_novelty_display(float raw, float local_mean, float cleaned)
 // Called by fft.c when recent novelty history is suppressed.
 void fft_render_suppress_recent_novelty(int frames);
 void fft_render_update_tempo_spectrum(const float *bpm_spec_bc);
-void fft_render_update_phase_curve(const float *vals, int count);
+void fft_render_update_phase_curve(const float *vals, int count, float shift_norm);
 void fft_render_trigger_flash(uint32_t flash_frames);
 
 void fft_render_set_view(fft_view_t view);

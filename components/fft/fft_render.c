@@ -65,6 +65,31 @@ static void render_bpm_text(const fft_render_packet_t *pkt);
 static void render_active_view(const fft_render_packet_t *pkt);
 static void render_task(void *arg);
 
+static inline float wrap_phase01(float phase){
+    phase -= floorf(phase);
+    if (phase < 0.0f) phase += 1.0f;
+    return phase;
+}
+
+// Read a phase-curve slot from an unshifted source using ring semantics:
+// slot_shifted[i] = sample(source, i - shift_slots).
+static inline float phase_curve_shifted_slot(const float *vals, int count,
+                                             int slot, int shift_start, float shift_frac){
+    int idx_hi = slot - shift_start;
+    while (idx_hi < 0) idx_hi += count;
+    while (idx_hi >= count) idx_hi -= count;
+
+    if (shift_frac <= 0.0f){
+        return vals[idx_hi];
+    }
+
+    int idx_lo = idx_hi - 1;
+    if (idx_lo < 0) idx_lo += count;
+    float v_lo = vals[idx_lo];
+    float v_hi = vals[idx_hi];
+    return v_lo * shift_frac + v_hi * (1.0f - shift_frac);
+}
+
 static void render_three_lines_fb(const char *l1, const char *l2, const char *l3){
     fb_clear();
     if (l1 && l1[0]) oled_draw_text3x5(g_fb, 0, 0, l1);
@@ -387,16 +412,23 @@ void fft_render_update_tempo_spectrum(const float *bpm_spec_bc){
     }
 }
 
-void fft_render_update_phase_curve(const float *vals, int count){
+void fft_render_update_phase_curve(const float *vals, int count, float shift_norm){
     if (!vals || count <= 0){
         memset(g_phase_corr, 0, sizeof(g_phase_corr));
         g_phase_corr_peak = 1e-6f;
         return;
     }
 
+    shift_norm = wrap_phase01(shift_norm);
+    float shift_slots = shift_norm * (float)count;
+    float shift_floor = floorf(shift_slots);
+    int shift_start = (int)shift_floor;
+    float shift_frac = shift_slots - shift_floor;
+
     float maxv = 0.0f;
     for (int i = 0; i < count; ++i){
-        if (vals[i] > maxv) maxv = vals[i];
+        float v = phase_curve_shifted_slot(vals, count, i, shift_start, shift_frac);
+        if (v > maxv) maxv = v;
     }
     if (maxv < 1e-6f) maxv = 1e-6f;
     g_phase_corr_peak = maxv;
@@ -408,8 +440,8 @@ void fft_render_update_phase_curve(const float *vals, int count){
         int i1 = i0 + 1;
         if (i1 >= count) i1 = count - 1;
         float frac = pos - (float)i0;
-        float v0 = vals[i0];
-        float v1 = vals[i1];
+        float v0 = phase_curve_shifted_slot(vals, count, i0, shift_start, shift_frac);
+        float v1 = phase_curve_shifted_slot(vals, count, i1, shift_start, shift_frac);
         float v = v0 * (1.0f - frac) + v1 * frac;
         g_phase_corr[x] = v;
     }
