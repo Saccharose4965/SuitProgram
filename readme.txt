@@ -313,24 +313,22 @@ Power / thermal notes (legacy hardware sizing):
 
 Open TODO / wishlist (legacy backlog)
 -------------------------------------
-for me :
-- observe spi cs pins to get usage and saturation
-- test and fix bad apple (+add audio)
-- measure real value adc to check ladder expected values
-- check again to make sure we are doing it right but i think we got it: zero out audio data upon button press and release to remove parasitic spikes
-- check don't blink when not confident or when silence
 for ai:
+- another issue is that sometimes in the music there is a strong 3/2 - 3/4 beat, we don't want to switch to it so we need to figure out a way to deal with it. -> test w/ F.U.Y.A. music
+- debug live adc graph read app of the button readings.
+- when we punch a hole in the audio data, we should set the average to the last valid value of what the average was right before the punch
 - games sfx
 - add scores to games, stored on sd card (maybe score is its own component ? conflict with audio player playing sfx ?)
+- add a menu in stettings to restart components like sd card or oled etc (make a list of the ones we need to consider)
+- Menu/UI: replace placeholder icons,
 for later:
+- improve fft confidence and stop blinking mechanic (we want to keep blinking under noisy music, but stop under musical noise : not easy!)
 - implement blink phase tune in: improve it, we got a good measure of phase but the drift isn't handled correctly. (hard problem) -> blinking at 2x freq might eliviate 90° uncertainty
-- try to optimize fluid further without impacting on behavior, (we already managed to get it to run smooth on one core)
-- would bluetooth and fft be able to run at the same time ? (i think for that we would need to handle the whole bluetooth processes on core0 to leave enough compute for fft.
-- improve led behavior, add effects, map out limb positions etc
+- try to optimize fluid further without impacting on behavior, (we already managed to get it to run smooth on one core!)
+- map out led limb positions
 - do spatial aware led animations based on limb orientation
 - add button press to reset fft on all nearby costumes, need to think of where and when.
 - allow to stop fft from running, first think how and where this should be triggered.
-- Menu/UI: replace placeholder icons, 
 - fix and bring back GPS time and link quality.
 - fix GPS/message/call menu items to real apps
 - Link/comms: define structured bundles (leaderboard/GPS/messages/audio headers), add per-type ACK/retry, and integrate link frames into games/remote LED paint tools.
@@ -339,6 +337,8 @@ for later:
 - polish Pong host election/ACK UI,
 - Extras: Tournai map on OLED, IMU fusion for limb pose to drive LEDs/stick
 - create audio file that when displayed on the spectrogram, spell out words, as hidden messages
-
-
-
+- i need a quick access stop start fft (or enable disable maybe rather, so that it can still work in background ? idk)
+- other bpm touchup required ? idk, needs testing ...
+- require intensity peaks to be not crazy high to be considered (list the 5 max and see if the first two are too high compared to the 5th, if they are, they probably were not trustworthy)
+- improve leds, add effects
+- confirm that fixed: issue when the bpm is 64 that we sometimes think it is 127 or vise versa, we try to switch from one to the other but that makes a lot of bad blinks.
