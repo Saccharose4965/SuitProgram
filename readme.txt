@@ -314,7 +314,11 @@ Power / thermal notes (legacy hardware sizing):
 Open TODO / wishlist (legacy backlog)
 -------------------------------------
 for ai:
-- another issue is that sometimes in the music there is a strong 3/2 - 3/4 beat, we don't want to switch to it so we need to figure out a way to deal with it. -> test w/ F.U.Y.A. music
+- another issue is that sometimes in the music there is a strong 3/2 - 3/4 beat, we don't want to switch.
+for that, we take whichever is the component that blinks thrice while the other blinks 2 or 4 times, 
+that means, if we get two candidates and they have a ratio of 3/4, take the smaller one
+if they have a ratio of 2/3, take the bigger one. 
+-> test w/ F.U.Y.A. music
 - debug live adc graph read app of the button readings.
 - when we punch a hole in the audio data, we should set the average to the last valid value of what the average was right before the punch
 - games sfx
