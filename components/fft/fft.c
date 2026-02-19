@@ -426,32 +426,28 @@ static void recompute_phase_for_bpm(const float *nov_ring, float bpm,
     }
 }
 
-static inline float bpm_bc_at(const float *bc, float bpm){
-    if (bpm < (float)FFT_CFG_BPM_MIN || bpm > (float)FFT_CFG_BPM_MAX) return 0.0f;
-
-    float idx = bpm - (float)FFT_CFG_BPM_MIN;
-    int i0 = (int)floorf(idx);
-    int maxIdx = BPM_COUNT - 1;
-    int i1 = (i0 < maxIdx) ? (i0 + 1) : maxIdx;
-
-    float t = idx - (float)i0;
-    return bc[i0] * (1.0f - t) + bc[i1] * t;
-}
-
 static void bpm_family_spectrum_from_bc(const float *bc, float *famOut){
-    const float wHalf = 0.50f; // requested 1/2 BPM gather term
-    const float w1    = 1.00f;
-    const float w2    = 0.80f;
-    const float w4    = 0.45f;
+    const float kFreqScales[4] = { 0.5f, 1.0f, 2.0f, 4.0f };
+    const float kFreqWeights[4] = { 0.5f, 1.0f, 1.0f, 0.5f };
+    const int maxIdx = BPM_COUNT - 1;
 
     for (int i = 0; i < BPM_COUNT; ++i){
         float F = (float)(FFT_CFG_BPM_MIN + i);
         float s = 0.0f;
 
-        s += wHalf * bpm_bc_at(bc, 0.5f * F);
-        s += w1    * bpm_bc_at(bc, F);
-        s += w2    * bpm_bc_at(bc, 2.0f * F);
-        s += w4    * bpm_bc_at(bc, 4.0f * F);
+        for (int k = 0; k < 4; ++k){
+            float bpm = kFreqScales[k] * F;
+            if (bpm < (float)FFT_CFG_BPM_MIN || bpm > (float)FFT_CFG_BPM_MAX){
+                continue;
+            }
+
+            float idx = bpm - (float)FFT_CFG_BPM_MIN;
+            int i0 = (int)floorf(idx);
+            int i1 = (i0 < maxIdx) ? (i0 + 1) : maxIdx;
+            float t = idx - (float)i0;
+            float v = bc[i0] * (1.0f - t) + bc[i1] * t;
+            s += kFreqWeights[k] * v;
+        }
 
         famOut[i] = s;
     }
