@@ -240,11 +240,13 @@ static void push_novelty(float raw, float local_mean){
     novelty[nov_write_pos] = cleaned;
     nov_write_pos = (nov_write_pos + 1) % FFT_CFG_NOV_RING_FRAMES;
     // Display history (kept in render module)
-    fft_render_push_novelty_display(raw, local_mean, cleaned);
+    if (fft_render_is_display_enabled()){
+        fft_render_push_novelty_display(raw, local_mean, cleaned);
+    }
 }
 
 // ------------------- Comb-based BPM spectrum from novelty -------------------
-static void comb_bpm_from_novelty(const float *nov, float *bpmSpec){
+static void comb_bpm_from_novelty(const float *nov_ring, float *bpmSpec){
     const float minSamplesPerBpm = 2.0f;
     const int N = FFT_CFG_NOV_RING_FRAMES;
 
@@ -268,9 +270,17 @@ static void comb_bpm_from_novelty(const float *nov, float *bpmSpec){
 
                 float v;
                 if (j >= 0 && j + 1 < N){
-                    v = nov[j] * (1.0f - t) + nov[j + 1] * t;
+                    int idx0 = nov_write_pos + j;
+                    if (idx0 >= N) idx0 -= N;
+                    int idx1 = idx0 + 1;
+                    if (idx1 >= N) idx1 = 0;
+                    float v0 = nov_ring[idx0];
+                    float v1 = nov_ring[idx1];
+                    v = v0 * (1.0f - t) + v1 * t;
                 } else if (j >= 0 && j < N){
-                    v = nov[j];
+                    int idx = nov_write_pos + j;
+                    if (idx >= N) idx -= N;
+                    v = nov_ring[idx];
                 } else {
                     v = 0.0f;
                 }
@@ -295,7 +305,7 @@ static void comb_bpm_from_novelty(const float *nov, float *bpmSpec){
 }
 
 // Recompute comb phase using the exact selected BPM spacing.
-static void recompute_phase_for_bpm(const float *nov, float bpm,
+static void recompute_phase_for_bpm(const float *nov_ring, float bpm,
                                     float *phaseNormOut, float *phaseCurveOut){
     const int N = FFT_CFG_NOV_RING_FRAMES;
     if (phaseNormOut) *phaseNormOut = 0.0f;
@@ -330,9 +340,17 @@ static void recompute_phase_for_bpm(const float *nov, float bpm,
             float t = pos - (float)j;
             float v;
             if (j >= 0 && j + 1 < N){
-                v = nov[j] * (1.0f - t) + nov[j + 1] * t;
+                int idx0 = nov_write_pos + j;
+                if (idx0 >= N) idx0 -= N;
+                int idx1 = idx0 + 1;
+                if (idx1 >= N) idx1 = 0;
+                float v0 = nov_ring[idx0];
+                float v1 = nov_ring[idx1];
+                v = v0 * (1.0f - t) + v1 * t;
             } else if (j >= 0 && j < N){
-                v = nov[j];
+                int idx = nov_write_pos + j;
+                if (idx >= N) idx -= N;
+                v = nov_ring[idx];
             } else {
                 v = 0.0f;
             }
@@ -487,7 +505,9 @@ static void apply_novelty_suppression_to_recent_history(void){
         while (idx < 0) idx += FFT_CFG_NOV_RING_FRAMES;
         novelty[idx] = 0.0f;
     }
-    fft_render_suppress_recent_novelty(frames);
+    if (fft_render_is_display_enabled()){
+        fft_render_suppress_recent_novelty(frames);
+    }
 
     // Suppression must affect downstream novelty logic too, not only history arrays.
     reset_novelty_baseline_state();
@@ -516,24 +536,8 @@ static int novelty_frames_from_ms(int backfill_ms){
     return frames;
 }
 
-// ------------------- BPM update from novelty -------------------
-static void update_bpm_from_novelty(void){
-    // 2) Build contiguous novelty history oldest→newest
-    static EXT_RAM_BSS_ATTR float nov_history[FFT_CFG_NOV_RING_FRAMES];
-    int start = nov_write_pos;
-    for (int i = 0; i < FFT_CFG_NOV_RING_FRAMES; ++i){
-        int src = (start + i) % FFT_CFG_NOV_RING_FRAMES;
-        nov_history[i] = novelty[src];
-    }
-
-    // 3) Run comb BPM search (nominal hop rate)
-    static EXT_RAM_BSS_ATTR float bpmSpec[BPM_COUNT];
-    static EXT_RAM_BSS_ATTR float bpmSpecBC[BPM_COUNT];
-    static EXT_RAM_BSS_ATTR float bpmFamily[BPM_COUNT];
-
-    comb_bpm_from_novelty(nov_history, bpmSpec);
-
-    // 4) Baseline-correct comb spectrum (like desktop bpm panel)
+// Baseline-correct comb spectrum in place using a simple two-segment trend line.
+static void baseline_correct_bpm_spectrum_inplace(float *bpmSpec){
     int mid = BPM_COUNT / 2;
     float lowSum = 0.0f, highSum = 0.0f;
     for (int i = 0; i < mid; ++i)        lowSum  += bpmSpec[i];
@@ -553,15 +557,29 @@ static void update_bpm_from_novelty(void){
         float base = intercept + slope * (float)i;
         float v    = bpmSpec[i] - base;
         if (v < 0.0f) v = 0.0f;
-        bpmSpecBC[i] = v;
+        bpmSpec[i] = v;
     }
+}
 
-    bpm_family_spectrum_from_bc(bpmSpecBC, bpmFamily);
+// ------------------- BPM update from novelty -------------------
+static void update_bpm_from_novelty(void){
+    // 2) Run comb BPM search (nominal hop rate)
+    static EXT_RAM_BSS_ATTR float bpmSpec[BPM_COUNT];
+    static EXT_RAM_BSS_ATTR float bpmFamily[BPM_COUNT];
+
+    comb_bpm_from_novelty(novelty, bpmSpec);
+
+    // 4) Baseline-correct comb spectrum (like desktop bpm panel)
+    baseline_correct_bpm_spectrum_inplace(bpmSpec);
+
+    bpm_family_spectrum_from_bc(bpmSpec, bpmFamily);
     // Scores are smoothed when tempo is re-estimated (not every hop),
     // so use the tempo-update period as dt.
     float dt = (float)kTempoUpdateIntervalFrames / kHopRateNominalHz;
     smooth_scores_asym(bpmFamily, bpm_scores, BPM_COUNT, dt);
-    fft_render_update_tempo_spectrum(bpm_scores);
+    if (fft_render_is_display_enabled()){
+        fft_render_update_tempo_spectrum(bpm_scores);
+    }
 
     int targetMinIdx = FFT_CFG_TARGET_BPM_MIN - FFT_CFG_BPM_MIN;
     int targetMaxIdx = FFT_CFG_TARGET_BPM_MAX - FFT_CFG_BPM_MIN;
@@ -716,7 +734,7 @@ static void update_bpm_from_novelty(void){
 
     // Recompute phase from comb offsets at the exact BPM selected for blink driving.
     float base_phase = 0.0f;
-    recompute_phase_for_bpm(nov_history, selected_bpm,
+    recompute_phase_for_bpm(novelty, selected_bpm,
                             &base_phase, phase_curve);
 
     // Use continuous phase integration instead of elapsed_time*bpm:
@@ -726,7 +744,9 @@ static void update_bpm_from_novelty(void){
 
     // Keep phase-comb view aligned with the exported compensated phase.
     shift_phase_curve_circular(phase_curve, PHASE_SLOTS, phase_shift);
-    fft_render_update_phase_curve(phase_curve, PHASE_SLOTS);
+    if (fft_render_is_display_enabled()){
+        fft_render_update_phase_curve(phase_curve, PHASE_SLOTS);
+    }
 }
 
 // ------------------- Processing per FFT frame -------------------
@@ -768,7 +788,9 @@ static void process_fft_frame(void){
         logmag[k] = logf(1.0f + 10.0f * mag);
     }
 
-    fft_render_push_spectrogram(logmag);
+    if (fft_render_is_display_enabled()){
+        fft_render_push_spectrogram(logmag);
+    }
 
     float nov   = compute_novelty(logmag);
 
@@ -810,7 +832,9 @@ static void process_fft_frame(void){
         float prev_phase = beat_phase;
         beat_phase = wrap_phase01(beat_phase + blink_rate_hz * frame_dt_sec);
         if (phase_crossed_forward(prev_phase, beat_phase, kBlinkPhaseTarget)) {
-            fft_render_trigger_flash(kFlashFrames);
+            if (fft_render_is_display_enabled()){
+                fft_render_trigger_flash(kFlashFrames);
+            }
             beat_triggered = true;
         }
     } else {
@@ -833,13 +857,15 @@ static void process_fft_frame(void){
         led_trigger_beat(red, green, 0);
     }
 
-    fft_render_packet_t pkt = {
-        .bpm_est   = last_cand_bpm,
-        .bpm_conf  = bpm_conf,
-        .bpm_phase = bpm_phase
-    };
-    memcpy(pkt.logmag, logmag, sizeof(pkt.logmag));
-    fft_render_submit(&pkt);
+    if (fft_render_is_display_enabled()){
+        fft_render_packet_t pkt = {
+            .bpm_est   = last_cand_bpm,
+            .bpm_conf  = bpm_conf,
+            .bpm_phase = bpm_phase
+        };
+        memcpy(pkt.logmag, logmag, sizeof(pkt.logmag));
+        fft_render_submit(&pkt);
+    }
 
     int64_t dt_us = esp_timer_get_time() - t0;
     prof_accum_us += (uint64_t)dt_us;

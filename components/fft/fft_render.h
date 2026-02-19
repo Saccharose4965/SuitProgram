@@ -34,6 +34,7 @@ void fft_render_trigger_flash(uint32_t flash_frames);
 
 void fft_render_set_view(fft_view_t view);
 void fft_render_set_display_enabled(bool enabled);
+bool fft_render_is_display_enabled(void);
 
 // Copy the latest rendered FFT frame into dst_fb (PANEL_W*PANEL_H/8 bytes).
 void fft_render_copy_frame(uint8_t *dst_fb, size_t dst_len);

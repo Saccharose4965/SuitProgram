@@ -441,6 +441,10 @@ void fft_render_set_display_enabled(bool enabled){
     g_render_enabled = enabled;
 }
 
+bool fft_render_is_display_enabled(void){
+    return g_render_enabled;
+}
+
 esp_err_t fft_render_init(void){
     if (!s_fb_mutex){
         s_fb_mutex = xSemaphoreCreateMutex();
