@@ -5,6 +5,8 @@ idf_component_register(
         "app_menu.c"
         "app_status.c"
         "app_volume.c"
+        "app_service_restart.c"
+        "app_adc_debug.c"
         "app_settings.c"
         "app_leds.c"
         "app_fft.c"

@@ -314,16 +314,9 @@ Power / thermal notes (legacy hardware sizing):
 Open TODO / wishlist (legacy backlog)
 -------------------------------------
 for ai:
-- another issue is that sometimes in the music there is a strong 3/2 - 3/4 beat, we don't want to switch.
-for that, we take whichever is the component that blinks thrice while the other blinks 2 or 4 times, 
-that means, if we get two candidates and they have a ratio of 3/4, take the smaller one
-if they have a ratio of 2/3, take the bigger one. 
--> test w/ F.U.Y.A. music
-- debug live adc graph read app of the button readings.
 - when we punch a hole in the audio data, we should set the average to the last valid value of what the average was right before the punch
 - games sfx
 - add scores to games, stored on sd card (maybe score is its own component ? conflict with audio player playing sfx ?)
-- add a menu in stettings to restart components like sd card or oled etc (make a list of the ones we need to consider)
 - Menu/UI: replace placeholder icons,
 for later:
 - improve fft confidence and stop blinking mechanic (we want to keep blinking under noisy music, but stop under musical noise : not easy!)
@@ -341,8 +334,9 @@ for later:
 - polish Pong host election/ACK UI,
 - Extras: Tournai map on OLED, IMU fusion for limb pose to drive LEDs/stick
 - create audio file that when displayed on the spectrogram, spell out words, as hidden messages
-- i need a quick access stop start fft (or enable disable maybe rather, so that it can still work in background ? idk)
+- i need a quick access stop start fft (or enable disable maybe rather, so that it can still work in background ? idk) -> switch to non bpm animation, that can be used during ambiguous songs (some songs are very hard to read)
 - other bpm touchup required ? idk, needs testing ...
 - require intensity peaks to be not crazy high to be considered (list the 5 max and see if the first two are too high compared to the 5th, if they are, they probably were not trustworthy)
 - improve leds, add effects
 - confirm that fixed: issue when the bpm is 64 that we sometimes think it is 127 or vise versa, we try to switch from one to the other but that makes a lot of bad blinks.
+-> test w/ F.U.Y.A. music

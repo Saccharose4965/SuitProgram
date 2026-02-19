@@ -34,8 +34,10 @@ static const menu_entry_t g_menu_root_entries[] = {
 static const menu_entry_t g_menu_settings_entries[] = {
     { "menu_root", "Back"      },
     { "status",    "Status"    },
+    { "adc_debug", "ADC Debug" },
     { "bt",        "Bluetooth" },
     { "volume",    "Volume"    },
+    { "service_restart", "Svc Restart" },
     { "keyboard",  "Keyboard"  },
     { "reboot",    "Restart"   },
 };
