@@ -441,7 +441,7 @@ static inline float bpm_bc_at(const float *bc, float bpm){
 static void bpm_family_spectrum_from_bc(const float *bc, float *famOut){
     const float wHalf = 0.50f; // requested 1/2 BPM gather term
     const float w1    = 1.00f;
-    const float w2    = 0.65f;
+    const float w2    = 0.80f;
     const float w4    = 0.45f;
 
     for (int i = 0; i < BPM_COUNT; ++i){
@@ -627,65 +627,62 @@ static void update_bpm_from_novelty(void){
 
     const int targetCount = targetMaxIdx - targetMinIdx + 1;
 
-    // Pick BPM from maximum adjacent-bin pair in circular target space.
-    int pair_best_pos = 0;
-    float pair_best_score = 0.0f;
+    // Pick BPM from maximum adjacent-bin group in circular target space.
+    // Primary window is 4 bins wide (fallback to smaller only if target band is smaller).
+    const int kPickWindowBins = 4;
+    int pick_span = targetCount;
+    if (pick_span > kPickWindowBins) pick_span = kPickWindowBins;
 
-    if (targetCount > 1){
-        for (int pos = 0; pos < targetCount; ++pos){
-            int pos1 = (pos + 1) % targetCount;
-            int i0 = targetMinIdx + pos;
-            int i1 = targetMinIdx + pos1;
-            float s0 = score_map[i0];
-            float s1 = score_map[i1];
-            if (s0 < 0.0f) s0 = 0.0f;
-            if (s1 < 0.0f) s1 = 0.0f;
-            float pair_score = s0 + s1;
-            if (pair_score > pair_best_score){
-                pair_best_score = pair_score;
-                pair_best_pos = pos;
-            }
+    int seed_best_pos = 0;
+    float seed_best_score = 0.0f;
+    for (int pos = 0; pos < targetCount; ++pos){
+        float window_score = 0.0f;
+        for (int ofs = 0; ofs < pick_span; ++ofs){
+            int rel = (pos + ofs) % targetCount;
+            int idx = targetMinIdx + rel;
+            float s = score_map[idx];
+            if (s < 0.0f) s = 0.0f;
+            window_score += s;
         }
-    } else {
-        float s0 = score_map[targetMinIdx];
-        if (s0 < 0.0f) s0 = 0.0f;
-        pair_best_score = s0;
+        if (window_score > seed_best_score){
+            seed_best_score = window_score;
+            seed_best_pos = pos;
+        }
     }
 
-    if (pair_best_score < kGlobalCombMin){
+    if (seed_best_score < kGlobalCombMin){
         bpm_soft_decay_and_reset();
         return;
     }
 
-    int pair_pos_0 = pair_best_pos;
-    int pair_pos_1 = (targetCount > 1) ? ((pair_best_pos + 1) % targetCount) : pair_best_pos;
-    int pair_idx_0 = targetMinIdx + pair_pos_0;
-    int pair_idx_1 = targetMinIdx + pair_pos_1;
+    // Weighted center of the selected group; unwrap around 127/64 boundary.
+    float rel_fund = (float)seed_best_pos;
+    float window_mass = 0.0f;
+    float weighted_rel_sum = 0.0f;
+    for (int ofs = 0; ofs < pick_span; ++ofs){
+        int rel = (seed_best_pos + ofs) % targetCount;
+        int idx = targetMinIdx + rel;
+        float s = score_map[idx];
+        if (s < 0.0f) s = 0.0f;
 
-    float s_pair_0 = score_map[pair_idx_0];
-    float s_pair_1 = score_map[pair_idx_1];
-    if (s_pair_0 < 0.0f) s_pair_0 = 0.0f;
-    if (s_pair_1 < 0.0f) s_pair_1 = 0.0f;
-    float pair_mass = s_pair_0 + s_pair_1;
-
-    float rel0 = (float)pair_pos_0;
-    float rel1 = (float)pair_pos_1;
-    if (targetCount > 1 && pair_pos_0 == (targetCount - 1) && pair_pos_1 == 0){
-        // Unwrap the edge pair so weighted averaging stays near the 127/64 boundary.
-        rel1 = (float)targetCount;
+        float rel_unwrapped = (float)rel;
+        if (rel < seed_best_pos){
+            rel_unwrapped += (float)targetCount;
+        }
+        window_mass += s;
+        weighted_rel_sum += rel_unwrapped * s;
     }
-    float rel_fund = rel0;
-    if (pair_mass > 1e-6f){
-        rel_fund = (rel0 * s_pair_0 + rel1 * s_pair_1) / pair_mass;
+    if (window_mass > 1e-6f){
+        rel_fund = weighted_rel_sum / window_mass;
     }
     while (rel_fund >= (float)targetCount) rel_fund -= (float)targetCount;
     float fund_inst = (float)(FFT_CFG_BPM_MIN + targetMinIdx) + rel_fund;
 
-    // Cluster energy: expand from winning pair while scores strictly decrease outward.
+    // Cluster energy: expand from winning group while scores strictly decrease outward.
     // Expansion is circular in the target band (64..127 wraparound).
-    int cluster_l_pos = pair_pos_0;
-    int cluster_r_pos = pair_pos_1;
-    int cluster_size = (targetCount > 1 && pair_pos_1 != pair_pos_0) ? 2 : 1;
+    int cluster_l_pos = seed_best_pos;
+    int cluster_r_pos = (seed_best_pos + pick_span - 1) % targetCount;
+    int cluster_size = pick_span;
 
     while (cluster_size < targetCount){
         bool expanded = false;
