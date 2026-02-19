@@ -9,15 +9,6 @@
 #define ADC_DEBUG_MV_MIN 0
 #define ADC_DEBUG_MV_MAX 3500
 
-// Mirror ladder targets from components/input/input.c so the debug plot can
-// overlay decode thresholds.
-#define ADC_LEVEL_A_MV 825
-#define ADC_LEVEL_AB_MV 1100
-#define ADC_LEVEL_B_MV 1650
-#define ADC_LEVEL_BC_MV 2200
-#define ADC_LEVEL_C_MV 2475
-#define ADC_LEVEL_D_MV 3300
-
 typedef struct {
     int mv_hist[ADC_DEBUG_HISTORY_CAP];
     int head;
@@ -25,8 +16,6 @@ typedef struct {
     int last_mv;
     input_button_t last_btn;
     bool sample_ok;
-    bool paused;
-    bool show_levels;
 } adc_debug_state_t;
 
 static adc_debug_state_t s_adc_dbg = {
@@ -35,12 +24,6 @@ static adc_debug_state_t s_adc_dbg = {
     .last_mv = 0,
     .last_btn = INPUT_BTN_NONE,
     .sample_ok = false,
-    .paused = false,
-    .show_levels = true,
-};
-
-const shell_legend_t ADC_DEBUG_LEGEND = {
-    .slots = { SHELL_ICON_PLAY, SHELL_ICON_CUSTOM1, SHELL_ICON_CUSTOM2, SHELL_ICON_MENU },
 };
 
 static inline void fb_pset(uint8_t *fb, int x, int y)
@@ -156,34 +139,19 @@ void adc_debug_app_init(shell_app_context_t *ctx)
     s_adc_dbg.last_mv = 0;
     s_adc_dbg.last_btn = INPUT_BTN_NONE;
     s_adc_dbg.sample_ok = false;
-    s_adc_dbg.paused = false;
-    s_adc_dbg.show_levels = true;
     adc_debug_sample_once();
 }
 
 void adc_debug_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 {
-    if (!ctx || !ev) return;
-    if (ev->type != INPUT_EVENT_PRESS) return;
-
-    if (ev->button == INPUT_BTN_A) {
-        s_adc_dbg.paused = !s_adc_dbg.paused;
-    } else if (ev->button == INPUT_BTN_B) {
-        adc_debug_clear_history();
-    } else if (ev->button == INPUT_BTN_C) {
-        s_adc_dbg.show_levels = !s_adc_dbg.show_levels;
-    } else if (ev->button == INPUT_BTN_D) {
-        if (ctx->request_switch) {
-            ctx->request_switch("menu", ctx->request_user_data);
-        }
-    }
+    (void)ctx;
+    (void)ev;
 }
 
 void adc_debug_app_tick(shell_app_context_t *ctx, float dt_sec)
 {
     (void)ctx;
     (void)dt_sec;
-    if (s_adc_dbg.paused) return;
     adc_debug_sample_once();
 }
 
@@ -196,12 +164,11 @@ void adc_debug_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int
     oled_draw_text3x5(fb, x + 2, y + 2, "ADC DEBUG");
 
     if (s_adc_dbg.sample_ok) {
-        snprintf(line, sizeof(line), "mv:%4d btn:%s%s",
+        snprintf(line, sizeof(line), "mv:%4d btn:%s",
                  s_adc_dbg.last_mv,
-                 button_name(s_adc_dbg.last_btn),
-                 s_adc_dbg.paused ? " P" : "");
+                 button_name(s_adc_dbg.last_btn));
     } else {
-        snprintf(line, sizeof(line), "mv:---- btn:?%s", s_adc_dbg.paused ? " P" : "");
+        snprintf(line, sizeof(line), "mv:---- btn:?");
     }
     oled_draw_text3x5(fb, x + 2, y + 10, line);
 
@@ -234,19 +201,6 @@ void adc_debug_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int
     int plot_w = graph_w - 2;
     int plot_h = graph_h - 2;
     if (plot_w < 2 || plot_h < 2) return;
-
-    if (s_adc_dbg.show_levels) {
-        const int levels[] = {
-            ADC_LEVEL_A_MV, ADC_LEVEL_AB_MV, ADC_LEVEL_B_MV,
-            ADC_LEVEL_BC_MV, ADC_LEVEL_C_MV, ADC_LEVEL_D_MV
-        };
-        for (size_t i = 0; i < sizeof(levels) / sizeof(levels[0]); ++i) {
-            int yy = mv_to_plot_y(levels[i], plot_y, plot_h);
-            for (int xx = plot_x; xx < plot_x + plot_w; xx += 3) {
-                fb_pset(fb, xx, yy);
-            }
-        }
-    }
 
     int count = s_adc_dbg.len;
     if (count > plot_w) count = plot_w;

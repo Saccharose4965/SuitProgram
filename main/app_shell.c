@@ -275,8 +275,8 @@ static const shell_app_desc_t s_builtin_apps[] = {
     {
         .id     = "adc_debug",
         .name   = "ADC Debug",
-        .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
-        .legend = &ADC_DEBUG_LEGEND,
+        .flags  = SHELL_APP_FLAG_SHOW_HUD,
+        .legend = NULL,
         .init   = adc_debug_app_init,
         .deinit = NULL,
         .tick   = adc_debug_app_tick,
