@@ -315,28 +315,31 @@ Open TODO / wishlist (legacy backlog)
 -------------------------------------
 for ai:
 - when we punch a hole in the audio data, we should set the average to the last valid value of what the average was right before the punch
-- games sfx
-- add scores to games, stored on sd card (maybe score is its own component ? conflict with audio player playing sfx ?)
-- Menu/UI: replace placeholder icons,
+- games sfx, conflict with audio player playing sfx ?
+- add scores to games, stored on sd card (maybe score is its own component ?)
+- Menu/UI: replace placeholder icons
+- improve leds: add effects
+
 for later:
 - improve fft confidence and stop blinking mechanic (we want to keep blinking under noisy music, but stop under musical noise : not easy!)
-- implement blink phase tune in: improve it, we got a good measure of phase but the drift isn't handled correctly. (hard problem) -> blinking at 2x freq might eliviate 90° uncertainty
-- try to optimize fluid further without impacting on behavior, (we already managed to get it to run smooth on one core!)
-- map out led limb positions
-- do spatial aware led animations based on limb orientation
+- blinking 180° and 90° uncertainty on 2 or 4 beats musics
 - add button press to reset fft on all nearby costumes, need to think of where and when.
+- i need a quick access stop start fft (or enable disable maybe rather, so that it can still work in background ? idk) -> switch to non bpm animation, that can be used during ambiguous songs (some songs are very hard to read)
+- try to optimize fluid further without impacting on behavior, (we already managed to get it to run smooth on one core!)
 - allow to stop fft from running, first think how and where this should be triggered.
 - fix and bring back GPS time and link quality.
 - fix GPS/message/call menu items to real apps
 - Link/comms: define structured bundles (leaderboard/GPS/messages/audio headers), add per-type ACK/retry, and integrate link frames into games/remote LED paint tools.
 - Power: measure divider ratio and per-cell thresholds, add current sensing/export + low-battery guardrails.
-- port more titles (tron/doom/pacman/etc.)
 - polish Pong host election/ACK UI,
-- Extras: Tournai map on OLED, IMU fusion for limb pose to drive LEDs/stick
-- create audio file that when displayed on the spectrogram, spell out words, as hidden messages
-- i need a quick access stop start fft (or enable disable maybe rather, so that it can still work in background ? idk) -> switch to non bpm animation, that can be used during ambiguous songs (some songs are very hard to read)
-- other bpm touchup required ? idk, needs testing ...
-- require intensity peaks to be not crazy high to be considered (list the 5 max and see if the first two are too high compared to the 5th, if they are, they probably were not trustworthy)
-- improve leds, add effects
+- require intensity peaks to be not crazy high to be considered (list the 5 max and see if the first two are too high compared to the 5th, if they are, they probably were not trustworthy, zero them out)
 - confirm that fixed: issue when the bpm is 64 that we sometimes think it is 127 or vise versa, we try to switch from one to the other but that makes a lot of bad blinks.
 -> test w/ F.U.Y.A. music
+once assembled : 
+- map out led limb positions
+- do spatial aware led animations based on limb orientation
+
+Extras: 
+- Tournai map on OLED, IMU fusion for limb pose to drive LEDs/stick
+- create audio file that when displayed on the spectrogram, spell out words, as hidden messages
+- port more titles (tron/doom/pacman/etc.)
