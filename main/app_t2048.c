@@ -27,6 +27,7 @@ static void t2048_task_fn(void *arg)
         t48_game_tick();
         vTaskDelay(pdMS_TO_TICKS(12));
     }
+    t48_game_deinit();
     s_t2048_task = NULL;
     vTaskDelete(NULL);
 }

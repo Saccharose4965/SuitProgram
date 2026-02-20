@@ -314,9 +314,6 @@ Power / thermal notes (legacy hardware sizing):
 Open TODO / wishlist (legacy backlog)
 -------------------------------------
 for ai:
-- when we punch a hole in the audio data, we should set the average to the last valid value of what the average was right before the punch
-- games sfx, conflict with audio player playing sfx ?
-- add scores to games, stored on sd card (maybe score is its own component ?)
 - Menu/UI: replace placeholder icons
 - improve leds: add effects
 - live fft phase edits using buttons. i think it's the simplest way. i guess we may autosync with single phase peak musics ?
@@ -324,6 +321,7 @@ for ai:
  those two things above need their own app
 
 for later:
+- games sfx, conflict with audio player playing sfx ?
 - improve fft confidence and stop blinking mechanic (we want to keep blinking under noisy music, but stop under musical noise : not easy!)
 - add button press to reset fft on all nearby costumes, need to think of where and when, fft communication ? group animations ? ... so much to try, the sky is the limit.
 - try to optimize fluid further without impacting on behavior, (we already managed to get it to run smooth on one core!)
@@ -332,6 +330,7 @@ for later:
 - Link/comms: define structured bundles (leaderboard/GPS/messages/audio headers), add per-type ACK/retry, and integrate link frames into games/remote LED paint tools.
 - polish Pong host election/ACK UI,
 -> test w/ F.U.Y.A. music
+- score com between costumes
 
 once assembled : 
 - map out led limb positions

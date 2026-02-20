@@ -5,15 +5,16 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
-#include <stdio.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_random.h"
+#include "esp_log.h"
 
 #include "hw.h"
 #include "oled.h"
 #include "t48_sprites.h"
+#include "scores.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -86,6 +87,9 @@ static float a = 0.0f;     // animation phase
 static float da = 0.0f;    // animation increment
 static uint32_t g_score = 0;
 static uint32_t g_high_score = 0;
+static bool g_high_dirty = false;
+static const char *TAG = "twenty48";
+static const char *kScoreKey = "twenty48";
 
 // mapcoord from the Processing sketch
 static inline int mapcoord(int dir, int i, int j){
@@ -151,7 +155,10 @@ static void slide(void){
             if (merge && value < 31){
                 uint32_t inc = (1u << (value + 1));
                 g_score += inc;
-                if (g_score > g_high_score) g_high_score = g_score;
+                if (g_score > g_high_score) {
+                    g_high_score = g_score;
+                    g_high_dirty = true;
+                }
             }
             lastValue = merge ? 0 : value;                   // reset after merge
             shift += merge ? 1 : 0;                          // merged cell opens a gap
@@ -232,6 +239,14 @@ void t48_game_init(void){
     memset(grid_new, 0, sizeof(grid_new));
     memset(motion, 0, sizeof(motion));
     g_score = 0;
+    g_high_dirty = false;
+    uint32_t saved_high = 0;
+    if (scores_load_high(kScoreKey, &saved_high) == ESP_OK) {
+        g_high_score = saved_high;
+    } else {
+        g_high_score = 0;
+        ESP_LOGW(TAG, "Failed to load high score");
+    }
     a = 0.0f;
     da = 0.0f;
     addtile();
@@ -239,6 +254,18 @@ void t48_game_init(void){
     copy_grid(grid_old, grid_new);
     build_background();
     render();
+}
+
+void t48_game_deinit(void){
+    if (!g_high_dirty) return;
+
+    uint32_t high_out = 0;
+    if (scores_update_high(kScoreKey, g_high_score, &high_out) == ESP_OK) {
+        g_high_score = high_out;
+        g_high_dirty = false;
+    } else {
+        ESP_LOGW(TAG, "Failed to save high score");
+    }
 }
 
 void t48_game_tick(void){

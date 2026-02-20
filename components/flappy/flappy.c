@@ -13,12 +13,14 @@
 #include "oled.h"
 #include "flappy.h"
 #include "flappy_sprite.h"
+#include "scores.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
 static const char *TAG = "flappy";
+static const char *kScoreKey = "flappy";
 
 // ----------------- Framebuffer helpers -----------------
 static uint8_t gfb[PANEL_W * PANEL_H / 8];
@@ -265,6 +267,13 @@ void flappy_run(void)
     int pipe_gap_y[3];
     int score = 0;
     int best  = 0;
+    bool best_dirty = false;
+    uint32_t saved_best = 0;
+    if (scores_load_high(kScoreKey, &saved_best) == ESP_OK) {
+        best = (int)saved_best;
+    } else {
+        ESP_LOGW(TAG, "Failed to load high score");
+    }
     float acc_px = 0.0f;
 
     int start_x = PANEL_W + 20;
@@ -322,7 +331,10 @@ void flappy_run(void)
             for (int i = 0; i < 3; i++) {
                 if (pipe_x[i] + PIPE_W == BIRD_START_X - BIRD_W/2) {
                     score++;
-                    if (score > best) best = score;
+                    if (score > best) {
+                        best = score;
+                        best_dirty = true;
+                    }
                 }
             }
         } else if (state == STATE_DEAD_FALL) {
@@ -399,6 +411,14 @@ void flappy_run(void)
         vTaskDelay(frame_delay);
     }
 
+    if (best_dirty) {
+        uint32_t best_out = 0;
+        if (scores_update_high(kScoreKey, (uint32_t)best, &best_out) == ESP_OK) {
+            best = (int)best_out;
+        } else {
+            ESP_LOGW(TAG, "Failed to save high score");
+        }
+    }
     ESP_LOGI(TAG, "Flappy: exited");
 }
 

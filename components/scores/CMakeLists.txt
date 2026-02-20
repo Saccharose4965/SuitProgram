@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "snake.c"
+    SRCS "scores.c"
     INCLUDE_DIRS "include"
-    REQUIRES oled input scores
+    REQUIRES storage_sd
 )

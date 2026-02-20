@@ -8,11 +8,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "esp_log.h"
 #include "esp_random.h"
 
 #include "input.h"
 #include "hw.h"
 #include "oled.h"
+#include "scores.h"
 
 // Simple monochrome Tetris-like demo (falls, move, rotate).
 // Not feature-complete; serves as a playable placeholder.
@@ -27,6 +29,8 @@ static uint32_t g_score = 0;
 static uint32_t g_high = 0;
 static uint8_t g_next_shape = 0;
 static volatile bool s_tetris_stop = false;
+static const char *TAG = "tetris";
+static const char *kScoreKey = "tetris";
 
 typedef struct { int x,y; uint8_t shape; uint8_t rot; } piece_t;
 
@@ -158,6 +162,14 @@ void tetris_run(void)
     piece_t cur = { BOARD_W/2 - 2, -2, g_next_shape, 0 };
     g_next_shape = (uint8_t)rand_shape();
     g_score = 0; // reset per run
+    bool high_dirty = false;
+    uint32_t saved_high = 0;
+    if (scores_load_high(kScoreKey, &saved_high) == ESP_OK) {
+        g_high = saved_high;
+    } else {
+        g_high = 0;
+        ESP_LOGW(TAG, "Failed to load high score");
+    }
     TickType_t last = xTaskGetTickCount();
     const TickType_t drop_ticks_normal = pdMS_TO_TICKS(450);
     TickType_t last_move = last;
@@ -209,7 +221,10 @@ void tetris_run(void)
                     if (cleared > 0) {
                         // 2048-style additive: more lines -> more points
                         g_score += (uint32_t)(cleared * 100);
-                        if (g_score > g_high) g_high = g_score;
+                        if (g_score > g_high) {
+                            g_high = g_score;
+                            high_dirty = true;
+                        }
                     }
                     cur.x = BOARD_W/2 - 2;
                     cur.y = -2;
@@ -233,6 +248,15 @@ void tetris_run(void)
         oled_draw_text3x5(g_fb, PANEL_W - 4*len - 2, 1, buf);
 
         vTaskDelay(pdMS_TO_TICKS(30));
+    }
+
+    if (high_dirty) {
+        uint32_t high_out = 0;
+        if (scores_update_high(kScoreKey, g_high, &high_out) == ESP_OK) {
+            g_high = high_out;
+        } else {
+            ESP_LOGW(TAG, "Failed to save high score");
+        }
     }
 }
 

@@ -32,6 +32,7 @@ void t48_render(const uint16_t grid_old[4][4],
 // Call t48_game_init() once after OLED/inputs are ready, then call t48_game_tick()
 // regularly (e.g., every ~12–16 ms) from your main loop.
 void t48_game_init(void);
+void t48_game_deinit(void);
 void t48_game_tick(void);
 void t48_game_copy_frame(uint8_t *dst_fb, size_t dst_len);
 

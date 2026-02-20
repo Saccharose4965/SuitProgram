@@ -6,11 +6,15 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_log.h"
+
 #define SNAKE_CELL_PX 4
 #define SNAKE_GRID_W  32
 #define SNAKE_GRID_H  14
 #define SNAKE_STEP_SEC (1.0f/6.0f)
 #define SCORE_BAND_PX 8
+
+#include "scores.h"
 
 typedef struct { int x, y; } snake_cell_t;
 typedef struct {
@@ -26,6 +30,9 @@ typedef struct {
 static snake_state_t s_snake = {0};
 static snake_request_switch_fn s_switch_cb = NULL;
 static void *s_switch_user = NULL;
+static int s_best_len = 0;
+static const char *TAG = "snake";
+static const char *kScoreKey = "snake";
 
 static inline void fb_pset_local(uint8_t *fb, int x, int y)
 {
@@ -85,6 +92,14 @@ static void snake_reset(void){
 }
 
 void snake_app_init(void){
+    uint32_t saved_best = 0;
+    if (scores_load_high(kScoreKey, &saved_best) == ESP_OK) {
+        s_best_len = (int)saved_best;
+    } else {
+        s_best_len = 0;
+        ESP_LOGW(TAG, "Failed to load high score");
+    }
+    if (s_best_len < 4) s_best_len = 4;
     snake_reset();
 }
 
@@ -131,6 +146,15 @@ static void snake_step(void){
         if (s_snake.len < (int)(sizeof(s_snake.body)/sizeof(s_snake.body[0]))){
             s_snake.body[s_snake.len] = s_snake.body[s_snake.len-1];
             s_snake.len++;
+            if (s_snake.len > s_best_len){
+                uint32_t best_out = 0;
+                if (scores_update_high(kScoreKey, (uint32_t)s_snake.len, &best_out) == ESP_OK){
+                    s_best_len = (int)best_out;
+                } else {
+                    s_best_len = s_snake.len;
+                    ESP_LOGW(TAG, "Failed to save high score");
+                }
+            }
         }
         snake_spawn_food();
     }
@@ -159,7 +183,7 @@ void snake_app_draw(uint8_t *fb, int x, int y, int w, int h){
         fb_rect_fill_local(fb, cx, cy, cell, cell);
     }
     char line[24];
-    snprintf(line, sizeof(line), "LEN:%d", s_snake.len);
+    snprintf(line, sizeof(line), "L%d/B%d", s_snake.len, s_best_len);
     oled_draw_text3x5(fb, PANEL_W - 36, 0, line);
     if (!s_snake.alive){
         oled_draw_text3x5(fb, PANEL_W/2 - 10, origin_y + 8, "DEAD");
