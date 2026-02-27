@@ -331,6 +331,8 @@ for later:
 - polish Pong host election/ACK UI,
 -> test w/ F.U.Y.A. music
 - score com between costumes
+- accelerometer synth
+- log of novely for fft?
 
 once assembled : 
 - map out led limb positions

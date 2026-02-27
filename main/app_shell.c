@@ -10,6 +10,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 
 #include "esp_log.h"
 #include "esp_system.h"
@@ -26,18 +27,23 @@
 #include "pong.h"
 
 static const char *TAG = "shell";
+enum { OLED_FB_BYTES = PANEL_W * PANEL_H / 8 };
 
 #if configNUMBER_OF_CORES > 1
 #define APP_TASK_CORE 1
+#define OLED_TASK_CORE 0
 #else
 #define APP_TASK_CORE 0
+#define OLED_TASK_CORE 0
 #endif
 
-static DRAM_ATTR uint8_t s_fb[PANEL_W * PANEL_H / 8];
-static DRAM_ATTR uint8_t s_fb_oled_a[PANEL_W * PANEL_H / 8];
-static DRAM_ATTR uint8_t s_fb_oled_b[PANEL_W * PANEL_H / 8];
-static uint8_t *s_fb_oled_latest = s_fb_oled_a;
+static DRAM_ATTR uint8_t s_fb_oled_a[OLED_FB_BYTES];
+static DRAM_ATTR uint8_t s_fb_oled_b[OLED_FB_BYTES];
+static uint8_t *s_render_fb = s_fb_oled_a;
+static uint8_t *s_oled_fb = s_fb_oled_b;
 static TaskHandle_t s_oled_task = NULL;
+static QueueHandle_t s_oled_q = NULL;
+static uint64_t s_last_submitted_hash = UINT64_MAX;
 static TaskHandle_t s_startup_tone_task = NULL;
 
 static size_t s_current_app = 0;
@@ -80,18 +86,33 @@ static bool parse_mac_string(const char *s, uint8_t out[6]){
 // Framebuffer helpers
 // ======================================================================
 
-static inline void fb_clear(void)
+static inline void fb_clear(uint8_t *fb)
 {
-    memset(s_fb, 0, sizeof(s_fb));
+    if (!fb) return;
+    memset(fb, 0, OLED_FB_BYTES);
+}
+
+static inline uint64_t fb_hash(const uint8_t *fb)
+{
+    if (!fb) return 0;
+    uint64_t h = 1469598103934665603ULL; // FNV-1a 64-bit
+    for (size_t i = 0; i < OLED_FB_BYTES; ++i) {
+        h ^= (uint64_t)fb[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
 }
 
 static void oled_task(void *arg)
 {
     (void)arg;
+    uint8_t *buf = NULL;
     for (;;) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        uint8_t *buf = s_fb_oled_latest;
-        if (buf) {
+        if (!s_oled_q) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        if (xQueueReceive(s_oled_q, &buf, portMAX_DELAY) == pdTRUE && buf) {
             oled_blit_full(buf);
         }
     }
@@ -114,14 +135,23 @@ static void startup_tone_task(void *arg)
 
 static inline void oled_submit_frame(void)
 {
-    if (!s_oled_task) {
-        oled_blit_full(s_fb);
+    uint8_t *just_drawn = s_render_fb;
+    s_render_fb = (s_render_fb == s_fb_oled_a) ? s_fb_oled_b : s_fb_oled_a;
+
+    uint64_t hash = fb_hash(just_drawn);
+    if (hash == s_last_submitted_hash) {
         return;
     }
-    uint8_t *target = (s_fb_oled_latest == s_fb_oled_a) ? s_fb_oled_b : s_fb_oled_a;
-    memcpy(target, s_fb, sizeof(s_fb));
-    s_fb_oled_latest = target;
-    xTaskNotifyGive(s_oled_task);
+    s_last_submitted_hash = hash;
+    s_oled_fb = just_drawn;
+
+    if (!s_oled_task || !s_oled_q) {
+        oled_blit_full(s_oled_fb);
+        return;
+    }
+
+    uint8_t *p = s_oled_fb;
+    xQueueOverwrite(s_oled_q, &p);
 }
 
 // ======================================================================
@@ -504,8 +534,25 @@ static bool shell_init_hw_and_display(void)
     hw_gpio_init();
     oled_init();
     oled_clear();
+    s_render_fb = s_fb_oled_a;
+    s_oled_fb = s_fb_oled_b;
+    fb_clear(s_fb_oled_a);
+    fb_clear(s_fb_oled_b);
+    s_last_submitted_hash = UINT64_MAX;
+    if (!s_oled_q) {
+        s_oled_q = xQueueCreate(1, sizeof(uint8_t *));
+        if (!s_oled_q) {
+            ESP_LOGE(TAG, "oled queue create failed");
+            return false;
+        }
+    }
     if (!s_oled_task) {
-        xTaskCreatePinnedToCore(oled_task, "oled", 2048, NULL, 2, &s_oled_task, APP_TASK_CORE);
+        BaseType_t ok = xTaskCreatePinnedToCore(oled_task, "oled", 2048, NULL, 2, &s_oled_task, OLED_TASK_CORE);
+        if (ok != pdPASS) {
+            ESP_LOGE(TAG, "oled task create failed");
+            s_oled_task = NULL;
+            return false;
+        }
     }
 
     // Audio bus for FFT (shared RX/TX)
@@ -638,7 +685,7 @@ static void shell_run_loop(void)
         s_ctx.state = &state_snapshot;
 
         if (!(app->flags & SHELL_APP_FLAG_EXTERNAL)) {
-            fb_clear();
+            fb_clear(s_render_fb);
 
             int content_y = (app->flags & SHELL_APP_FLAG_SHOW_HUD) ? SHELL_UI_HUD_HEIGHT : 0;
             int content_h = PANEL_H - content_y -
@@ -647,7 +694,7 @@ static void shell_run_loop(void)
 
             if (app->draw) {
                 int64_t t0 = esp_timer_get_time();
-                app->draw(&s_ctx, s_fb, 0, content_y, PANEL_W, content_h);
+                app->draw(&s_ctx, s_render_fb, 0, content_y, PANEL_W, content_h);
                 draw_us = (uint32_t)(esp_timer_get_time() - t0);
             }
 
@@ -656,12 +703,12 @@ static void shell_run_loop(void)
                 if (app->id && strcmp(app->id, "menu") == 0) {
                     hud_label = menu_hud_label();
                 }
-                shell_ui_draw_hud(s_fb, &state_snapshot, hud_label);
+                shell_ui_draw_hud(s_render_fb, &state_snapshot, hud_label);
             }
 
             if (app->flags & SHELL_APP_FLAG_SHOW_LEGEND) {
                 if (app->legend) {
-                    shell_ui_draw_legend(s_fb, app->legend);
+                    shell_ui_draw_legend(s_render_fb, app->legend);
                 }
             }
 
