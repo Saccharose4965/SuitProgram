@@ -52,6 +52,9 @@ static const float kBlinkMinConf         = 0.25f;
 static const float kDoubleTempoBelowBpm  = 90.0f;
 static const float kScoreTauUpSec        = 0.35f;
 static const float kScoreTauDownSec      = 1.20f;
+static const float kLevelFastAlpha       = 0.36f;
+static const float kLevelSlowAlpha       = 0.045f;
+static const float kLevelPeakDecay       = 0.992f;
 #define MAX_PHASE_EVAL 256
 
 // ------------------- State -------------------
@@ -98,6 +101,18 @@ static EXT_RAM_BSS_ATTR float fund_hist[BPM_AVG_FRAMES];
 static EXT_RAM_BSS_ATTR float phase_curve[PHASE_SLOTS];
 static EXT_RAM_BSS_ATTR float bpm_scores[BPM_COUNT];
 
+typedef struct {
+    float fast;
+    float slow;
+    float peak;
+    float out;
+} level_track_t;
+
+static level_track_t s_level_overall = {0};
+static level_track_t s_level_low = {0};
+static level_track_t s_level_mid = {0};
+static level_track_t s_level_high = {0};
+
 static void fft_reset_runtime_state(void){
     ring_write_pos = 0;
     memset(sample, 0, sizeof(sample));
@@ -133,6 +148,58 @@ static void fft_reset_runtime_state(void){
     memset(fund_hist, 0, sizeof(fund_hist));
     memset(phase_curve, 0, sizeof(phase_curve));
     memset(bpm_scores, 0, sizeof(bpm_scores));
+    memset(&s_level_overall, 0, sizeof(s_level_overall));
+    memset(&s_level_low, 0, sizeof(s_level_low));
+    memset(&s_level_mid, 0, sizeof(s_level_mid));
+    memset(&s_level_high, 0, sizeof(s_level_high));
+}
+
+static int bin_from_hz(float hz)
+{
+    int bin = (int)lroundf(hz * (float)FFT_CFG_SIZE / (float)FFT_CFG_SAMPLE_RATE_HZ);
+    if (bin < 0) bin = 0;
+    if (bin > FFT_CFG_SIZE / 2) bin = FFT_CFG_SIZE / 2;
+    return bin;
+}
+
+static float band_mean_logmag(const float *logmag, float hz_lo, float hz_hi)
+{
+    if (!logmag) return 0.0f;
+    int lo = bin_from_hz(hz_lo);
+    int hi = bin_from_hz(hz_hi);
+    if (hi < lo) {
+        int tmp = lo;
+        lo = hi;
+        hi = tmp;
+    }
+    if (hi <= lo) hi = lo + 1;
+    if (hi > FFT_CFG_SIZE / 2) hi = FFT_CFG_SIZE / 2;
+
+    float sum = 0.0f;
+    int count = 0;
+    for (int i = lo; i <= hi; ++i) {
+        sum += logmag[i];
+        count++;
+    }
+    return (count > 0) ? (sum / (float)count) : 0.0f;
+}
+
+static void update_level_track(level_track_t *track, float raw)
+{
+    if (!track || !isfinite(raw)) return;
+    track->fast += kLevelFastAlpha * (raw - track->fast);
+    track->slow += kLevelSlowAlpha * (raw - track->slow);
+    float delta = track->fast - track->slow;
+    if (delta < 0.0f) delta = 0.0f;
+    if (delta > track->peak) {
+        track->peak = delta;
+    } else {
+        track->peak = track->peak * kLevelPeakDecay + delta * (1.0f - kLevelPeakDecay);
+    }
+    if (track->peak < 0.05f) track->peak = 0.05f;
+    track->out = delta / track->peak;
+    if (track->out < 0.0f) track->out = 0.0f;
+    if (track->out > 1.0f) track->out = 1.0f;
 }
 
 // ------------------- phase shift helpers -------------------
@@ -805,6 +872,15 @@ static void process_fft_frame(void){
         logmag[k] = logf(1.0f + 10.0f * mag);
     }
 
+    update_level_track(&s_level_overall, band_mean_logmag(logmag, 80.0f, 4800.0f));
+    update_level_track(&s_level_low,     band_mean_logmag(logmag, 80.0f, 220.0f));
+    update_level_track(&s_level_mid,     band_mean_logmag(logmag, 220.0f, 1400.0f));
+    update_level_track(&s_level_high,    band_mean_logmag(logmag, 1400.0f, 4800.0f));
+    led_audio_levels_set(s_level_overall.out,
+                         s_level_low.out,
+                         s_level_mid.out,
+                         s_level_high.out);
+
     if (fft_render_is_display_enabled()){
         fft_render_push_spectrogram(logmag);
     }
@@ -997,6 +1073,10 @@ void fft_visualizer_stop(void){
     s_stop_requested = false;
 }
 
+bool fft_visualizer_running(void){
+    return s_task != NULL;
+}
+
 void fft_visualizer_set_view(fft_view_t view){
     fft_render_set_view(view);
 }
@@ -1004,6 +1084,15 @@ void fft_visualizer_set_view(fft_view_t view){
 bool fft_receive_beat(fft_beat_event_t *evt, TickType_t timeout_ticks){
     if (!evt || !s_beat_queue) return false;
     return xQueueReceive(s_beat_queue, evt, timeout_ticks) == pdTRUE;
+}
+
+void fft_get_levels(fft_levels_t *out)
+{
+    if (!out) return;
+    out->overall = s_level_overall.out;
+    out->low = s_level_low.out;
+    out->mid = s_level_mid.out;
+    out->high = s_level_high.out;
 }
 
 void fft_set_display_enabled(bool enabled){

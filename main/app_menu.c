@@ -68,6 +68,7 @@ static const menu_entry_t g_menu_led_entries[] = {
     { "menu_root",   "Back"           },
     { "leds_audio",  "Audio Reactive" },
     { "leds_custom", "Custom"         },
+    { "leds_layout", "Layout Edit"    },
 };
 
 static void menu_page_info(const menu_state_t *st, const menu_entry_t **entries, size_t *count, const char **title)

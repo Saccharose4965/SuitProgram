@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-// Initialize the WS2812B strip on PIN_LED_STRIP_A / GPIO32.
+// Initialize the LED outputs on PIN_LED_STRIP_A / GPIO32 and PIN_LED_STRIP_B / GPIO33.
 esp_err_t led_init(void);
 
 // LED strip length used by effects/rendering and transmission.
@@ -65,14 +65,38 @@ esp_err_t led_toggle(void);
 void sendpulse(uint8_t r, uint8_t g, uint8_t b);
 
 typedef enum {
+    LED_COLOR_CYCLE_STATIC = 0,
+    LED_COLOR_CYCLE_RAINBOW = 1,
+    LED_COLOR_CYCLE_SIREN = 2,
+    LED_COLOR_CYCLE_ARCADE = 3,
+    LED_COLOR_CYCLE_INFERNO = 4,
+    LED_COLOR_CYCLE_BIOHAZARD = 5,
+} led_color_cycle_t;
+
+typedef enum {
+    LED_COLOR_STYLE_MONO = 0,
+    LED_COLOR_STYLE_DUO = 1,
+    LED_COLOR_STYLE_PALETTE = 2,
+} led_color_style_t;
+
+typedef enum {
+    LED_HIGHLIGHT_OFF = 0,
+    LED_HIGHLIGHT_PEAKS = 1,
+} led_highlight_mode_t;
+
+typedef enum {
     LED_BEAT_ANIM_FLASH = 0,
     LED_BEAT_ANIM_PULSE = 1,
-    LED_BEAT_ANIM_WAVE = 2,
-    LED_BEAT_ANIM_PULSE_DUAL = 3,
+    LED_BEAT_ANIM_RING_TRAIN = 2,
+    LED_BEAT_ANIM_PLANE_PAIR = 3,
     LED_BEAT_ANIM_SPARK = 4,
     LED_BEAT_ANIM_COMET = 5,
     LED_BEAT_ANIM_SHOCK = 6,
-    LED_BEAT_ANIM_SPARK_RAIN = 7,
+    LED_BEAT_ANIM_RING_PULSE = 7,
+    LED_BEAT_ANIM_PLANE_SWEEP = 8,
+    LED_BEAT_ANIM_CROSSFIRE = 9,
+    LED_BEAT_ANIM_PLANE_FAN = 10,
+    LED_BEAT_ANIM_AUDIO_ENERGY = 11,
 } led_beat_anim_t;
 
 // Beat animation mode helpers (used by FFT beat trigger path).
@@ -85,8 +109,17 @@ bool led_beat_enabled(void);
 
 // Trigger one beat event using currently selected animation mode.
 void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b);
+void led_audio_levels_set(float overall, float low, float mid, float high);
 void led_beat_color_set(uint8_t r, uint8_t g, uint8_t b);
 void led_beat_color_get(uint8_t *r, uint8_t *g, uint8_t *b);
+void led_beat_secondary_color_set(uint8_t r, uint8_t g, uint8_t b);
+void led_beat_secondary_color_get(uint8_t *r, uint8_t *g, uint8_t *b);
+void led_beat_color_cycle_set(led_color_cycle_t mode);
+led_color_cycle_t led_beat_color_cycle_get(void);
+void led_beat_color_style_set(led_color_style_t style);
+led_color_style_t led_beat_color_style_get(void);
+void led_beat_highlight_mode_set(led_highlight_mode_t mode);
+led_highlight_mode_t led_beat_highlight_mode_get(void);
 void led_beat_brightness_set(uint8_t level);
 uint8_t led_beat_brightness_get(void);
 

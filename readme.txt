@@ -103,6 +103,7 @@ From `main/app_shell.c` (`s_builtin_apps`):
 - `volume`
 - `leds_audio`
 - `leds_custom`
+- `leds_layout`
 - `music`
 - `bt`
 - `file_rx`
@@ -169,6 +170,7 @@ LED:
 - Back
 - Audio Reactive
 - Custom
+- Layout Edit
 
 Current menu stubs (not registered as apps):
 - `gps`
@@ -199,6 +201,23 @@ LED Audio / LED Custom (`main/app_leds.c`):
 - `D`:
   - on `Back`: return to `menu`
   - on mode item: apply selected mode
+
+LED Layout (`main/app_led_layout.c`):
+- `A`: previous field
+- `B`: next field
+- `C`: decrement current field
+- `D`: increment/apply current field
+- Long press `C/D`: coarse decrement/increment
+- Fields:
+  - Back
+  - Side (`left` / `right`)
+  - Part index within selected side
+  - Length
+  - Reversed
+  - Preview (`off` / section / runner)
+  - Save
+  - Reload
+  - Reset default
 
 Music (`main/app_music.c`):
 - `A/B`: list navigation
@@ -260,6 +279,76 @@ SD mount point:
 - `/sdcard`
 
 
+LED layout system (current)
+---------------------------
+The LED runtime is now driven by a persisted spatial layout model rather than
+hard-coded strip assumptions.
+
+Current storage/runtime behavior:
+- Layout file path: `/sdcard/led_layout.txt`
+- `led_layout_init()` loads it at runtime
+- If the file is missing, a default chestplate layout is created in memory and
+  written to SD when possible
+- Layout state includes:
+  - profile name
+  - strip names / strip lengths
+  - per-section strip assignment
+  - per-section LED count
+  - reverse flag
+  - sampled torso-space geometry (polyline / arc)
+
+Current chestplate topology:
+- 2 physical strips / 2 GPIO outputs
+- `left` strip has 9 sections:
+  - `front_left_top`
+  - `front_left_ring`
+  - `front_left_rib`
+  - `front_left_abs`
+  - `front_left_belt`
+  - `back_left_belt`
+  - `back_left_vertebra`
+  - `back_left_rib`
+  - `back_left_top`
+- `right` strip has 8 sections:
+  - `front_right_top`
+  - `front_right_rib`
+  - `front_right_abs`
+  - `front_right_belt`
+  - `back_right_belt`
+  - `back_right_vertebra`
+  - `back_right_rib`
+  - `back_right_top`
+
+Why this matters:
+- Logical LED order is now mapped onto two physical strips using the layout
+- Animations can query per-LED torso coordinates
+- Per-suit variants can keep the same geometry while changing per-section LED
+  counts on SD
+- The layout editor shows indices per strip, so both strips start at `0` for
+  hardware/debug purposes
+
+Layout authoring / debug workflow:
+- On device: `LEDs -> Layout Edit`
+  - change side, section length, reverse flag, preview mode
+  - save / reload / reset default
+  - preview the selected section live on the strips
+- On host: Python tools under `tools/`
+  - `tools/layout_model.py`: normalized chestplate geometry and sampling model
+  - `tools/render_front_layout.py`: SVG preview renderer
+  - `tools/generate_layout_sd.py`: export layout text file for SD
+
+Animation model notes:
+- Custom geometry-aware modes and several audio-reactive modes now use the
+  sampled layout coordinates
+- Audio mode `audio_energy` is a continuous FFT-driven equivalent of the custom
+  `energy` pattern rather than a simple beat flash
+- Color handling is now explicit:
+  - `mono`
+  - `duo`
+  - `palette`
+  - optional white highlights via highlight mode
+
+
 Repository layout
 -----------------
 `main/`:
@@ -268,6 +357,9 @@ Repository layout
 `components/`:
 - Reusable modules: hardware, oled, input, audio, bt_audio, fft, link, gps,
   orientation, storage, games, etc.
+
+`tools/`:
+- Layout preview and SD-export helpers for the chestplate geometry
 
 Legacy entrypoint files still present in `main/` but not in build list:
 - `main/reciever.c`
@@ -331,7 +423,7 @@ for later:
 - polish Pong host election/ACK UI,
 -> test w/ F.U.Y.A. music
 - score com between costumes
-- accelerometer synth
+- accelerometer synth (theremin like? idk)
 - log of novely for fft?
 
 once assembled : 
@@ -343,3 +435,4 @@ Extras:
 - Tournai map on OLED, IMU fusion for limb pose to drive LEDs/stick
 - create audio file that when displayed on the spectrogram, spell out words, as hidden messages
 - port more titles (tron/doom/pacman/etc.)
+- asteroids game !

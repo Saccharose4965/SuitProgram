@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "led.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,6 +30,14 @@ uint8_t led_modes_get_brightness(void);
 // Primary color used by standalone mode rendering.
 void led_modes_set_primary_color(uint8_t r, uint8_t g, uint8_t b);
 void led_modes_get_primary_color(uint8_t *r, uint8_t *g, uint8_t *b);
+void led_modes_set_secondary_color(uint8_t r, uint8_t g, uint8_t b);
+void led_modes_get_secondary_color(uint8_t *r, uint8_t *g, uint8_t *b);
+void led_modes_color_cycle_set(led_color_cycle_t mode);
+led_color_cycle_t led_modes_color_cycle_get(void);
+void led_modes_color_style_set(led_color_style_t style);
+led_color_style_t led_modes_color_style_get(void);
+void led_modes_highlight_mode_set(led_highlight_mode_t mode);
+led_highlight_mode_t led_modes_highlight_mode_get(void);
 
 #ifdef __cplusplus
 }

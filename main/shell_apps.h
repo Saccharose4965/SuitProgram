@@ -39,6 +39,13 @@ void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void leds_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t LEDS_LEGEND;
 
+void led_layout_app_init(shell_app_context_t *ctx);
+void led_layout_app_deinit(shell_app_context_t *ctx);
+void led_layout_app_tick(shell_app_context_t *ctx, float dt_sec);
+void led_layout_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
+void led_layout_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
+extern const shell_legend_t LED_LAYOUT_LEGEND;
+
 void fft_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void fft_app_init(shell_app_context_t *ctx);
 void fft_app_deinit(shell_app_context_t *ctx);

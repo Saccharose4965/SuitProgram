@@ -18,6 +18,7 @@ extern "C" {
  */
 esp_err_t fft_visualizer_start(void);
 void fft_visualizer_stop(void);
+bool fft_visualizer_running(void);
 
 // Shared FFT pipeline configuration (single source of truth for fft.c/fft_render.c).
 enum {
@@ -55,6 +56,15 @@ typedef struct {
 } fft_beat_event_t;
 
 bool fft_receive_beat(fft_beat_event_t *evt, TickType_t timeout_ticks);
+
+typedef struct {
+    float overall; // 0..1 normalized broadband movement
+    float low;     // 0..1 normalized low-band movement
+    float mid;     // 0..1 normalized mid-band movement
+    float high;    // 0..1 normalized high-band movement
+} fft_levels_t;
+
+void fft_get_levels(fft_levels_t *out);
 
 // Enable or disable OLED rendering; beat detection and sampling keep running.
 void fft_set_display_enabled(bool enabled);

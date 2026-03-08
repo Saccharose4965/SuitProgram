@@ -19,6 +19,7 @@
 #include "hw.h"
 #include "oled.h"
 #include "gps.h"
+#include "led_layout.h"
 #include "led_modes.h"
 #include "power.h"
 #include "link.h"
@@ -345,6 +346,17 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .tick   = NULL,
         .handle_input = leds_app_handle_input,
         .draw   = leds_app_draw,
+    },
+    {
+        .id     = "leds_layout",
+        .name   = "LED Layout",
+        .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &LED_LAYOUT_LEGEND,
+        .init   = led_layout_app_init,
+        .deinit = led_layout_app_deinit,
+        .tick   = led_layout_app_tick,
+        .handle_input = led_layout_app_handle_input,
+        .draw   = led_layout_app_draw,
     },
     {
         .id     = "music",
@@ -734,6 +746,12 @@ void app_shell_start(void)
     ESP_LOGI(TAG, "stage: system_state_init done");
     app_settings_init();
     ESP_LOGI(TAG, "stage: settings init done");
+    {
+        esp_err_t layout_err = led_layout_init();
+        if (layout_err != ESP_OK) {
+            ESP_LOGW(TAG, "led_layout init warning: %s", esp_err_to_name(layout_err));
+        }
+    }
     // (void)led_modes_start();     // temporarily disabled
     // (void)power_monitor_start(); // temporarily disabled
     shell_setup_link(); // TODO: better names for these setup stages? and sepaate components for each service init? 

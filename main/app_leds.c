@@ -4,8 +4,10 @@
 
 #include "esp_err.h"
 #include "esp_log.h"
+#include "fft.h"
 #include "led.h"
 #include "led_modes.h"
+#include "shell_audio.h"
 
 const shell_legend_t LEDS_LEGEND = {
     .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_LEFT, SHELL_ICON_CUSTOM2 },
@@ -18,9 +20,14 @@ enum {
 
 enum {
     LEDS_CFG_PRESET = 0,
+    LEDS_CFG_STYLE,
+    LEDS_CFG_HIGHLIGHT,
     LEDS_CFG_R,
     LEDS_CFG_G,
     LEDS_CFG_B,
+    LEDS_CFG_R2,
+    LEDS_CFG_G2,
+    LEDS_CFG_B2,
     LEDS_CFG_BRIGHTNESS,
     LEDS_CFG_COUNT,
 };
@@ -30,28 +37,45 @@ typedef struct {
     uint8_t r;
     uint8_t g;
     uint8_t b;
+    uint8_t r2;
+    uint8_t g2;
+    uint8_t b2;
+    led_color_cycle_t cycle;
+    led_color_style_t style;
+    led_highlight_mode_t highlight;
 } leds_color_preset_t;
 
 static const leds_color_preset_t s_color_presets[] = {
-    { "tron",    0, 180, 255 },
-    { "ice",   120, 220, 255 },
-    { "magenta",255,  40, 180 },
-    { "amber", 255, 120,   0 },
-    { "white", 220, 220, 220 },
+    { "signal", 255,   0,   0, 255, 160,   0, LED_COLOR_CYCLE_STATIC,    LED_COLOR_STYLE_MONO,    LED_HIGHLIGHT_OFF   },
+    { "hazard", 255, 140,   0, 255, 255,   0, LED_COLOR_CYCLE_STATIC,    LED_COLOR_STYLE_MONO,    LED_HIGHLIGHT_OFF   },
+    { "acid",   170, 255,   0,   0, 255,  96, LED_COLOR_CYCLE_STATIC,    LED_COLOR_STYLE_MONO,    LED_HIGHLIGHT_OFF   },
+    { "cobalt",   0,  72, 255, 180,   0, 255, LED_COLOR_CYCLE_STATIC,    LED_COLOR_STYLE_MONO,    LED_HIGHLIGHT_OFF   },
+    { "fuchsia",255,   0, 170,   0, 210, 255, LED_COLOR_CYCLE_STATIC,    LED_COLOR_STYLE_MONO,    LED_HIGHLIGHT_OFF   },
+    { "bone",   255, 236, 208, 255, 196, 128, LED_COLOR_CYCLE_STATIC,    LED_COLOR_STYLE_MONO,    LED_HIGHLIGHT_OFF   },
+    { "rainbow",255,   0,   0,   0, 255, 192, LED_COLOR_CYCLE_RAINBOW,   LED_COLOR_STYLE_PALETTE, LED_HIGHLIGHT_OFF   },
+    { "siren",  255,   0,   0,   0,  48, 255, LED_COLOR_CYCLE_SIREN,     LED_COLOR_STYLE_PALETTE, LED_HIGHLIGHT_OFF   },
+    { "arcade", 255,   0, 255,   0, 250, 255, LED_COLOR_CYCLE_ARCADE,    LED_COLOR_STYLE_PALETTE, LED_HIGHLIGHT_OFF   },
+    { "inferno",255,  48,   0, 255, 210,  24, LED_COLOR_CYCLE_INFERNO,   LED_COLOR_STYLE_PALETTE, LED_HIGHLIGHT_OFF   },
+    { "biohaz",  64, 255,   0, 190, 255,   0, LED_COLOR_CYCLE_BIOHAZARD, LED_COLOR_STYLE_PALETTE, LED_HIGHLIGHT_OFF   },
 };
 static const int kColorPresetCount = (int)(sizeof(s_color_presets) / sizeof(s_color_presets[0]));
 
 static const char *TAG = "app_leds";
 
-#define LEDS_MAX_AUDIO_ENTRIES 16
-#define LEDS_MAX_CUSTOM_ENTRIES 28
+#define LEDS_MAX_AUDIO_ENTRIES 28
+#define LEDS_MAX_CUSTOM_ENTRIES 36
 static shell_menu_entry_t s_audio_entries[1 + LEDS_MAX_AUDIO_ENTRIES];
 static shell_menu_entry_t s_custom_entries[1 + LEDS_MAX_CUSTOM_ENTRIES];
 
 static char s_preset_label[24];
+static char s_style_label[16];
+static char s_hi_label[14];
 static char s_r_label[12];
 static char s_g_label[12];
 static char s_b_label[12];
+static char s_r2_label[12];
+static char s_g2_label[12];
+static char s_b2_label[12];
 static char s_bright_label[14];
 
 typedef struct {
@@ -64,9 +88,16 @@ typedef struct {
     uint8_t color_r;
     uint8_t color_g;
     uint8_t color_b;
+    uint8_t color2_r;
+    uint8_t color2_g;
+    uint8_t color2_b;
+    led_color_cycle_t color_cycle;
+    led_color_style_t color_style;
+    led_highlight_mode_t highlight_mode;
     uint8_t brightness;
 } leds_state_t;
 static leds_state_t s_leds = {0};
+static bool s_leds_fft_owned = false;
 
 static int clamp_int(int v, int lo, int hi)
 {
@@ -82,14 +113,38 @@ static size_t clamp_sel(size_t sel, size_t count)
     return sel;
 }
 
-static int find_preset_exact(uint8_t r, uint8_t g, uint8_t b)
+static const char *color_style_name(led_color_style_t style)
+{
+    switch (style) {
+        case LED_COLOR_STYLE_DUO: return "duo";
+        case LED_COLOR_STYLE_PALETTE: return "palette";
+        case LED_COLOR_STYLE_MONO:
+        default: return "mono";
+    }
+}
+
+static const char *highlight_mode_name(led_highlight_mode_t mode)
+{
+    switch (mode) {
+        case LED_HIGHLIGHT_PEAKS: return "peaks";
+        case LED_HIGHLIGHT_OFF:
+        default: return "off";
+    }
+}
+
+static int find_preset_match(led_color_cycle_t cycle,
+                             led_color_style_t style,
+                             led_highlight_mode_t highlight,
+                             uint8_t r, uint8_t g, uint8_t b,
+                             uint8_t r2, uint8_t g2, uint8_t b2)
 {
     for (int i = 0; i < kColorPresetCount; ++i) {
-        if (s_color_presets[i].r == r &&
-            s_color_presets[i].g == g &&
-            s_color_presets[i].b == b) {
-            return i;
-        }
+        if (s_color_presets[i].cycle != cycle) continue;
+        if (s_color_presets[i].style != style) continue;
+        if (s_color_presets[i].highlight != highlight) continue;
+        if (s_color_presets[i].r != r || s_color_presets[i].g != g || s_color_presets[i].b != b) continue;
+        if (s_color_presets[i].r2 != r2 || s_color_presets[i].g2 != g2 || s_color_presets[i].b2 != b2) continue;
+        return i;
     }
     return -1;
 }
@@ -102,6 +157,21 @@ static uint8_t step_u8_clamp(uint8_t value, int step, uint8_t lo, uint8_t hi)
     return (uint8_t)next;
 }
 
+static int color_step_for_value(uint8_t value)
+{
+    if (value < 16u) return 1;
+    if (value < 48u) return 2;
+    if (value < 96u) return 4;
+    if (value < 160u) return 8;
+    return 16;
+}
+
+static uint8_t step_color_u8(uint8_t value, bool inc)
+{
+    int step = color_step_for_value(value);
+    return step_u8_clamp(value, inc ? step : -step, 0, 255);
+}
+
 static void apply_preset_idx(int idx)
 {
     idx = clamp_int(idx, 0, kColorPresetCount - 1);
@@ -109,21 +179,55 @@ static void apply_preset_idx(int idx)
     s_leds.color_r = s_color_presets[idx].r;
     s_leds.color_g = s_color_presets[idx].g;
     s_leds.color_b = s_color_presets[idx].b;
+    s_leds.color2_r = s_color_presets[idx].r2;
+    s_leds.color2_g = s_color_presets[idx].g2;
+    s_leds.color2_b = s_color_presets[idx].b2;
+    s_leds.color_cycle = s_color_presets[idx].cycle;
+    s_leds.color_style = s_color_presets[idx].style;
+    s_leds.highlight_mode = s_color_presets[idx].highlight;
 }
 
 static void leds_apply_color(void)
 {
     led_beat_color_set(s_leds.color_r, s_leds.color_g, s_leds.color_b);
+    led_beat_secondary_color_set(s_leds.color2_r, s_leds.color2_g, s_leds.color2_b);
+    led_beat_color_cycle_set(s_leds.color_cycle);
+    led_beat_color_style_set(s_leds.color_style);
+    led_beat_highlight_mode_set(s_leds.highlight_mode);
     led_beat_brightness_set(s_leds.brightness);
     led_modes_set_primary_color(s_leds.color_r, s_leds.color_g, s_leds.color_b);
+    led_modes_set_secondary_color(s_leds.color2_r, s_leds.color2_g, s_leds.color2_b);
+    led_modes_color_cycle_set(s_leds.color_cycle);
+    led_modes_color_style_set(s_leds.color_style);
+    led_modes_highlight_mode_set(s_leds.highlight_mode);
     led_modes_set_brightness(s_leds.brightness);
-    s_leds.preset_idx = find_preset_exact(s_leds.color_r, s_leds.color_g, s_leds.color_b);
+    s_leds.preset_idx = find_preset_match(s_leds.color_cycle,
+                                          s_leds.color_style,
+                                          s_leds.highlight_mode,
+                                          s_leds.color_r,
+                                          s_leds.color_g,
+                                          s_leds.color_b,
+                                          s_leds.color2_r,
+                                          s_leds.color2_g,
+                                          s_leds.color2_b);
 }
 
 static void leds_load_color_state(void)
 {
     led_beat_color_get(&s_leds.color_r, &s_leds.color_g, &s_leds.color_b);
-    s_leds.preset_idx = find_preset_exact(s_leds.color_r, s_leds.color_g, s_leds.color_b);
+    led_beat_secondary_color_get(&s_leds.color2_r, &s_leds.color2_g, &s_leds.color2_b);
+    s_leds.color_cycle = led_beat_color_cycle_get();
+    s_leds.color_style = led_beat_color_style_get();
+    s_leds.highlight_mode = led_beat_highlight_mode_get();
+    s_leds.preset_idx = find_preset_match(s_leds.color_cycle,
+                                          s_leds.color_style,
+                                          s_leds.highlight_mode,
+                                          s_leds.color_r,
+                                          s_leds.color_g,
+                                          s_leds.color_b,
+                                          s_leds.color2_r,
+                                          s_leds.color2_g,
+                                          s_leds.color2_b);
     s_leds.brightness = led_beat_brightness_get();
     if (s_leds.brightness < 8) s_leds.brightness = 8;
 }
@@ -134,9 +238,14 @@ static void refresh_color_labels(void)
         ? s_color_presets[s_leds.preset_idx].name
         : "manual";
     snprintf(s_preset_label, sizeof(s_preset_label), "preset:%s", preset_name);
+    snprintf(s_style_label, sizeof(s_style_label), "style:%s", color_style_name(s_leds.color_style));
+    snprintf(s_hi_label, sizeof(s_hi_label), "hi:%s", highlight_mode_name(s_leds.highlight_mode));
     snprintf(s_r_label, sizeof(s_r_label), "R:%u", (unsigned)s_leds.color_r);
     snprintf(s_g_label, sizeof(s_g_label), "G:%u", (unsigned)s_leds.color_g);
     snprintf(s_b_label, sizeof(s_b_label), "B:%u", (unsigned)s_leds.color_b);
+    snprintf(s_r2_label, sizeof(s_r2_label), "R2:%u", (unsigned)s_leds.color2_r);
+    snprintf(s_g2_label, sizeof(s_g2_label), "G2:%u", (unsigned)s_leds.color2_g);
+    snprintf(s_b2_label, sizeof(s_b2_label), "B2:%u", (unsigned)s_leds.color2_b);
     snprintf(s_bright_label, sizeof(s_bright_label), "bright:%u", (unsigned)s_leds.brightness);
 }
 
@@ -145,9 +254,14 @@ static void append_color_entries(shell_menu_entry_t *entries, size_t *n, size_t 
     if (!entries || !n) return;
     refresh_color_labels();
     if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_preset", .label = s_preset_label };
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_style", .label = s_style_label };
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_highlight", .label = s_hi_label };
     if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_r", .label = s_r_label };
     if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_g", .label = s_g_label };
     if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_b", .label = s_b_label };
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_r2", .label = s_r2_label };
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_g2", .label = s_g2_label };
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_b2", .label = s_b2_label };
     if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_brightness", .label = s_bright_label };
 }
 
@@ -186,11 +300,38 @@ static int mode_count_for_page(int page)
     return (page == LEDS_PAGE_AUDIO) ? led_beat_anim_count() : led_modes_count();
 }
 
+static void leds_audio_fft_ensure_started(void)
+{
+    if (!shell_audio_init_if_needed()) {
+        ESP_LOGW(TAG, "audio init unavailable; beat modes will not react");
+        return;
+    }
+
+    bool was_running = fft_visualizer_running();
+    fft_set_display_enabled(false);
+    esp_err_t err = fft_visualizer_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "fft_visualizer_start failed: %s", esp_err_to_name(err));
+        return;
+    }
+    if (!was_running) {
+        s_leds_fft_owned = true;
+    }
+}
+
+static void leds_audio_fft_maybe_stop(void)
+{
+    if (!s_leds_fft_owned) return;
+    fft_visualizer_stop();
+    s_leds_fft_owned = false;
+}
+
 static void leds_apply_audio(void)
 {
     int count = led_beat_anim_count();
     if (count <= 0) return;
     s_leds.audio_mode = clamp_int(s_leds.audio_mode, 0, count - 1);
+    leds_audio_fft_ensure_started();
     led_beat_anim_set((led_beat_anim_t)s_leds.audio_mode);
     led_beat_enable(true);
     led_modes_enable(false);
@@ -209,6 +350,7 @@ static void leds_apply_custom(void)
     led_modes_set(s_leds.custom_mode);
     led_modes_enable(true);
     led_beat_enable(false);
+    leds_audio_fft_maybe_stop();
 
     const char *name = led_modes_name(s_leds.custom_mode);
     system_state_set_led_mode(s_leds.custom_mode, name ? name : "custom");
@@ -225,7 +367,6 @@ static void leds_apply_mode_for_page(void)
 
 static void leds_cycle_cfg(int cfg_idx, bool inc)
 {
-    const int rgb_step = 16;
     const int bright_step = 16;
     switch (cfg_idx) {
         case LEDS_CFG_PRESET: {
@@ -235,14 +376,66 @@ static void leds_cycle_cfg(int cfg_idx, bool inc)
             apply_preset_idx(idx);
             break;
         }
+        case LEDS_CFG_STYLE:
+            s_leds.color_style = (led_color_style_t)((((int)s_leds.color_style) +
+                                  (inc ? 1 : -1) + 3) % 3);
+            if (s_leds.color_style != LED_COLOR_STYLE_PALETTE &&
+                s_leds.color_cycle != LED_COLOR_CYCLE_STATIC) {
+                s_leds.color_cycle = LED_COLOR_CYCLE_STATIC;
+            }
+            break;
+        case LEDS_CFG_HIGHLIGHT:
+            s_leds.highlight_mode = (s_leds.highlight_mode == LED_HIGHLIGHT_OFF)
+                ? LED_HIGHLIGHT_PEAKS
+                : LED_HIGHLIGHT_OFF;
+            break;
         case LEDS_CFG_R:
-            s_leds.color_r = step_u8_clamp(s_leds.color_r, inc ? rgb_step : -rgb_step, 0, 255);
+            if (s_leds.color_style == LED_COLOR_STYLE_PALETTE) {
+                s_leds.color_style = LED_COLOR_STYLE_MONO;
+            }
+            s_leds.color_cycle = LED_COLOR_CYCLE_STATIC;
+            s_leds.color_r = step_color_u8(s_leds.color_r, inc);
             break;
         case LEDS_CFG_G:
-            s_leds.color_g = step_u8_clamp(s_leds.color_g, inc ? rgb_step : -rgb_step, 0, 255);
+            if (s_leds.color_style == LED_COLOR_STYLE_PALETTE) {
+                s_leds.color_style = LED_COLOR_STYLE_MONO;
+            }
+            s_leds.color_cycle = LED_COLOR_CYCLE_STATIC;
+            s_leds.color_g = step_color_u8(s_leds.color_g, inc);
             break;
         case LEDS_CFG_B:
-            s_leds.color_b = step_u8_clamp(s_leds.color_b, inc ? rgb_step : -rgb_step, 0, 255);
+            if (s_leds.color_style == LED_COLOR_STYLE_PALETTE) {
+                s_leds.color_style = LED_COLOR_STYLE_MONO;
+            }
+            s_leds.color_cycle = LED_COLOR_CYCLE_STATIC;
+            s_leds.color_b = step_color_u8(s_leds.color_b, inc);
+            break;
+        case LEDS_CFG_R2:
+            if (s_leds.color_style == LED_COLOR_STYLE_PALETTE) {
+                s_leds.color_cycle = LED_COLOR_CYCLE_STATIC;
+            }
+            if (s_leds.color_style == LED_COLOR_STYLE_MONO) {
+                s_leds.color_style = LED_COLOR_STYLE_DUO;
+            }
+            s_leds.color2_r = step_color_u8(s_leds.color2_r, inc);
+            break;
+        case LEDS_CFG_G2:
+            if (s_leds.color_style == LED_COLOR_STYLE_PALETTE) {
+                s_leds.color_cycle = LED_COLOR_CYCLE_STATIC;
+            }
+            if (s_leds.color_style == LED_COLOR_STYLE_MONO) {
+                s_leds.color_style = LED_COLOR_STYLE_DUO;
+            }
+            s_leds.color2_g = step_color_u8(s_leds.color2_g, inc);
+            break;
+        case LEDS_CFG_B2:
+            if (s_leds.color_style == LED_COLOR_STYLE_PALETTE) {
+                s_leds.color_cycle = LED_COLOR_CYCLE_STATIC;
+            }
+            if (s_leds.color_style == LED_COLOR_STYLE_MONO) {
+                s_leds.color_style = LED_COLOR_STYLE_DUO;
+            }
+            s_leds.color2_b = step_color_u8(s_leds.color2_b, inc);
             break;
         case LEDS_CFG_BRIGHTNESS:
             s_leds.brightness = step_u8_clamp(s_leds.brightness,
@@ -253,9 +446,6 @@ static void leds_cycle_cfg(int cfg_idx, bool inc)
             return;
     }
 
-    if (cfg_idx != LEDS_CFG_PRESET) {
-        s_leds.preset_idx = find_preset_exact(s_leds.color_r, s_leds.color_g, s_leds.color_b);
-    }
     leds_apply_color();
 }
 
@@ -277,6 +467,10 @@ static void leds_init_page(shell_app_context_t *ctx, int page)
 
     leds_load_color_state();
     leds_apply_color();
+
+    if (s_leds.page == LEDS_PAGE_AUDIO && led_beat_enabled()) {
+        leds_audio_fft_ensure_started();
+    }
 
     if (s_leds.page == LEDS_PAGE_AUDIO) {
         shell_ui_menu_reset(s_leds.audio_sel);
