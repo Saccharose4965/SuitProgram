@@ -26,7 +26,7 @@ typedef struct {
 
 static const led_mode_desc_t s_modes[] = {
     { "off"     },
-    { "solid"   },
+    { "fill"    },
     { "breathe" },
     { "scanner" },
     { "mirror"  },
@@ -51,6 +51,7 @@ static volatile bool s_enabled = false;
 static TaskHandle_t s_task = NULL;
 static bool s_sync_enabled = true;
 static uint8_t s_brightness = 96;
+static volatile uint8_t s_speed_percent = 100;
 static uint8_t s_primary_r = 0;
 static uint8_t s_primary_g = 180;
 static uint8_t s_primary_b = 255;
@@ -97,6 +98,12 @@ void led_modes_set_sync(bool enabled) { s_sync_enabled = enabled; }
 bool led_modes_sync_enabled(void) { return s_sync_enabled; }
 void led_modes_set_brightness(uint8_t level) { s_brightness = level; }
 uint8_t led_modes_get_brightness(void) { return s_brightness; }
+void led_modes_set_speed_percent(uint8_t percent) {
+    if (percent < 10u) percent = 10u;
+    if (percent > 250u) percent = 250u;
+    s_speed_percent = percent;
+}
+uint8_t led_modes_get_speed_percent(void) { return s_speed_percent; }
 void led_modes_set_primary_color(uint8_t r, uint8_t g, uint8_t b) {
     s_primary_r = r;
     s_primary_g = g;
@@ -977,7 +984,10 @@ static void led_modes_task(void *arg)
             t_sec = 0.0f;
             last_wake = xTaskGetTickCount();
         }
-        t_sec += dt_sec;
+        float speed_scale = (float)s_speed_percent / 100.0f;
+        if (speed_scale < 0.10f) speed_scale = 0.10f;
+        if (speed_scale > 2.50f) speed_scale = 2.50f;
+        t_sec += dt_sec * speed_scale;
 
         size_t count = custom_render_pixels();
         memset(frame, 0, sizeof(frame));

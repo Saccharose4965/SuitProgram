@@ -67,6 +67,7 @@ static const menu_entry_t g_menu_comm_entries[] = {
 static const menu_entry_t g_menu_led_entries[] = {
     { "menu_root",   "Back"           },
     { "leds_audio",  "Audio Reactive" },
+    { "manual_bpm",  "Manual BPM"     },
     { "leds_custom", "Custom"         },
     { "leds_layout", "Layout Edit"    },
 };

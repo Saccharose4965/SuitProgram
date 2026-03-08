@@ -10,6 +10,7 @@ idf_component_register(
         "app_settings.c"
         "app_leds.c"
         "app_led_layout.c"
+        "app_manual_bpm.c"
         "app_fft.c"
         "app_music.c"
         "app_bt.c"

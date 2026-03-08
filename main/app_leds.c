@@ -28,6 +28,7 @@ enum {
     LEDS_CFG_R2,
     LEDS_CFG_G2,
     LEDS_CFG_B2,
+    LEDS_CFG_SPEED,
     LEDS_CFG_BRIGHTNESS,
     LEDS_CFG_COUNT,
 };
@@ -76,6 +77,7 @@ static char s_b_label[12];
 static char s_r2_label[12];
 static char s_g2_label[12];
 static char s_b2_label[12];
+static char s_speed_label[14];
 static char s_bright_label[14];
 
 typedef struct {
@@ -94,6 +96,7 @@ typedef struct {
     led_color_cycle_t color_cycle;
     led_color_style_t color_style;
     led_highlight_mode_t highlight_mode;
+    uint8_t custom_speed_percent;
     uint8_t brightness;
 } leds_state_t;
 static leds_state_t s_leds = {0};
@@ -200,6 +203,7 @@ static void leds_apply_color(void)
     led_modes_color_cycle_set(s_leds.color_cycle);
     led_modes_color_style_set(s_leds.color_style);
     led_modes_highlight_mode_set(s_leds.highlight_mode);
+    led_modes_set_speed_percent(s_leds.custom_speed_percent);
     led_modes_set_brightness(s_leds.brightness);
     s_leds.preset_idx = find_preset_match(s_leds.color_cycle,
                                           s_leds.color_style,
@@ -228,6 +232,7 @@ static void leds_load_color_state(void)
                                           s_leds.color2_r,
                                           s_leds.color2_g,
                                           s_leds.color2_b);
+    s_leds.custom_speed_percent = led_modes_get_speed_percent();
     s_leds.brightness = led_beat_brightness_get();
     if (s_leds.brightness < 8) s_leds.brightness = 8;
 }
@@ -246,6 +251,7 @@ static void refresh_color_labels(void)
     snprintf(s_r2_label, sizeof(s_r2_label), "R2:%u", (unsigned)s_leds.color2_r);
     snprintf(s_g2_label, sizeof(s_g2_label), "G2:%u", (unsigned)s_leds.color2_g);
     snprintf(s_b2_label, sizeof(s_b2_label), "B2:%u", (unsigned)s_leds.color2_b);
+    snprintf(s_speed_label, sizeof(s_speed_label), "speed:%u%%", (unsigned)s_leds.custom_speed_percent);
     snprintf(s_bright_label, sizeof(s_bright_label), "bright:%u", (unsigned)s_leds.brightness);
 }
 
@@ -262,6 +268,20 @@ static void append_color_entries(shell_menu_entry_t *entries, size_t *n, size_t 
     if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_r2", .label = s_r2_label };
     if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_g2", .label = s_g2_label };
     if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_b2", .label = s_b2_label };
+}
+
+static void append_custom_only_entries(shell_menu_entry_t *entries, size_t *n, size_t cap)
+{
+    if (!entries || !n) return;
+    refresh_color_labels();
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_speed", .label = s_speed_label };
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_brightness", .label = s_bright_label };
+}
+
+static void append_audio_only_entries(shell_menu_entry_t *entries, size_t *n, size_t cap)
+{
+    if (!entries || !n) return;
+    refresh_color_labels();
     if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_brightness", .label = s_bright_label };
 }
 
@@ -277,6 +297,7 @@ static size_t build_audio_entries(void)
         s_audio_entries[n++] = (shell_menu_entry_t){ .id = name, .label = name };
     }
     append_color_entries(s_audio_entries, &n, cap);
+    append_audio_only_entries(s_audio_entries, &n, cap);
     return n;
 }
 
@@ -292,12 +313,21 @@ static size_t build_custom_entries(void)
         s_custom_entries[n++] = (shell_menu_entry_t){ .id = name, .label = name };
     }
     append_color_entries(s_custom_entries, &n, cap);
+    append_custom_only_entries(s_custom_entries, &n, cap);
     return n;
 }
 
 static int mode_count_for_page(int page)
 {
     return (page == LEDS_PAGE_AUDIO) ? led_beat_anim_count() : led_modes_count();
+}
+
+static int cfg_index_for_page(int page, int local_cfg_idx)
+{
+    if (page == LEDS_PAGE_AUDIO && local_cfg_idx >= LEDS_CFG_SPEED) {
+        return local_cfg_idx + 1;
+    }
+    return local_cfg_idx;
 }
 
 static void leds_audio_fft_ensure_started(void)
@@ -321,8 +351,9 @@ static void leds_audio_fft_ensure_started(void)
 
 static void leds_audio_fft_maybe_stop(void)
 {
-    if (!s_leds_fft_owned) return;
-    fft_visualizer_stop();
+    if (fft_visualizer_running()) {
+        fft_visualizer_stop();
+    }
     s_leds_fft_owned = false;
 }
 
@@ -368,6 +399,7 @@ static void leds_apply_mode_for_page(void)
 static void leds_cycle_cfg(int cfg_idx, bool inc)
 {
     const int bright_step = 16;
+    const int speed_step = 10;
     switch (cfg_idx) {
         case LEDS_CFG_PRESET: {
             int idx = s_leds.preset_idx;
@@ -437,6 +469,11 @@ static void leds_cycle_cfg(int cfg_idx, bool inc)
             }
             s_leds.color2_b = step_color_u8(s_leds.color2_b, inc);
             break;
+        case LEDS_CFG_SPEED:
+            s_leds.custom_speed_percent = step_u8_clamp(s_leds.custom_speed_percent,
+                                                        inc ? speed_step : -speed_step,
+                                                        10, 250);
+            break;
         case LEDS_CFG_BRIGHTNESS:
             s_leds.brightness = step_u8_clamp(s_leds.brightness,
                                               inc ? bright_step : -bright_step,
@@ -467,10 +504,7 @@ static void leds_init_page(shell_app_context_t *ctx, int page)
 
     leds_load_color_state();
     leds_apply_color();
-
-    if (s_leds.page == LEDS_PAGE_AUDIO && led_beat_enabled()) {
-        leds_audio_fft_ensure_started();
-    }
+    leds_apply_mode_for_page();
 
     if (s_leds.page == LEDS_PAGE_AUDIO) {
         shell_ui_menu_reset(s_leds.audio_sel);
@@ -539,14 +573,14 @@ void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
             leds_apply_mode_for_page();
             return;
         }
-        int cfg_idx = (int)(*sel - first_cfg);
+        int cfg_idx = cfg_index_for_page(s_leds.page, (int)(*sel - first_cfg));
         leds_cycle_cfg(cfg_idx, true);
         return;
     }
 
     if (ev->button == INPUT_BTN_C) {
         if (*sel >= first_cfg) {
-            int cfg_idx = (int)(*sel - first_cfg);
+            int cfg_idx = cfg_index_for_page(s_leds.page, (int)(*sel - first_cfg));
             leds_cycle_cfg(cfg_idx, false);
         }
     }

@@ -359,6 +359,17 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .draw   = led_layout_app_draw,
     },
     {
+        .id     = "manual_bpm",
+        .name   = "Manual BPM",
+        .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &MANUAL_BPM_LEGEND,
+        .init   = manual_bpm_app_init,
+        .deinit = manual_bpm_app_deinit,
+        .tick   = manual_bpm_app_tick,
+        .handle_input = manual_bpm_app_handle_input,
+        .draw   = manual_bpm_app_draw,
+    },
+    {
         .id     = "music",
         .name   = "Music",
         .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,

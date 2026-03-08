@@ -100,8 +100,12 @@ From `main/app_shell.c` (`s_builtin_apps`):
 - `title`
 - `menu`
 - `status`
+- `adc_debug`
+- `service_restart`
 - `volume`
+- `calculator`
 - `leds_audio`
+- `manual_bpm`
 - `leds_custom`
 - `leds_layout`
 - `music`
@@ -111,6 +115,7 @@ From `main/app_shell.c` (`s_builtin_apps`):
 - `fft`
 - `fluid`
 - `threedee`
+- `bad_apple`
 - `pong`
 - `snake`
 - `flappy`
@@ -135,12 +140,15 @@ Root:
 - Comm
 - LEDs
 - Music
+- Calculator
 
 Settings:
 - Back
 - Status
+- ADC Debug
 - Bluetooth
 - Volume
+- Svc Restart
 - Keyboard
 - Restart
 
@@ -150,6 +158,7 @@ Simulations:
 - FFT
 - Fluid
 - 3D Render
+- Bad Apple
 
 Games:
 - Back
@@ -169,6 +178,7 @@ Comm:
 LED:
 - Back
 - Audio Reactive
+- Manual BPM
 - Custom
 - Layout Edit
 
@@ -201,6 +211,9 @@ LED Audio / LED Custom (`main/app_leds.c`):
 - `D`:
   - on `Back`: return to `menu`
   - on mode item: apply selected mode
+- Custom page config:
+  - `speed:%` controls free-running custom animation speed (`10%` to `250%`, step `10%`)
+  - `fill` is the full-strip/full-layout coverage mode using the active selected color source
 
 LED Layout (`main/app_led_layout.c`):
 - `A`: previous field
@@ -218,6 +231,26 @@ LED Layout (`main/app_led_layout.c`):
   - Save
   - Reload
   - Reset default
+
+Manual BPM (`main/app_manual_bpm.c`):
+- `A/B`: BPM down/up
+- `C/D`: trigger offset back/forward
+- Progress bar shows cycle position
+- Marker shows the beat trigger offset within the cycle
+
+Calculator (`main/app_calculator.c` / `components/calculator/calculator.c`):
+- `A`: move left
+- `B`: move down
+- `C`: move right
+- `D`: press selected key
+- After an error, the next insert key starts a fresh expression
+
+Tetris (`components/tetris/tetris.c`):
+- `A`: move left
+- `D`: move right
+- `B`: rotate left
+- `C`: rotate right
+- Rotation now uses explicit tetromino cells plus small wall kicks
 
 Music (`main/app_music.c`):
 - `A/B`: list navigation

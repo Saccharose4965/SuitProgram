@@ -322,7 +322,7 @@ static uint8_t s_spark_energy[LED_COUNT];
 static float s_pulse_period_sec = 60.0f / 120.0f; // default 120 BPM
 static int64_t s_last_pulse_spawn_us = 0;
 static EXT_RAM_BSS_ATTR led_layout_config_t s_output_layout = {0};
-#define LED_GEO_RING_SLOTS 16
+#define LED_GEO_RING_SLOTS 32
 #define LED_GEO_PLANE_SLOTS 8
 static EXT_RAM_BSS_ATTR float s_geo_ring_distance_cache[LED_COUNT];
 static led_ring_pulse_t s_ring_pulses[LED_GEO_RING_SLOTS];
@@ -351,19 +351,18 @@ static const int kLedSparkSeedsPerBeat = 28;
 static const uint8_t kLedSparkSeedEnergy = 255;
 static const uint8_t kLedSparkDecay = 208;
 static const uint8_t kLedSparkFloor = 6;
-static const float kLedCometSpeedFactor = 0.85f;
 static const float kLedCometTailMin = 10.0f;
 static const float kLedCometTailMax = 52.0f;
 static const float kLedCometDecay = 0.993f;
+static const float kLedCometHeadLead = 1.5f;
 static const float kLedGeoRingDecay = 1.0f;
 static const float kLedGeoPlaneDecay = 0.973f;
 static const float kLedGeoRingSpeedUnitsPerSec = 30.0f; // layout units are treated as cm
 static const float kLedGeoRingBaseWidth = 1.2f;
 static const float kLedGeoRingWidthScale = 0.015f;
 static const float kLedGeoPlaneSpeedFactor = 2.0f;
-static const size_t kLedGeoRingTrainWagons = 6u;
-static const float kLedGeoRingTrainSpacingUnits = 1.0f;
-static const float kLedGeoRingTrainWidthScale = 0.58f;
+static const size_t kLedGeoRingTrainWagons = 4u;
+static const float kLedGeoRingTrainWidthScale = 0.42f;
 static int8_t s_comet_spawn_dir = 1;
 
 static void led_pulse_start_task(void);
@@ -1529,9 +1528,12 @@ static void led_comet_trigger_locked(uint8_t r, uint8_t g, uint8_t b)
     s_comet.b = b;
     s_comet.amp = 1.0f;
     s_comet.tail_leds = tail_leds;
-    s_comet.speed = kLedCometSpeedFactor * ((float)active / period_sec);
+    // Match one comet traverse to roughly one beat period so it can complete
+    // the front/back loop before the next beat retriggers it.
+    float travel_span = (float)active + tail_leds + kLedCometHeadLead;
+    s_comet.speed = travel_span / period_sec;
     s_comet.dir = s_comet_spawn_dir;
-    s_comet.head = (s_comet.dir > 0) ? -1.5f : ((float)active + 1.5f);
+    s_comet.head = (s_comet.dir > 0) ? -kLedCometHeadLead : ((float)active + kLedCometHeadLead);
     s_comet.active = true;
 
     s_spark_r = r;
@@ -1610,52 +1612,6 @@ static void led_pulse_spawn(uint8_t r, uint8_t g, uint8_t b){
     led_pulse_unlock();
 }
 
-static float led_pulse_strip_center(const led_layout_config_t *cfg, uint8_t strip, size_t active)
-{
-    size_t strip_len = 0;
-    if (cfg && strip < cfg->strip_count) {
-        strip_len = cfg->strip_lengths[strip];
-    }
-    if (strip_len == 0) {
-        strip_len = active;
-    }
-    if (strip_len <= 1u) {
-        return 0.0f;
-    }
-    return 0.5f * (float)(strip_len - 1u);
-}
-
-static float led_pulse_layout_center_x(const led_geo_layout_stats_t *stats)
-{
-    if (!stats) return 0.0f;
-    if (!isfinite(stats->min_x) || !isfinite(stats->max_x)) return 0.0f;
-    return 0.5f * (stats->min_x + stats->max_x);
-}
-
-static float led_pulse_layout_max_radius(const led_geo_layout_stats_t *stats)
-{
-    if (!stats) return 0.0f;
-    float center_x = led_pulse_layout_center_x(stats);
-    float left = fabsf(stats->min_x - center_x);
-    float right = fabsf(stats->max_x - center_x);
-    return fmaxf(left, right);
-}
-
-static float led_pulse_max_radius(const led_layout_config_t *cfg, size_t active)
-{
-    float max_radius = 0.0f;
-    if (cfg) {
-        for (size_t strip = 0; strip < cfg->strip_count; ++strip) {
-            float center = led_pulse_strip_center(cfg, (uint8_t)strip, active);
-            if (center > max_radius) max_radius = center;
-        }
-    }
-    if (max_radius < 1.0f && active > 0u) {
-        max_radius = 0.5f * (float)(active - 1u);
-    }
-    return max_radius;
-}
-
 static bool led_pulse_step_locked(void){
     bool any_active = false;
     size_t active = led_active_count();
@@ -1664,17 +1620,6 @@ static bool led_pulse_step_locked(void){
     led_layout_snapshot(&s_effect_layout);
     if (s_effect_layout.total_leds > 0 && active > s_effect_layout.total_leds) {
         active = s_effect_layout.total_leds;
-    }
-    led_geo_layout_stats_t geo_stats = {0};
-    bool use_layout_symmetry = false;
-    float max_radius = led_pulse_max_radius(&s_effect_layout, active);
-    if (s_effect_layout.section_count > 0 && active > 0u) {
-        led_geo_layout_stats(&s_effect_layout, active, &geo_stats);
-        float geo_radius = led_pulse_layout_max_radius(&geo_stats);
-        if (geo_radius >= 1.0f) {
-            max_radius = geo_radius;
-            use_layout_symmetry = true;
-        }
     }
     for (size_t i = 0; i < sizeof(s_pulses)/sizeof(s_pulses[0]); ++i){
         led_pulse_t *p = &s_pulses[i];
@@ -1686,34 +1631,16 @@ static bool led_pulse_step_locked(void){
         float period_sec = s_pulse_period_sec;
         if (period_sec < kLedPulseMinPeriodSec) period_sec = kLedPulseMinPeriodSec;
         if (period_sec > kLedPulseMaxPeriodSec) period_sec = kLedPulseMaxPeriodSec;
-        const float speed = max_radius / period_sec;
+        const float speed = 0.25f * ((float)active / period_sec);
         p->pos += kLedPulseDt * speed;
         p->amp *= kLedPulseDecay;
-        if (p->pos > max_radius + kLedPulseWidth || p->amp < kLedPulseFloor){
+        if (p->pos > (float)active + kLedPulseWidth || p->amp < kLedPulseFloor){
             p->active = false;
             continue;
         }
         any_active = true;
         for (size_t led = 0; led < active; ++led){
-            led_layout_mapping_t map;
-            float radial = 0.0f;
-            if (use_layout_symmetry) {
-                led_point_t point;
-                if (led_layout_get_from_config(&s_effect_layout, (int)led, &point)) {
-                    float center_x = led_pulse_layout_center_x(&geo_stats);
-                    radial = fabsf(point.x - center_x);
-                } else {
-                    float center = max_radius;
-                    radial = fabsf((float)led - center);
-                }
-            } else if (led_layout_map_logical_from_config(&s_effect_layout, led, &map)) {
-                float center = led_pulse_strip_center(&s_effect_layout, map.strip, active);
-                radial = fabsf((float)map.physical_index - center);
-            } else {
-                float center = max_radius;
-                radial = fabsf((float)led - center);
-            }
-            float d = fabsf(radial - p->pos);
+            float d = fabsf((float)led - p->pos);
             float w = expf(-d / kLedPulseWidth);
             float v = p->amp * w;
             if (v <= 0.0f) continue;
@@ -2157,21 +2084,21 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
         led_pulse_unlock();
         return;
     }
+    if (s_beat_anim == LED_BEAT_ANIM_RING_TRAIN){
+        s_flash_ticks = 0;
+        s_wave_amp = 0.0f;
+        memset(s_spark_energy, 0, sizeof(s_spark_energy));
+        led_geo_ring_spawn_scaled_locked(r, g, b,
+                                         0.0f,
+                                         kLedGeoRingTrainWidthScale);
+        led_pulse_unlock();
+        return;
+    }
     if (s_beat_anim == LED_BEAT_ANIM_PLANE_SWEEP){
         s_flash_ticks = 0;
         s_wave_amp = 0.0f;
         memset(s_spark_energy, 0, sizeof(s_spark_energy));
         led_geo_plane_trigger_locked(r, g, b);
-        led_pulse_unlock();
-        return;
-    }
-    if (s_beat_anim == LED_BEAT_ANIM_RING_TRAIN){
-        s_flash_ticks = 0;
-        memset(s_spark_energy, 0, sizeof(s_spark_energy));
-        s_wave_amp = 0.0f;
-        led_geo_ring_train_trigger_locked(r, g, b,
-                                          kLedGeoRingTrainWagons,
-                                          kLedGeoRingTrainSpacingUnits);
         led_pulse_unlock();
         return;
     }

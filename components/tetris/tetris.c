@@ -33,20 +33,62 @@ static const char *TAG = "tetris";
 static const char *kScoreKey = "tetris";
 
 typedef struct { int x,y; uint8_t shape; uint8_t rot; } piece_t;
+typedef struct { int8_t x, y; } cell_t;
 
 static inline uint32_t urand(void){ return esp_random(); }
 static inline int rand_shape(void){ return (int)(urand() % 7); }
 
-// Standard tetromino masks in 4x4 (row-major, top→bottom, MSB first)
-static const uint16_t kShapes[7][4] = {
-    {0x0F00, 0x2222, 0x00F0, 0x4444}, // I
-    {0x0660, 0x0660, 0x0660, 0x0660}, // O
-    {0x0E40, 0x4C40, 0x4E00, 0x8C80}, // T
-    {0x06C0, 0x8C40, 0x06C0, 0x8C40}, // S
-    {0x0C60, 0x4C80, 0x0C60, 0x4C80}, // Z
-    {0x0E10, 0x44C0, 0x8E00, 0x6440}, // J
-    {0x0E80, 0xC440, 0x2E00, 0x4460}, // L
+// Tetromino cells in a 4x4 local box. Explicit cells keep rotation states
+// aligned and avoid malformed masks.
+static const cell_t kShapeCells[7][4][4] = {
+    { // I
+        {{0,1}, {1,1}, {2,1}, {3,1}},
+        {{1,0}, {1,1}, {1,2}, {1,3}},
+        {{0,2}, {1,2}, {2,2}, {3,2}},
+        {{2,0}, {2,1}, {2,2}, {2,3}},
+    },
+    { // O
+        {{1,0}, {2,0}, {1,1}, {2,1}},
+        {{1,0}, {2,0}, {1,1}, {2,1}},
+        {{1,0}, {2,0}, {1,1}, {2,1}},
+        {{1,0}, {2,0}, {1,1}, {2,1}},
+    },
+    { // T
+        {{1,0}, {0,1}, {1,1}, {2,1}},
+        {{1,0}, {1,1}, {2,1}, {1,2}},
+        {{0,1}, {1,1}, {2,1}, {1,2}},
+        {{1,0}, {0,1}, {1,1}, {1,2}},
+    },
+    { // S
+        {{1,0}, {2,0}, {0,1}, {1,1}},
+        {{1,0}, {1,1}, {2,1}, {2,2}},
+        {{1,1}, {2,1}, {0,2}, {1,2}},
+        {{0,0}, {0,1}, {1,1}, {1,2}},
+    },
+    { // Z
+        {{0,0}, {1,0}, {1,1}, {2,1}},
+        {{2,0}, {1,1}, {2,1}, {1,2}},
+        {{0,1}, {1,1}, {1,2}, {2,2}},
+        {{1,0}, {0,1}, {1,1}, {0,2}},
+    },
+    { // J
+        {{0,0}, {0,1}, {1,1}, {2,1}},
+        {{1,0}, {2,0}, {1,1}, {1,2}},
+        {{0,1}, {1,1}, {2,1}, {2,2}},
+        {{1,0}, {1,1}, {0,2}, {1,2}},
+    },
+    { // L
+        {{2,0}, {0,1}, {1,1}, {2,1}},
+        {{1,0}, {1,1}, {1,2}, {2,2}},
+        {{0,1}, {1,1}, {2,1}, {0,2}},
+        {{0,0}, {1,0}, {1,1}, {1,2}},
+    },
 };
+
+static inline const cell_t *piece_cells(piece_t p)
+{
+    return kShapeCells[p.shape % 7][p.rot & 3];
+}
 
 static inline void fb_clear(void){ memset(g_fb, 0, sizeof(g_fb)); }
 static inline void pset(int x,int y){
@@ -56,33 +98,51 @@ static inline void pset(int x,int y){
 }
 
 static bool collision(piece_t p){
-    uint16_t mask = kShapes[p.shape][p.rot % 4];
-    for (int r=0; r<4; ++r){
-        for (int c=0; c<4; ++c){
-            if (mask & (1u << (15 - (r*4+c)))){
-                int bx = p.x + c;
-                int by = p.y + r;
-                if (bx < 0 || bx >= BOARD_W || by >= BOARD_H) return true;
-                if (by >=0 && g_board[by][bx]) return true;
-            }
-        }
+    const cell_t *cells = piece_cells(p);
+    for (int i = 0; i < 4; ++i){
+        int bx = p.x + cells[i].x;
+        int by = p.y + cells[i].y;
+        if (bx < 0 || bx >= BOARD_W || by >= BOARD_H) return true;
+        if (by >= 0 && g_board[by][bx]) return true;
     }
     return false;
 }
 
 static void place(piece_t p){
-    uint16_t mask = kShapes[p.shape][p.rot % 4];
-    for (int r=0; r<4; ++r){
-        for (int c=0; c<4; ++c){
-            if (mask & (1u << (15 - (r*4+c)))){
-                int bx = p.x + c;
-                int by = p.y + r;
-                if (bx>=0 && bx<BOARD_W && by>=0 && by<BOARD_H){
-                    g_board[by][bx] = 1;
-                }
-            }
+    const cell_t *cells = piece_cells(p);
+    for (int i = 0; i < 4; ++i){
+        int bx = p.x + cells[i].x;
+        int by = p.y + cells[i].y;
+        if (bx>=0 && bx<BOARD_W && by>=0 && by<BOARD_H){
+            g_board[by][bx] = 1;
         }
     }
+}
+
+static bool try_rotate(piece_t *cur, int delta)
+{
+    static const int8_t kKickTests[][2] = {
+        { 0,  0},
+        {-1,  0},
+        { 1,  0},
+        {-2,  0},
+        { 2,  0},
+        { 0, -1},
+    };
+
+    if (!cur) return false;
+    piece_t rotated = *cur;
+    rotated.rot = (uint8_t)((rotated.rot + delta) & 3);
+    for (size_t i = 0; i < sizeof(kKickTests) / sizeof(kKickTests[0]); ++i) {
+        piece_t cand = rotated;
+        cand.x += kKickTests[i][0];
+        cand.y += kKickTests[i][1];
+        if (!collision(cand)) {
+            *cur = cand;
+            return true;
+        }
+    }
+    return false;
 }
 
 static int clear_lines(void){
@@ -124,33 +184,28 @@ static void draw_board(piece_t falling){
         }
     }
     // Falling piece
-    uint16_t mask = kShapes[falling.shape][falling.rot % 4];
-    for (int r=0; r<4; ++r){
-        for (int c=0; c<4; ++c){
-            if (mask & (1u << (15 - (r*4+c)))){
-                int bx = falling.x + c;
-                int by = falling.y + r;
-                if (bx>=0 && bx<BOARD_W && by>=0 && by<BOARD_H){
-                    for (int yy=0; yy<CELL_SZ-2; ++yy)
-                        for (int xx=0; xx<CELL_SZ-2; ++xx)
-                            pset(ox + bx*CELL_SZ + 1 + xx, oy + by*CELL_SZ + 1 + yy);
-                }
-            }
+    const cell_t *falling_cells = piece_cells(falling);
+    for (int i = 0; i < 4; ++i){
+        int bx = falling.x + falling_cells[i].x;
+        int by = falling.y + falling_cells[i].y;
+        if (bx>=0 && bx<BOARD_W && by>=0 && by<BOARD_H){
+            for (int yy=0; yy<CELL_SZ-2; ++yy)
+                for (int xx=0; xx<CELL_SZ-2; ++xx)
+                    pset(ox + bx*CELL_SZ + 1 + xx, oy + by*CELL_SZ + 1 + yy);
         }
     }
 
     // Next piece preview (top-right corner)
-    uint16_t next_mask = kShapes[g_next_shape][0];
+    piece_t next = { 0, 0, g_next_shape, 0 };
+    const cell_t *next_cells = piece_cells(next);
     int px = PANEL_W - 4*CELL_SZ - 2;
     int py = 0;
-    for (int r=0; r<4; ++r){
-        for (int c=0; c<4; ++c){
-            if (next_mask & (1u << (15 - (r*4+c)))){
-                for (int yy=0; yy<CELL_SZ-2; ++yy)
-                    for (int xx=0; xx<CELL_SZ-2; ++xx)
-                        pset(px + c*CELL_SZ + xx, py + r*CELL_SZ + yy);
-            }
-        }
+    for (int i = 0; i < 4; ++i){
+        int c = next_cells[i].x;
+        int r = next_cells[i].y;
+        for (int yy=0; yy<CELL_SZ-2; ++yy)
+            for (int xx=0; xx<CELL_SZ-2; ++xx)
+                pset(px + c*CELL_SZ + xx, py + r*CELL_SZ + yy);
     }
 }
 
@@ -196,12 +251,10 @@ void tetris_run(void)
                 if (!collision(p)) cur = p;
                 last_move = now;
             } else if (b == INPUT_BTN_B) {
-                piece_t p = cur; p.rot = (p.rot + 3) & 3;
-                if (!collision(p)) cur = p;
+                (void)try_rotate(&cur, -1);
                 last_move = now;
             } else if (b == INPUT_BTN_C) {
-                piece_t p = cur; p.rot = (p.rot + 1) & 3;
-                if (!collision(p)) cur = p;
+                (void)try_rotate(&cur, 1);
                 last_move = now;
             }
         }
@@ -214,6 +267,10 @@ void tetris_run(void)
                 if (cur.y < 0) { // game over
                     memset(g_board, 0, sizeof(g_board));
                     g_score = 0;
+                    cur.x = BOARD_W/2 - 2;
+                    cur.y = -2;
+                    cur.shape = g_next_shape;
+                    cur.rot = 0;
                     g_next_shape = (uint8_t)rand_shape();
                 } else {
                     place(cur);

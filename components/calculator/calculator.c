@@ -653,6 +653,12 @@ static void apply_key(const calc_key_t *key)
     }
 
     if (key->action == KEY_ACT_INSERT) {
+        if (s_calc.status_is_error) {
+            s_calc.len = 0;
+            s_calc.expr[0] = '\0';
+            s_calc.just_evaluated = false;
+            set_status("", false);
+        }
         append_insert(key->text);
     }
 }
