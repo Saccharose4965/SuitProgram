@@ -68,6 +68,7 @@ static const menu_entry_t g_menu_led_entries[] = {
     { "menu_root",   "Back"           },
     { "leds_audio",  "Audio Reactive" },
     { "manual_bpm",  "Manual BPM"     },
+    { "fft_sync",    "FFT Sync"       },
     { "leds_custom", "Custom"         },
     { "leds_layout", "Layout Edit"    },
 };

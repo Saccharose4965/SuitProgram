@@ -21,6 +21,7 @@
 #include "gps.h"
 #include "led_layout.h"
 #include "led_modes.h"
+#include "logo.h"
 #include "power.h"
 #include "link.h"
 #include "bt_audio.h"
@@ -370,6 +371,17 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .draw   = manual_bpm_app_draw,
     },
     {
+        .id     = "fft_sync",
+        .name   = "FFT Sync",
+        .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &FFT_SYNC_LEGEND,
+        .init   = fft_sync_app_init,
+        .deinit = fft_sync_app_deinit,
+        .tick   = NULL,
+        .handle_input = fft_sync_app_handle_input,
+        .draw   = fft_sync_app_draw,
+    },
+    {
         .id     = "music",
         .name   = "Music",
         .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
@@ -577,6 +589,8 @@ static bool shell_init_hw_and_display(void)
             return false;
         }
     }
+
+    anim_logo();
 
     // Audio bus for FFT (shared RX/TX)
     if (!shell_audio_init_if_needed()) {

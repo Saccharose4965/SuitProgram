@@ -46,6 +46,7 @@ Startup sequence (exact current flow)
    - `oled_init()`
    - `oled_clear()`
    - starts `oled_task`
+   - plays startup OLED logo animation (`anim_logo()`)
    - `shell_audio_init_if_needed()`
    - starts async startup tone task (`audio_play_tone(440, 1000)`)
    - `orientation_service_start()`
@@ -106,6 +107,7 @@ From `main/app_shell.c` (`s_builtin_apps`):
 - `calculator`
 - `leds_audio`
 - `manual_bpm`
+- `fft_sync`
 - `leds_custom`
 - `leds_layout`
 - `music`
@@ -179,6 +181,7 @@ LED:
 - Back
 - Audio Reactive
 - Manual BPM
+- FFT Sync
 - Custom
 - Layout Edit
 
@@ -237,6 +240,12 @@ Manual BPM (`main/app_manual_bpm.c`):
 - `C/D`: trigger offset back/forward
 - Progress bar shows cycle position
 - Marker shows the beat trigger offset within the cycle
+
+FFT Sync (`main/app_fft_sync.c`):
+- `A/B`: shift FFT beat trigger phase backward/forward
+- `C`: lock/unlock current BPM
+- `D`: enable/disable FFT beat export
+- Shows effective BPM, detected BPM, confidence, current cycle position, and trigger marker
 
 Calculator (`main/app_calculator.c` / `components/calculator/calculator.c`):
 - `A`: move left
@@ -438,34 +447,25 @@ Power / thermal notes (legacy hardware sizing):
 
 Open TODO / wishlist (legacy backlog)
 -------------------------------------
-for ai:
-- Menu/UI: replace placeholder icons
-- improve leds: add effects
-- live fft phase edits using buttons. i think it's the simplest way. i guess we may autosync with single phase peak musics ?
-- i need a quick access stop start fft (or enable disable maybe rather, so that it can still work in background ? idk) -> switch to non bpm animation, that can be used during ambiguous songs (some songs are very hard to read)
- those two things above need their own app
 
-for later:
+- Menu/UI: replace placeholder icons
 - games sfx, conflict with audio player playing sfx ?
-- improve fft confidence and stop blinking mechanic (we want to keep blinking under noisy music, but stop under musical noise : not easy!)
-- add button press to reset fft on all nearby costumes, need to think of where and when, fft communication ? group animations ? ... so much to try, the sky is the limit.
+- improve fft confidence and stop_blinking mechanic (we want to keep blinking under noisy music, but stop under musical noise : not easy!)
 - try to optimize fluid further without impacting on behavior, (we already managed to get it to run smooth on one core!)
 - fix and bring back GPS time and link quality.
 - fix GPS/message/call menu items to real apps
 - Link/comms: define structured bundles (leaderboard/GPS/messages/audio headers), add per-type ACK/retry, and integrate link frames into games/remote LED paint tools.
-- polish Pong host election/ACK UI,
+- fix Pong host election/ACK UI
 -> test w/ F.U.Y.A. music
 - score com between costumes
 - accelerometer synth (theremin like? idk)
 - log of novely for fft?
+- autosync with single phase peak musics ? that's work !
 
-once assembled : 
-- map out led limb positions
 - do spatial aware led animations based on limb orientation
-- Power: measure divider ratio and per-cell thresholds, add current sensing/export
+- Power: integrate current reading and store every now and then in sd card
 
-Extras: 
-- Tournai map on OLED, IMU fusion for limb pose to drive LEDs/stick
+Extras:
 - create audio file that when displayed on the spectrogram, spell out words, as hidden messages
 - port more titles (tron/doom/pacman/etc.)
 - asteroids game !

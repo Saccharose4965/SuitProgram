@@ -66,6 +66,25 @@ typedef struct {
 
 void fft_get_levels(fft_levels_t *out);
 
+typedef struct {
+    float bpm;           // effective BPM currently driving beat export
+    float detected_bpm;  // raw BPM detected from novelty analysis
+    float confidence;    // 0..1 detection confidence
+    float beat_phase;    // 0..1 current beat cycle position
+    float trigger_phase; // 0..1 phase where a beat is emitted
+    float phase_offset;  // 0..1 user offset added to trigger phase
+    bool  bpm_locked;
+    bool  beat_enabled;
+    bool  running;
+} fft_sync_state_t;
+
+void fft_get_sync_state(fft_sync_state_t *out);
+void fft_beat_phase_offset_add(float delta_cycles);
+void fft_beat_lock_set(bool locked);
+void fft_beat_lock_toggle(void);
+void fft_beat_enable_set(bool enabled);
+void fft_beat_enable_toggle(void);
+
 // Enable or disable OLED rendering; beat detection and sampling keep running.
 void fft_set_display_enabled(bool enabled);
 

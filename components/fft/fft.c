@@ -17,6 +17,7 @@
 #include "esp_timer.h"
 #include "esp_attr.h"
 #include "led.h"
+#include "portmacro.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -65,6 +66,7 @@ static EXT_RAM_BSS_ATTR float fft_re[FFT_CFG_SIZE];
 static EXT_RAM_BSS_ATTR float fft_im[FFT_CFG_SIZE];
 static EXT_RAM_BSS_ATTR float prev_logmag[FFT_CFG_SIZE/2+1];
 static float   last_cand_bpm     = 0.0f; // last candidate BPM from spectrum
+static float   raw_cand_bpm      = 0.0f; // raw BPM found before user locking
 static int     bpm_stable_frames = 0;    // how many consecutive frames it's stayed similar
 
 // novelty history (cleaned novelty stored in novelty)
@@ -91,6 +93,11 @@ static volatile int nov_suppress_backfill_frames = 0;  // recent frames to suppr
 static volatile int nov_suppress_future_frames = 0;    // upcoming frames to suppress
 static float    nov_local_mean_hold = 0.0f;            // local mean captured before novelty-hole punch
 static volatile int nov_local_mean_hold_frames = 0;    // remaining punched frames to keep mean fixed
+static portMUX_TYPE s_ctrl_mux = portMUX_INITIALIZER_UNLOCKED;
+static bool     s_user_bpm_locked = false;
+static bool     s_user_beat_enabled = true;
+static float    s_user_locked_bpm = 0.0f;
+static float    s_user_phase_offset = 0.0f;
 
 // ------------------- BPM smoothing -------------------
 #define BPM_AVG_FRAMES  6      // rolling average length for main BPM
@@ -118,6 +125,7 @@ static void fft_reset_runtime_state(void){
     memset(sample, 0, sizeof(sample));
     memset(prev_logmag, 0, sizeof(prev_logmag));
     last_cand_bpm = 0.0f;
+    raw_cand_bpm = 0.0f;
     bpm_stable_frames = 0;
 
     nov_write_pos = 0;
@@ -218,6 +226,17 @@ static inline bool phase_crossed_forward(float prev, float curr, float target){ 
         return (target > prev && target <= curr);
     }
     return (target > prev || target <= curr);
+}
+
+static void fft_get_user_ctrl_locked(bool *bpm_locked, bool *beat_enabled,
+                                     float *locked_bpm, float *phase_offset)
+{
+    portENTER_CRITICAL(&s_ctrl_mux);
+    if (bpm_locked) *bpm_locked = s_user_bpm_locked;
+    if (beat_enabled) *beat_enabled = s_user_beat_enabled;
+    if (locked_bpm) *locked_bpm = s_user_locked_bpm;
+    if (phase_offset) *phase_offset = s_user_phase_offset;
+    portEXIT_CRITICAL(&s_ctrl_mux);
 }
 
 static inline float bpm_apply_low_tempo_x2(float bpm){
@@ -555,6 +574,7 @@ static float update_fund_history(float bpm_inst){
 static void bpm_soft_decay_and_reset(void){
     bpm_conf *= 0.9f;
     last_cand_bpm = 0.0f;
+    raw_cand_bpm = 0.0f;
     bpm_stable_frames = 0;
     memset(fund_hist, 0, sizeof(fund_hist));
     fund_hist_pos   = 0;
@@ -798,6 +818,7 @@ static void update_bpm_from_novelty(void){
         return;
     }
     float selected_bpm = bpm_apply_low_tempo_x2(fund_avg);
+    raw_cand_bpm = selected_bpm;
 
     const float kBpmTol = 3.0f;
     float diff = fabsf(selected_bpm - last_cand_bpm);
@@ -805,6 +826,12 @@ static void update_bpm_from_novelty(void){
         bpm_stable_frames++;
     } else {
         bpm_stable_frames = 1;
+    }
+    bool bpm_locked = false;
+    float locked_bpm = 0.0f;
+    fft_get_user_ctrl_locked(&bpm_locked, NULL, &locked_bpm, NULL);
+    if (bpm_locked && locked_bpm > 0.5f) {
+        selected_bpm = locked_bpm;
     }
     last_cand_bpm = selected_bpm;
 
@@ -915,7 +942,12 @@ static void process_fft_frame(void){
     // Match blinker to the currently found BPM shown to the user.
     float target_bpm_hz = (last_cand_bpm > 0.5f) ? (last_cand_bpm / 60.0f) : 0.0f;
     bool beat_triggered = false;
-    bool beat_confident = (bpm_conf >= kBlinkMinConf);
+    bool bpm_locked = false;
+    bool beat_enabled = true;
+    float phase_offset = 0.0f;
+    fft_get_user_ctrl_locked(&bpm_locked, &beat_enabled, NULL, &phase_offset);
+    bool beat_confident = bpm_locked ? (target_bpm_hz > 0.5f) : (bpm_conf >= kBlinkMinConf);
+    float beat_target_phase = wrap_phase01(kBlinkPhaseTarget + phase_offset);
 
     if (target_bpm_hz > 0.5f && beat_confident) {
         blink_bpm_hz = target_bpm_hz;
@@ -924,8 +956,8 @@ static void process_fft_frame(void){
 
         float prev_phase = beat_phase;
         beat_phase = wrap_phase01(beat_phase + blink_rate_hz * frame_dt_sec);
-        if (phase_crossed_forward(prev_phase, beat_phase, kBlinkPhaseTarget)) {
-            if (fft_render_is_display_enabled()){
+        if (phase_crossed_forward(prev_phase, beat_phase, beat_target_phase)) {
+            if (beat_enabled && fft_render_is_display_enabled()){
                 fft_render_trigger_flash(kFlashFrames);
             }
             beat_triggered = true;
@@ -936,14 +968,14 @@ static void process_fft_frame(void){
         beat_phase    = 0.0f;
     }
 
-    if (beat_triggered && s_beat_queue){
+    if (beat_triggered && beat_enabled && s_beat_queue){
         fft_beat_event_t evt = {
             .bpm = blink_bpm_hz * 60.0f,
             .confidence = bpm_conf
         };
         xQueueSendToBack(s_beat_queue, &evt, 0);
     }
-    if (beat_triggered){
+    if (beat_triggered && beat_enabled){
         // Fixed orange pulse avoids hue flicker when confidence jitters.
         uint8_t red   = 255;
         uint8_t green = 96;
@@ -1093,6 +1125,70 @@ void fft_get_levels(fft_levels_t *out)
     out->low = s_level_low.out;
     out->mid = s_level_mid.out;
     out->high = s_level_high.out;
+}
+
+void fft_get_sync_state(fft_sync_state_t *out)
+{
+    if (!out) return;
+    bool bpm_locked = false;
+    bool beat_enabled = true;
+    float phase_offset = 0.0f;
+    fft_get_user_ctrl_locked(&bpm_locked, &beat_enabled, NULL, &phase_offset);
+
+    out->bpm = last_cand_bpm;
+    out->detected_bpm = raw_cand_bpm;
+    out->confidence = bpm_conf;
+    out->beat_phase = beat_phase;
+    out->trigger_phase = wrap_phase01(kBlinkPhaseTarget + phase_offset);
+    out->phase_offset = phase_offset;
+    out->bpm_locked = bpm_locked;
+    out->beat_enabled = beat_enabled;
+    out->running = fft_visualizer_running();
+}
+
+void fft_beat_phase_offset_add(float delta_cycles)
+{
+    portENTER_CRITICAL(&s_ctrl_mux);
+    s_user_phase_offset = wrap_phase01(s_user_phase_offset + delta_cycles);
+    portEXIT_CRITICAL(&s_ctrl_mux);
+}
+
+void fft_beat_lock_set(bool locked)
+{
+    portENTER_CRITICAL(&s_ctrl_mux);
+    if (locked) {
+        float bpm = (last_cand_bpm > 0.5f) ? last_cand_bpm : raw_cand_bpm;
+        if (bpm > 0.5f) {
+            s_user_locked_bpm = bpm;
+            s_user_bpm_locked = true;
+        }
+    } else {
+        s_user_bpm_locked = false;
+    }
+    portEXIT_CRITICAL(&s_ctrl_mux);
+}
+
+void fft_beat_lock_toggle(void)
+{
+    bool locked = false;
+    portENTER_CRITICAL(&s_ctrl_mux);
+    locked = s_user_bpm_locked;
+    portEXIT_CRITICAL(&s_ctrl_mux);
+    fft_beat_lock_set(!locked);
+}
+
+void fft_beat_enable_set(bool enabled)
+{
+    portENTER_CRITICAL(&s_ctrl_mux);
+    s_user_beat_enabled = enabled;
+    portEXIT_CRITICAL(&s_ctrl_mux);
+}
+
+void fft_beat_enable_toggle(void)
+{
+    portENTER_CRITICAL(&s_ctrl_mux);
+    s_user_beat_enabled = !s_user_beat_enabled;
+    portEXIT_CRITICAL(&s_ctrl_mux);
 }
 
 void fft_set_display_enabled(bool enabled){
