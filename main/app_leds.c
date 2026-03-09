@@ -29,6 +29,8 @@ enum {
     LEDS_CFG_G2,
     LEDS_CFG_B2,
     LEDS_CFG_SPEED,
+    LEDS_CFG_AUDIO_BRIGHTNESS,
+    LEDS_CFG_AUDIO_RANGE,
     LEDS_CFG_BRIGHTNESS,
     LEDS_CFG_COUNT,
 };
@@ -78,6 +80,8 @@ static char s_r2_label[12];
 static char s_g2_label[12];
 static char s_b2_label[12];
 static char s_speed_label[14];
+static char s_audio_label[12];
+static char s_range_label[18];
 static char s_bright_label[14];
 
 typedef struct {
@@ -97,6 +101,8 @@ typedef struct {
     led_color_style_t color_style;
     led_highlight_mode_t highlight_mode;
     uint8_t custom_speed_percent;
+    bool audio_brightness_enabled;
+    led_audio_energy_range_t audio_energy_range;
     uint8_t brightness;
 } leds_state_t;
 static leds_state_t s_leds = {0};
@@ -133,6 +139,26 @@ static const char *highlight_mode_name(led_highlight_mode_t mode)
         case LED_HIGHLIGHT_OFF:
         default: return "off";
     }
+}
+
+static const char *audio_brightness_name(bool enabled)
+{
+    return enabled ? "on" : "off";
+}
+
+static const char *audio_energy_range_name(led_audio_energy_range_t range)
+{
+    switch (range) {
+        case LED_AUDIO_ENERGY_RANGE_MID: return "127-255";
+        case LED_AUDIO_ENERGY_RANGE_HIGH: return "191-255";
+        case LED_AUDIO_ENERGY_RANGE_FULL:
+        default: return "0-255";
+    }
+}
+
+static bool leds_fft_needed(void)
+{
+    return (s_leds.page == LEDS_PAGE_AUDIO) || s_leds.audio_brightness_enabled;
 }
 
 static int find_preset_match(led_color_cycle_t cycle,
@@ -198,6 +224,8 @@ static void leds_apply_color(void)
     led_beat_color_style_set(s_leds.color_style);
     led_beat_highlight_mode_set(s_leds.highlight_mode);
     led_beat_brightness_set(s_leds.brightness);
+    led_audio_brightness_enable(s_leds.audio_brightness_enabled);
+    led_audio_energy_range_set(s_leds.audio_energy_range);
     led_modes_set_primary_color(s_leds.color_r, s_leds.color_g, s_leds.color_b);
     led_modes_set_secondary_color(s_leds.color2_r, s_leds.color2_g, s_leds.color2_b);
     led_modes_color_cycle_set(s_leds.color_cycle);
@@ -233,6 +261,8 @@ static void leds_load_color_state(void)
                                           s_leds.color2_g,
                                           s_leds.color2_b);
     s_leds.custom_speed_percent = led_modes_get_speed_percent();
+    s_leds.audio_brightness_enabled = led_audio_brightness_enabled();
+    s_leds.audio_energy_range = led_audio_energy_range_get();
     s_leds.brightness = led_beat_brightness_get();
     if (s_leds.brightness < 8) s_leds.brightness = 8;
 }
@@ -252,6 +282,10 @@ static void refresh_color_labels(void)
     snprintf(s_g2_label, sizeof(s_g2_label), "G2:%u", (unsigned)s_leds.color2_g);
     snprintf(s_b2_label, sizeof(s_b2_label), "B2:%u", (unsigned)s_leds.color2_b);
     snprintf(s_speed_label, sizeof(s_speed_label), "speed:%u%%", (unsigned)s_leds.custom_speed_percent);
+    snprintf(s_audio_label, sizeof(s_audio_label), "audio:%s",
+             audio_brightness_name(s_leds.audio_brightness_enabled));
+    snprintf(s_range_label, sizeof(s_range_label), "range:%s",
+             audio_energy_range_name(s_leds.audio_energy_range));
     snprintf(s_bright_label, sizeof(s_bright_label), "bright:%u", (unsigned)s_leds.brightness);
 }
 
@@ -275,6 +309,8 @@ static void append_custom_only_entries(shell_menu_entry_t *entries, size_t *n, s
     if (!entries || !n) return;
     refresh_color_labels();
     if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_speed", .label = s_speed_label };
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_audio_brightness", .label = s_audio_label };
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_audio_range", .label = s_range_label };
     if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_brightness", .label = s_bright_label };
 }
 
@@ -282,6 +318,8 @@ static void append_audio_only_entries(shell_menu_entry_t *entries, size_t *n, si
 {
     if (!entries || !n) return;
     refresh_color_labels();
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_audio_brightness", .label = s_audio_label };
+    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_audio_range", .label = s_range_label };
     if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_brightness", .label = s_bright_label };
 }
 
@@ -324,10 +362,44 @@ static int mode_count_for_page(int page)
 
 static int cfg_index_for_page(int page, int local_cfg_idx)
 {
-    if (page == LEDS_PAGE_AUDIO && local_cfg_idx >= LEDS_CFG_SPEED) {
-        return local_cfg_idx + 1;
+    static const int kAudioCfgOrder[] = {
+        LEDS_CFG_PRESET,
+        LEDS_CFG_STYLE,
+        LEDS_CFG_HIGHLIGHT,
+        LEDS_CFG_R,
+        LEDS_CFG_G,
+        LEDS_CFG_B,
+        LEDS_CFG_R2,
+        LEDS_CFG_G2,
+        LEDS_CFG_B2,
+        LEDS_CFG_AUDIO_BRIGHTNESS,
+        LEDS_CFG_AUDIO_RANGE,
+        LEDS_CFG_BRIGHTNESS,
+    };
+    static const int kCustomCfgOrder[] = {
+        LEDS_CFG_PRESET,
+        LEDS_CFG_STYLE,
+        LEDS_CFG_HIGHLIGHT,
+        LEDS_CFG_R,
+        LEDS_CFG_G,
+        LEDS_CFG_B,
+        LEDS_CFG_R2,
+        LEDS_CFG_G2,
+        LEDS_CFG_B2,
+        LEDS_CFG_SPEED,
+        LEDS_CFG_AUDIO_BRIGHTNESS,
+        LEDS_CFG_AUDIO_RANGE,
+        LEDS_CFG_BRIGHTNESS,
+    };
+
+    const int *order = (page == LEDS_PAGE_AUDIO) ? kAudioCfgOrder : kCustomCfgOrder;
+    int count = (page == LEDS_PAGE_AUDIO)
+        ? (int)(sizeof(kAudioCfgOrder) / sizeof(kAudioCfgOrder[0]))
+        : (int)(sizeof(kCustomCfgOrder) / sizeof(kCustomCfgOrder[0]));
+    if (local_cfg_idx < 0 || local_cfg_idx >= count) {
+        return -1;
     }
-    return local_cfg_idx;
+    return order[local_cfg_idx];
 }
 
 static void leds_audio_fft_ensure_started(void)
@@ -357,12 +429,21 @@ static void leds_audio_fft_maybe_stop(void)
     s_leds_fft_owned = false;
 }
 
+static void leds_sync_fft_state(void)
+{
+    if (leds_fft_needed()) {
+        leds_audio_fft_ensure_started();
+    } else {
+        leds_audio_fft_maybe_stop();
+    }
+}
+
 static void leds_apply_audio(void)
 {
     int count = led_beat_anim_count();
     if (count <= 0) return;
     s_leds.audio_mode = clamp_int(s_leds.audio_mode, 0, count - 1);
-    leds_audio_fft_ensure_started();
+    leds_sync_fft_state();
     led_beat_anim_set((led_beat_anim_t)s_leds.audio_mode);
     led_beat_enable(true);
     led_modes_enable(false);
@@ -381,7 +462,7 @@ static void leds_apply_custom(void)
     led_modes_set(s_leds.custom_mode);
     led_modes_enable(true);
     led_beat_enable(false);
-    leds_audio_fft_maybe_stop();
+    leds_sync_fft_state();
 
     const char *name = led_modes_name(s_leds.custom_mode);
     system_state_set_led_mode(s_leds.custom_mode, name ? name : "custom");
@@ -474,6 +555,13 @@ static void leds_cycle_cfg(int cfg_idx, bool inc)
                                                         inc ? speed_step : -speed_step,
                                                         10, 250);
             break;
+        case LEDS_CFG_AUDIO_BRIGHTNESS:
+            s_leds.audio_brightness_enabled = !s_leds.audio_brightness_enabled;
+            break;
+        case LEDS_CFG_AUDIO_RANGE:
+            s_leds.audio_energy_range = (led_audio_energy_range_t)
+                ((((int)s_leds.audio_energy_range) + (inc ? 1 : -1) + 3) % 3);
+            break;
         case LEDS_CFG_BRIGHTNESS:
             s_leds.brightness = step_u8_clamp(s_leds.brightness,
                                               inc ? bright_step : -bright_step,
@@ -484,6 +572,7 @@ static void leds_cycle_cfg(int cfg_idx, bool inc)
     }
 
     leds_apply_color();
+    leds_sync_fft_state();
 }
 
 static void leds_init_page(shell_app_context_t *ctx, int page)

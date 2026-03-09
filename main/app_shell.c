@@ -4,6 +4,9 @@
 #include "shell_profiler.h"
 #include "app_settings.h"
 #include "audio.h"
+#include "audio_player.h"
+#include "audio_rx.h"
+#include "fft.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -46,7 +49,11 @@ static uint8_t *s_oled_fb = s_fb_oled_b;
 static TaskHandle_t s_oled_task = NULL;
 static QueueHandle_t s_oled_q = NULL;
 static uint64_t s_last_submitted_hash = UINT64_MAX;
+static TaskHandle_t s_logo_task = NULL;
+static volatile bool s_logo_active = false;
 static TaskHandle_t s_startup_tone_task = NULL;
+static TaskHandle_t s_shell_task = NULL;
+static esp_timer_handle_t s_shell_frame_timer = NULL;
 
 static size_t s_current_app = 0;
 static size_t s_prev_app = 0;
@@ -54,6 +61,8 @@ static size_t s_queued_app_index = 0;
 static bool   s_app_switch_queued = false;
 
 static shell_app_context_t s_ctx = {0};
+
+static const uint32_t SHELL_FRAME_BUDGET_US = 16667u;
 
 static void link_frame_handler(link_msg_type_t type, const uint8_t *payload, size_t len, void *user_ctx);
 static uint8_t s_peer_mac_cfg[6] = {0};
@@ -133,6 +142,94 @@ static void startup_tone_task(void *arg)
     }
     s_startup_tone_task = NULL;
     vTaskDelete(NULL);
+}
+
+static void shell_frame_timer_cb(void *arg)
+{
+    TaskHandle_t task = (TaskHandle_t)arg;
+    if (task) {
+        xTaskNotifyGive(task);
+    }
+}
+
+static bool shell_frame_clock_start(void)
+{
+    if (s_shell_frame_timer) return true;
+
+    s_shell_task = xTaskGetCurrentTaskHandle();
+    if (!s_shell_task) return false;
+
+    const esp_timer_create_args_t args = {
+        .callback = shell_frame_timer_cb,
+        .arg = s_shell_task,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "shell_frame",
+    };
+
+    esp_err_t err = esp_timer_create(&args, &s_shell_frame_timer);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "shell frame timer create failed: %s", esp_err_to_name(err));
+        s_shell_frame_timer = NULL;
+        return false;
+    }
+
+    err = esp_timer_start_periodic(s_shell_frame_timer, SHELL_FRAME_BUDGET_US);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "shell frame timer start failed: %s", esp_err_to_name(err));
+        (void)esp_timer_delete(s_shell_frame_timer);
+        s_shell_frame_timer = NULL;
+        return false;
+    }
+
+    while (ulTaskNotifyTake(pdTRUE, 0) > 0) {}
+    return true;
+}
+
+static inline void shell_wait_next_frame(void)
+{
+    if (s_shell_frame_timer) {
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        return;
+    }
+
+    vTaskDelay(2);
+}
+
+static void startup_logo_task(void *arg)
+{
+    (void)arg;
+    anim_logo();
+    s_logo_active = false;
+    s_logo_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void shell_start_logo_async(void)
+{
+    if (s_logo_active || s_logo_task) return;
+    s_logo_active = true;
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        startup_logo_task,
+        "logo_boot",
+        3072,
+        NULL,
+        1,
+        &s_logo_task,
+        OLED_TASK_CORE
+    );
+    if (ok != pdPASS) {
+        s_logo_active = false;
+        s_logo_task = NULL;
+        ESP_LOGW(TAG, "logo task create failed; falling back to blocking logo");
+        anim_logo();
+    }
+}
+
+static void shell_wait_for_logo(void)
+{
+    while (s_logo_active) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
 }
 
 static inline void oled_submit_frame(void)
@@ -216,6 +313,61 @@ static void apply_queued_app_switch(void)
     s_app_switch_queued = false;
     if (s_queued_app_index == s_current_app) return;
     switch_to_index(s_queued_app_index);
+}
+
+static void shell_graceful_restart(void)
+{
+    ESP_LOGI(TAG, "graceful restart: begin");
+
+    s_app_switch_queued = false;
+
+    const shell_app_desc_t *app = current_app();
+    if (app && app->deinit) {
+        ESP_LOGI(TAG, "graceful restart: deinit app [%s]", app->id ? app->id : "?");
+        app->deinit(&s_ctx);
+    }
+
+    led_modes_enable(false);
+    led_beat_enable(false);
+
+    fft_set_display_enabled(false);
+    fft_visualizer_stop();
+
+    audio_player_stop();
+
+    if (audio_rx_is_running()) {
+        esp_err_t rx_err = audio_rx_stop();
+        if (rx_err != ESP_OK) {
+            ESP_LOGW(TAG, "graceful restart: audio_rx_stop failed: %s", esp_err_to_name(rx_err));
+        }
+    }
+
+    esp_err_t bt_stop_err = bt_audio_stop_stream();
+    if (bt_stop_err != ESP_OK && bt_stop_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "graceful restart: bt stop stream failed: %s", esp_err_to_name(bt_stop_err));
+    }
+    esp_err_t bt_disc_err = bt_audio_disconnect();
+    if (bt_disc_err != ESP_OK && bt_disc_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "graceful restart: bt disconnect failed: %s", esp_err_to_name(bt_disc_err));
+    }
+
+    esp_err_t link_frame_err = link_set_frame_rx(NULL, NULL);
+    if (link_frame_err != ESP_OK) {
+        ESP_LOGW(TAG, "graceful restart: link frame rx detach failed: %s", esp_err_to_name(link_frame_err));
+    }
+    esp_err_t link_rx_err = link_set_rx(NULL, NULL);
+    if (link_rx_err != ESP_OK) {
+        ESP_LOGW(TAG, "graceful restart: link rx detach failed: %s", esp_err_to_name(link_rx_err));
+    }
+
+    esp_err_t audio_err = audio_disable_all();
+    if (audio_err != ESP_OK) {
+        ESP_LOGW(TAG, "graceful restart: audio disable failed: %s", esp_err_to_name(audio_err));
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(120));
+    ESP_LOGI(TAG, "graceful restart: restarting now");
+    esp_restart();
 }
 
 // Link frame dispatch (shared across apps)
@@ -545,8 +697,8 @@ static void process_input_events(const shell_app_desc_t *app, TickType_t now_tic
                 queue_app_switch_request("menu", NULL);
                 continue;
             } else if (ev.button == INPUT_BTN_BC_COMBO) {
-                esp_restart();
-                continue;
+                shell_graceful_restart();
+                return;
             }
         }
         if (app && app->handle_input) {
@@ -590,7 +742,7 @@ static bool shell_init_hw_and_display(void)
         }
     }
 
-    anim_logo();
+    shell_start_logo_async();
 
     // Audio bus for FFT (shared RX/TX)
     if (!shell_audio_init_if_needed()) {
@@ -686,10 +838,8 @@ static void shell_init_input_and_apps(void)
 
 static void shell_run_loop(void)
 {
-    const TickType_t frame_period = pdMS_TO_TICKS(33);
-    const uint32_t frame_budget_us = (uint32_t)frame_period * (uint32_t)portTICK_PERIOD_MS * 1000u;
-    TickType_t last_wake = xTaskGetTickCount();
-    TickType_t last_tick = last_wake;
+    int64_t last_tick_us = esp_timer_get_time();
+    (void)shell_frame_clock_start();
     ESP_LOGI(TAG, "stage: enter loop");
 
     while (1) {
@@ -697,9 +847,12 @@ static void shell_run_loop(void)
         uint32_t tick_us = 0;
         uint32_t draw_us = 0;
 
+        int64_t now_us = frame_work_start_us;
+        float dt_sec = (float)(now_us - last_tick_us) * 1e-6f;
+        if (dt_sec < 0.0f) dt_sec = 0.0f;
+        last_tick_us = now_us;
+
         TickType_t now = xTaskGetTickCount();
-        float dt_sec = (float)(now - last_tick) * portTICK_PERIOD_MS / 1000.0f;
-        last_tick = now;
 
         const shell_app_desc_t *app = current_app();
         process_input_events(app, now);
@@ -707,8 +860,8 @@ static void shell_run_loop(void)
         app = current_app();
         if (!app) {
             uint32_t work_us = (uint32_t)(esp_timer_get_time() - frame_work_start_us);
-            shell_profiler_on_frame("none", false, frame_budget_us, 0, 0, work_us);
-            vTaskDelayUntil(&last_wake, frame_period);
+            shell_profiler_on_frame("none", false, SHELL_FRAME_BUDGET_US, 0, 0, work_us);
+            shell_wait_next_frame();
             continue;
         }
 
@@ -755,11 +908,11 @@ static void shell_run_loop(void)
         uint32_t work_us = (uint32_t)(esp_timer_get_time() - frame_work_start_us);
         shell_profiler_on_frame(app->id ? app->id : "none",
                                 (app->flags & SHELL_APP_FLAG_EXTERNAL) != 0,
-                                frame_budget_us,
+                                SHELL_FRAME_BUDGET_US,
                                 tick_us,
                                 draw_us,
                                 work_us);
-        vTaskDelayUntil(&last_wake, frame_period);
+        shell_wait_next_frame();
     }
 }
 
@@ -785,6 +938,7 @@ void app_shell_start(void)
     shell_seed_initial_system_state();
     shell_init_input_and_apps();
     shell_profiler_init();
+    shell_wait_for_logo();
     ESP_LOGI(TAG, "stage: input init and app init done");
     shell_run_loop();
 }

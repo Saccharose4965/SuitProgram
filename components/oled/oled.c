@@ -230,21 +230,26 @@ void oled_blit64_offset(const uint8_t* buf, int xoff_px){
     int baseX = (PANEL_W - W)/2;
     int colStart = baseX + xoff_px;
     int colEnd   = colStart + W - 1;
-    if (colEnd < 0 || colStart > (PANEL_W - 1)) return;
-
     int srcX0 = 0;
-    if (colStart < 0) { srcX0 = -colStart; colStart = 0; }
-    int drawW = W - srcX0;
-    if (colEnd >= PANEL_W) { drawW -= (colEnd - (PANEL_W - 1)); colEnd = PANEL_W - 1; }
-    if (drawW <= 0) return;
+    int drawW = 0;
+
+    if (!(colEnd < 0 || colStart > (PANEL_W - 1))) {
+        if (colStart < 0) { srcX0 = -colStart; colStart = 0; }
+        drawW = W - srcX0;
+        if (colEnd >= PANEL_W) { drawW -= (colEnd - (PANEL_W - 1)); colEnd = PANEL_W - 1; }
+        if (drawW < 0) drawW = 0;
+    }
 
     int offY = (PANEL_H - H)/2;
     int pageStart = offY / 8;
 
-    begin_window(colStart, colStart + drawW - 1, pageStart, pageStart + (H/8) - 1);
+    // Sliding needs explicit background clear behind the logo, so redraw the
+    // full 128-column page span instead of only the current visible bbox.
+    begin_window(0, PANEL_W - 1, pageStart, pageStart + (H/8) - 1);
 
-    uint8_t line[W];
+    uint8_t line[PANEL_W];
     for (int p=0; p<H/8; ++p){
+        memset(line, 0, sizeof(line));
         for (int x=0; x<drawW; ++x){
             int sx = srcX0 + x;
             uint8_t b=0;
@@ -254,9 +259,9 @@ void oled_blit64_offset(const uint8_t* buf, int xoff_px){
                 uint8_t v = (buf[idx>>3] >> (7-(idx&7))) & 1u;
                 b |= (uint8_t)(v << bit);
             }
-            line[x]=b;
+            line[colStart + x]=b;
         }
-        tx(line, drawW, true);
+        tx(line, PANEL_W, true);
     }
 }
 

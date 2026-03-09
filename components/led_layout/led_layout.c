@@ -1232,6 +1232,30 @@ esp_err_t led_layout_set_section_reversed(size_t idx, bool reversed)
     return ESP_OK;
 }
 
+esp_err_t led_layout_set_section_start_deg(size_t idx, float start_deg)
+{
+    if (!layout_lock_take()) return ESP_ERR_INVALID_STATE;
+    layout_ensure_ready_locked();
+    if (idx >= s_layout.section_count) {
+        layout_lock_give();
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    led_layout_section_t *sec = &s_layout.sections[idx];
+    if (sec->geom_kind != LED_LAYOUT_GEOM_ARC) {
+        layout_lock_give();
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    while (start_deg < 0.0f) start_deg += 360.0f;
+    while (start_deg >= 360.0f) start_deg -= 360.0f;
+
+    sec->start_deg = start_deg;
+    layout_finalize(&s_layout);
+    layout_lock_give();
+    return ESP_OK;
+}
+
 esp_err_t led_layout_save(void)
 {
     if (!layout_lock_take()) return ESP_ERR_INVALID_STATE;

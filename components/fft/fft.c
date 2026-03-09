@@ -56,6 +56,7 @@ static const float kScoreTauDownSec      = 1.20f;
 static const float kLevelFastAlpha       = 0.36f;
 static const float kLevelSlowAlpha       = 0.045f;
 static const float kLevelPeakDecay       = 0.992f;
+static const float kRawVolumeGain        = 12.0f;
 #define MAX_PHASE_EVAL 256
 
 // ------------------- State -------------------
@@ -160,6 +161,7 @@ static void fft_reset_runtime_state(void){
     memset(&s_level_low, 0, sizeof(s_level_low));
     memset(&s_level_mid, 0, sizeof(s_level_mid));
     memset(&s_level_high, 0, sizeof(s_level_high));
+    led_audio_raw_volume_set(0.0f);
 }
 
 static int bin_from_hz(float hz)
@@ -190,6 +192,22 @@ static float band_mean_logmag(const float *logmag, float hz_lo, float hz_hi)
         count++;
     }
     return (count > 0) ? (sum / (float)count) : 0.0f;
+}
+
+static float recent_hop_rms(void)
+{
+    const size_t ring_mask = FFT_CFG_SIZE - 1;
+    size_t base = (ring_write_pos - (size_t)FFT_CFG_HOP_SAMPLES) & ring_mask;
+    float sum_sq = 0.0f;
+    for (size_t i = 0; i < (size_t)FFT_CFG_HOP_SAMPLES; ++i) {
+        float v = sample[(base + i) & ring_mask];
+        sum_sq += v * v;
+    }
+    float rms = sqrtf(sum_sq / (float)FFT_CFG_HOP_SAMPLES);
+    float scaled = rms * kRawVolumeGain;
+    if (scaled < 0.0f) scaled = 0.0f;
+    if (scaled > 1.0f) scaled = 1.0f;
+    return scaled;
 }
 
 static void update_level_track(level_track_t *track, float raw)
@@ -899,6 +917,7 @@ static void process_fft_frame(void){
         logmag[k] = logf(1.0f + 10.0f * mag);
     }
 
+    led_audio_raw_volume_set(recent_hop_rms());
     update_level_track(&s_level_overall, band_mean_logmag(logmag, 80.0f, 4800.0f));
     update_level_track(&s_level_low,     band_mean_logmag(logmag, 80.0f, 220.0f));
     update_level_track(&s_level_mid,     band_mean_logmag(logmag, 220.0f, 1400.0f));
@@ -1103,6 +1122,7 @@ void fft_visualizer_stop(void){
         s_task = NULL;
     }
     s_stop_requested = false;
+    led_audio_raw_volume_set(0.0f);
 }
 
 bool fft_visualizer_running(void){

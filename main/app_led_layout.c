@@ -22,6 +22,7 @@ enum {
     LED_LAYOUT_FIELD_PART,
     LED_LAYOUT_FIELD_LENGTH,
     LED_LAYOUT_FIELD_REVERSED,
+    LED_LAYOUT_FIELD_ROTATION,
     LED_LAYOUT_FIELD_PREVIEW,
     LED_LAYOUT_FIELD_SAVE,
     LED_LAYOUT_FIELD_RELOAD,
@@ -316,6 +317,14 @@ static void layout_apply_edit(bool increment, bool coarse)
             err = led_layout_set_section_reversed(global_idx, !sec->reversed);
             if (err == ESP_OK) s_layout_app.dirty = true;
             break;
+        case LED_LAYOUT_FIELD_ROTATION:
+            if (sec->geom_kind == LED_LAYOUT_GEOM_ARC) {
+                float delta = coarse ? 15.0f : 5.0f;
+                float next_deg = sec->start_deg + (increment ? delta : -delta);
+                err = led_layout_set_section_start_deg(global_idx, next_deg);
+                if (err == ESP_OK) s_layout_app.dirty = true;
+            }
+            break;
         case LED_LAYOUT_FIELD_PREVIEW:
             if (increment) {
                 s_layout_app.preview = (led_layout_preview_mode_t)((s_layout_app.preview + 1) % 3);
@@ -503,6 +512,12 @@ void led_layout_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, in
              sec ? (unsigned)sec->length : 0u);
     snprintf(fields[LED_LAYOUT_FIELD_REVERSED], sizeof(fields[LED_LAYOUT_FIELD_REVERSED]), "rev:%s",
              sec && sec->reversed ? "yes" : "no");
+    if (sec && sec->geom_kind == LED_LAYOUT_GEOM_ARC) {
+        snprintf(fields[LED_LAYOUT_FIELD_ROTATION], sizeof(fields[LED_LAYOUT_FIELD_ROTATION]),
+                 "rot:%.0f", sec->start_deg);
+    } else {
+        snprintf(fields[LED_LAYOUT_FIELD_ROTATION], sizeof(fields[LED_LAYOUT_FIELD_ROTATION]), "rot:n/a");
+    }
     snprintf(fields[LED_LAYOUT_FIELD_PREVIEW], sizeof(fields[LED_LAYOUT_FIELD_PREVIEW]), "preview:%s",
              preview_name(s_layout_app.preview));
     snprintf(fields[LED_LAYOUT_FIELD_SAVE], sizeof(fields[LED_LAYOUT_FIELD_SAVE]), "save%s",

@@ -85,6 +85,12 @@ typedef enum {
 } led_highlight_mode_t;
 
 typedef enum {
+    LED_AUDIO_ENERGY_RANGE_FULL = 0,
+    LED_AUDIO_ENERGY_RANGE_MID = 1,
+    LED_AUDIO_ENERGY_RANGE_HIGH = 2,
+} led_audio_energy_range_t;
+
+typedef enum {
     LED_BEAT_ANIM_FLASH = 0,
     LED_BEAT_ANIM_PULSE = 1,
     LED_BEAT_ANIM_RING_TRAIN = 2,
@@ -110,6 +116,10 @@ bool led_beat_enabled(void);
 // Trigger one beat event using currently selected animation mode.
 void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b);
 void led_audio_levels_set(float overall, float low, float mid, float high);
+void led_audio_raw_volume_set(float volume);
+void led_audio_brightness_enable(bool enabled);
+bool led_audio_brightness_enabled(void);
+float led_audio_brightness_scale_get(void);
 void led_beat_color_set(uint8_t r, uint8_t g, uint8_t b);
 void led_beat_color_get(uint8_t *r, uint8_t *g, uint8_t *b);
 void led_beat_secondary_color_set(uint8_t r, uint8_t g, uint8_t b);
@@ -122,6 +132,8 @@ void led_beat_highlight_mode_set(led_highlight_mode_t mode);
 led_highlight_mode_t led_beat_highlight_mode_get(void);
 void led_beat_brightness_set(uint8_t level);
 uint8_t led_beat_brightness_get(void);
+void led_audio_energy_range_set(led_audio_energy_range_t range);
+led_audio_energy_range_t led_audio_energy_range_get(void);
 
 // Run a blocking LED hardware test pattern (RGBW + chase).
 // Useful for validating data line / level-shifter / strip power.

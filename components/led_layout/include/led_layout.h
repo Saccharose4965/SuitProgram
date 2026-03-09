@@ -92,6 +92,7 @@ bool led_layout_get_from_config(const led_layout_config_t *cfg, int idx, led_poi
 esp_err_t led_layout_set_section_strip(size_t idx, uint8_t strip);
 esp_err_t led_layout_set_section_length(size_t idx, uint16_t length);
 esp_err_t led_layout_set_section_reversed(size_t idx, bool reversed);
+esp_err_t led_layout_set_section_start_deg(size_t idx, float start_deg);
 
 esp_err_t led_layout_save(void);
 esp_err_t led_layout_reload(void);

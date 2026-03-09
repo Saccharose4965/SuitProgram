@@ -6,6 +6,8 @@
 #include "esp_err.h"
 #include "esp_attr.h"
 #include "esp_log.h"
+#include "esp_random.h"
+#include "esp_timer.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -43,8 +45,10 @@ static const led_mode_desc_t s_modes[] = {
     { "aurora"  },
     { "vortex"  },
     { "helix"   },
+    { "shuffle" },
 };
 static const int kModeCount = sizeof(s_modes) / sizeof(s_modes[0]);
+static const int kShuffleModeIndex = (int)(sizeof(s_modes) / sizeof(s_modes[0])) - 1;
 
 static volatile int s_mode = 0;
 static volatile bool s_enabled = false;
@@ -81,11 +85,35 @@ static EXT_RAM_BSS_ATTR led_layout_config_t s_render_layout = {0};
 #define LED_MODES_IDLE_PERIOD_MS 80
 #endif
 
+#ifndef LED_MODES_SHUFFLE_INTERVAL_US
+#define LED_MODES_SHUFFLE_INTERVAL_US (10LL * 1000000LL)
+#endif
+
 static inline int clamp_mode(int idx)
 {
     if (idx < 0) return 0;
     if (idx >= kModeCount) return kModeCount - 1;
     return idx;
+}
+
+static bool mode_uses_layout(int mode)
+{
+    return (mode == 4) || (mode >= 10 && mode < kShuffleModeIndex);
+}
+
+static int pick_shuffle_mode(int prev_mode)
+{
+    const int first = 2; // skip off and fill
+    const int last = kShuffleModeIndex - 1; // exclude shuffle itself
+    if (last < first) {
+        return 1;
+    }
+    const int count = last - first + 1;
+    int picked = first + (int)(esp_random() % (uint32_t)count);
+    if (count > 1 && picked == prev_mode) {
+        picked = first + ((picked - first + 1 + (int)(esp_random() % (uint32_t)(count - 1))) % count);
+    }
+    return picked;
 }
 
 int led_modes_count(void) { return kModeCount; }
@@ -966,6 +994,9 @@ static void led_modes_task(void *arg)
     float t_sec = 0.0f;
     const float dt_sec = (float)(period * portTICK_PERIOD_MS) / 1000.0f;
     bool was_enabled = false;
+    int shuffle_mode = -1;
+    int64_t shuffle_next_switch_us = 0;
+    float shuffle_t_sec = 0.0f;
 
     while (1) {
         if (!s_enabled) {
@@ -973,6 +1004,9 @@ static void led_modes_task(void *arg)
                 memset(frame, 0, sizeof(frame));
                 (void)led_show_pixels(frame, LED_STRIP_LENGTH);
                 was_enabled = false;
+                shuffle_mode = -1;
+                shuffle_next_switch_us = 0;
+                shuffle_t_sec = 0.0f;
             }
             vTaskDelay(idle_period);
             last_wake = xTaskGetTickCount();
@@ -982,6 +1016,9 @@ static void led_modes_task(void *arg)
         if (!was_enabled) {
             was_enabled = true;
             t_sec = 0.0f;
+            shuffle_mode = -1;
+            shuffle_next_switch_us = 0;
+            shuffle_t_sec = 0.0f;
             last_wake = xTaskGetTickCount();
         }
         float speed_scale = (float)s_speed_percent / 100.0f;
@@ -995,8 +1032,26 @@ static void led_modes_task(void *arg)
         led_modes_sample_color(t_sec, &pr, &pg, &pb);
 
         int mode = clamp_mode(s_mode);
+        int effective_mode = mode;
+        float render_t_sec = t_sec;
+        if (mode == kShuffleModeIndex) {
+            int64_t now_us = esp_timer_get_time();
+            if (shuffle_mode < 0 || now_us >= shuffle_next_switch_us) {
+                shuffle_mode = pick_shuffle_mode(shuffle_mode);
+                shuffle_next_switch_us = now_us + LED_MODES_SHUFFLE_INTERVAL_US;
+                shuffle_t_sec = 0.0f;
+            } else {
+                shuffle_t_sec += dt_sec * speed_scale;
+            }
+            effective_mode = shuffle_mode;
+            render_t_sec = shuffle_t_sec;
+        } else {
+            shuffle_mode = -1;
+            shuffle_next_switch_us = 0;
+            shuffle_t_sec = 0.0f;
+        }
         layout_stats_t stats = {0};
-        bool use_layout_mode = (mode == 4 || mode >= 10);
+        bool use_layout_mode = mode_uses_layout(effective_mode);
         if (use_layout_mode) {
             led_layout_snapshot(&s_render_layout);
             if (s_render_layout.total_leds > 0 && count > s_render_layout.total_leds) {
@@ -1004,35 +1059,37 @@ static void led_modes_task(void *arg)
             }
             layout_stats_collect(&s_render_layout, count, &stats);
         }
-        switch (mode) {
+        switch (effective_mode) {
             case 0: render_fill(frame, count, 0, 0, 0); break;
             case 1: render_fill(frame, count, pr, pg, pb); break;
-            case 2: render_breathe(frame, count, t_sec, pr, pg, pb); break;
-            case 3: render_scanner(frame, count, t_sec, pr, pg, pb); break;
+            case 2: render_breathe(frame, count, render_t_sec, pr, pg, pb); break;
+            case 3: render_scanner(frame, count, render_t_sec, pr, pg, pb); break;
             case 4: render_mirror(frame, count,
                                   use_layout_mode ? &s_render_layout : NULL,
                                   use_layout_mode ? &stats : NULL,
-                                  t_sec, pr, pg, pb); break;
-            case 5: render_energy(frame, count, t_sec, pr, pg, pb); break;
-            case 6: render_blink(frame, count, t_sec, 0.14f, 0.46f, pr, pg, pb); break;
-            case 7: render_chase(frame, count, t_sec, pr, pg, pb); break;
-            case 8: render_twinkle(frame, count, t_sec, pr, pg, pb); break;
-            case 9: render_glitch(frame, count, t_sec, pr, pg, pb); break;
-            case 10: render_plane(frame, count, &s_render_layout, &stats, t_sec, pr, pg, pb); break;
-            case 11: render_prism(frame, count, &s_render_layout, &stats, t_sec, pr, pg, pb); break;
-            case 12: render_ring(frame, count, &s_render_layout, &stats, t_sec, pr, pg, pb); break;
-            case 13: render_contour(frame, count, &s_render_layout, &stats, t_sec, pr, pg, pb); break;
-            case 14: render_orbit(frame, count, &s_render_layout, &stats, t_sec, pr, pg, pb); break;
-            case 15: render_aurora(frame, count, &s_render_layout, &stats, t_sec, pr, pg, pb); break;
-            case 16: render_vortex(frame, count, &s_render_layout, &stats, t_sec, pr, pg, pb); break;
-            case 17: render_helix(frame, count, &s_render_layout, &stats, t_sec, pr, pg, pb); break;
+                                  render_t_sec, pr, pg, pb); break;
+            case 5: render_energy(frame, count, render_t_sec, pr, pg, pb); break;
+            case 6: render_blink(frame, count, render_t_sec, 0.14f, 0.46f, pr, pg, pb); break;
+            case 7: render_chase(frame, count, render_t_sec, pr, pg, pb); break;
+            case 8: render_twinkle(frame, count, render_t_sec, pr, pg, pb); break;
+            case 9: render_glitch(frame, count, render_t_sec, pr, pg, pb); break;
+            case 10: render_plane(frame, count, &s_render_layout, &stats, render_t_sec, pr, pg, pb); break;
+            case 11: render_prism(frame, count, &s_render_layout, &stats, render_t_sec, pr, pg, pb); break;
+            case 12: render_ring(frame, count, &s_render_layout, &stats, render_t_sec, pr, pg, pb); break;
+            case 13: render_contour(frame, count, &s_render_layout, &stats, render_t_sec, pr, pg, pb); break;
+            case 14: render_orbit(frame, count, &s_render_layout, &stats, render_t_sec, pr, pg, pb); break;
+            case 15: render_aurora(frame, count, &s_render_layout, &stats, render_t_sec, pr, pg, pb); break;
+            case 16: render_vortex(frame, count, &s_render_layout, &stats, render_t_sec, pr, pg, pb); break;
+            case 17: render_helix(frame, count, &s_render_layout, &stats, render_t_sec, pr, pg, pb); break;
             default: render_fill(frame, count, 0, 0, 0); break;
         }
 
-        uint8_t bscale = s_brightness;
-        if (bscale < 255) {
+        float output_scale = (float)s_brightness / 255.0f;
+        if (output_scale < 0.0f) output_scale = 0.0f;
+        if (output_scale > 1.0f) output_scale = 1.0f;
+        if (output_scale < 0.999f) {
             for (size_t i = 0; i < count * 3; ++i) {
-                frame[i] = (uint8_t)((frame[i] * (uint16_t)bscale) / 255u);
+                frame[i] = (uint8_t)((float)frame[i] * output_scale);
             }
         }
 

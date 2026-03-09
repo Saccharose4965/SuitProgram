@@ -307,14 +307,12 @@ static uint8_t s_beat_secondary_b = 255;
 static volatile led_color_cycle_t s_beat_color_cycle = LED_COLOR_CYCLE_STATIC;
 static volatile led_color_style_t s_beat_color_style = LED_COLOR_STYLE_MONO;
 static volatile led_highlight_mode_t s_beat_highlight_mode = LED_HIGHLIGHT_OFF;
+static volatile bool s_audio_brightness_enabled = false;
+static volatile led_audio_energy_range_t s_audio_energy_range = LED_AUDIO_ENERGY_RANGE_FULL;
 static uint8_t s_beat_brightness = 96;
 static uint32_t s_beat_duo_flip = 0;
-static volatile float s_audio_level_overall = 0.0f;
-static volatile float s_audio_level_low = 0.0f;
-static volatile float s_audio_level_mid = 0.0f;
-static volatile float s_audio_level_high = 0.0f;
 static float s_audio_energy_phase = 0.0f;
-static float s_audio_energy_kick = 0.0f;
+static volatile float s_audio_raw_volume = 0.0f;
 static uint8_t s_spark_r = 255;
 static uint8_t s_spark_g = 96;
 static uint8_t s_spark_b = 0;
@@ -341,7 +339,7 @@ static const float kLedPulseMaxPeriodSec = 60.0f / 40.0f;  // 40 BPM floor
 static const float kLedPulseTempoSmooth = 0.25f;
 static const float kLedPulseSnapBpmDelta = 6.0f;
 static const float kLedAudioEnergyBaseSpeed = 8.5f;
-static const float kLedAudioEnergyKickDecay = 0.90f;
+static const float kLedAudioBrightnessThreshold = 0.07f;
 static const float kLedWaveHz = 5.0f;
 static const float kLedWaveDecay = 0.90f;
 static const float kLedWaveFloor = 0.01f;
@@ -550,27 +548,73 @@ static float led_beat_highlight_scale(void)
     return (s_beat_highlight_mode == LED_HIGHLIGHT_PEAKS) ? 1.0f : 0.0f;
 }
 
+static float led_audio_volume_range_scale(void)
+{
+    float floor_scale = 0.0f;
+    if (s_audio_energy_range == LED_AUDIO_ENERGY_RANGE_MID) {
+        floor_scale = 127.0f / 255.0f;
+    } else if (s_audio_energy_range == LED_AUDIO_ENERGY_RANGE_HIGH) {
+        floor_scale = 191.0f / 255.0f;
+    }
+
+    float raw = s_audio_raw_volume;
+    if (raw <= kLedAudioBrightnessThreshold) {
+        return floor_scale;
+    }
+    float norm = (raw - kLedAudioBrightnessThreshold) / (1.0f - kLedAudioBrightnessThreshold);
+    if (norm < 0.0f) norm = 0.0f;
+    if (norm > 1.0f) norm = 1.0f;
+    return floor_scale + (1.0f - floor_scale) * norm;
+}
+
+static float led_audio_brightness_live_scale(void)
+{
+    if (!s_audio_brightness_enabled) {
+        return 1.0f;
+    }
+    return led_audio_volume_range_scale();
+}
+
+static void led_apply_audio_brightness_inplace(uint8_t *buf, size_t len_bytes)
+{
+    if (!buf || len_bytes == 0) return;
+    float scale = led_audio_brightness_live_scale();
+    if (scale >= 0.999f) return;
+    if (scale < 0.0f) scale = 0.0f;
+    for (size_t i = 0; i < len_bytes; ++i) {
+        buf[i] = (uint8_t)((float)buf[i] * scale);
+    }
+}
+
 void led_audio_levels_set(float overall, float low, float mid, float high)
 {
-    if (!isfinite(overall)) overall = 0.0f;
-    if (!isfinite(low)) low = 0.0f;
-    if (!isfinite(mid)) mid = 0.0f;
-    if (!isfinite(high)) high = 0.0f;
+    (void)overall;
+    (void)low;
+    (void)mid;
+    (void)high;
+}
 
-    if (overall < 0.0f) overall = 0.0f;
-    if (low < 0.0f) low = 0.0f;
-    if (mid < 0.0f) mid = 0.0f;
-    if (high < 0.0f) high = 0.0f;
+void led_audio_raw_volume_set(float volume)
+{
+    if (!isfinite(volume)) volume = 0.0f;
+    if (volume < 0.0f) volume = 0.0f;
+    if (volume > 1.0f) volume = 1.0f;
+    s_audio_raw_volume = volume;
+}
 
-    if (overall > 1.0f) overall = 1.0f;
-    if (low > 1.0f) low = 1.0f;
-    if (mid > 1.0f) mid = 1.0f;
-    if (high > 1.0f) high = 1.0f;
+void led_audio_brightness_enable(bool enabled)
+{
+    s_audio_brightness_enabled = enabled;
+}
 
-    s_audio_level_overall = overall;
-    s_audio_level_low = low;
-    s_audio_level_mid = mid;
-    s_audio_level_high = high;
+bool led_audio_brightness_enabled(void)
+{
+    return s_audio_brightness_enabled;
+}
+
+float led_audio_brightness_scale_get(void)
+{
+    return led_audio_brightness_live_scale();
 }
 
 static inline esp_err_t led_lock(void)
@@ -756,6 +800,7 @@ static esp_err_t led_submit_async_locked(const uint8_t *grb, size_t len_bytes){
     } else if (len_bytes < max_bytes) {
         memset(s_frame + len_bytes, 0, max_bytes - len_bytes);
     }
+    led_apply_audio_brightness_inplace(s_frame, len_bytes);
     s_tx_len_bytes = len_bytes;
     if (s_tx_task){
         xTaskNotifyGive(s_tx_task);
@@ -1471,44 +1516,31 @@ static bool led_audio_energy_render_locked(const led_layout_config_t *cfg, size_
     if (period_sec > kLedPulseMaxPeriodSec) period_sec = kLedPulseMaxPeriodSec;
 
     float bpm_scale = (60.0f / period_sec) / 120.0f;
-    float speed = kLedAudioEnergyBaseSpeed * bpm_scale *
-                  (0.78f + 0.32f * s_audio_level_mid + 0.18f * s_audio_level_high);
+    float speed = kLedAudioEnergyBaseSpeed * bpm_scale;
     if (speed < 2.5f) speed = 2.5f;
     s_audio_energy_phase += speed * kLedPulseDt;
     if (s_audio_energy_phase > 4096.0f) {
         s_audio_energy_phase -= 4096.0f;
     }
 
-    float kick = s_audio_energy_kick;
-    s_audio_energy_kick *= kLedAudioEnergyKickDecay;
-    if (s_audio_energy_kick < 0.001f) s_audio_energy_kick = 0.0f;
-
-    float amp = 0.82f * s_audio_level_overall + 0.30f * kick;
-    if (amp > 1.0f) amp = 1.0f;
-    if (amp < 0.015f) {
-        return false;
-    }
-
     uint8_t pr = 0, pg = 0, pb = 0;
     float t_sec = (float)esp_timer_get_time() / 1000000.0f;
     led_beat_sample_primary_color(t_sec, &pr, &pg, &pb);
-    bool rendered = false;
+    if (brightness_scale < 0.004f) return false;
 
     for (size_t led = 0; led < count; ++led) {
         float x = (float)led * 0.16f - s_audio_energy_phase;
         float carrier = 0.5f + 0.5f * sinf(x);
         float ripple = 0.5f + 0.5f * sinf(0.37f * x + 1.7f);
         float level = carrier * carrier * (0.65f + 0.35f * ripple);
-        level *= amp;
         float add_r = brightness_scale * ((float)pr * level);
         float add_g = brightness_scale * ((float)pg * level);
         float add_b = brightness_scale * ((float)pb * level);
         if (add_r < 1.0f && add_g < 1.0f && add_b < 1.0f) continue;
         led_geo_add_rgb_locked(led, add_r, add_g, add_b);
-        rendered = true;
     }
 
-    return rendered;
+    return true;
 }
 
 static void led_comet_trigger_locked(uint8_t r, uint8_t g, uint8_t b)
@@ -1615,7 +1647,7 @@ static void led_pulse_spawn(uint8_t r, uint8_t g, uint8_t b){
 static bool led_pulse_step_locked(void){
     bool any_active = false;
     size_t active = led_active_count();
-    const float brightness_scale = (float)s_beat_brightness / 255.0f;
+    float brightness_scale = (float)s_beat_brightness / 255.0f;
     memset(s_pulse_frame, 0, LED_COUNT * 3);
     led_layout_snapshot(&s_effect_layout);
     if (s_effect_layout.total_leds > 0 && active > s_effect_layout.total_leds) {
@@ -1845,7 +1877,7 @@ void led_beat_anim_set(led_beat_anim_t mode){
         s_flash_ticks = 0;
         s_wave_amp = 0.0f;
         s_audio_energy_phase = 0.0f;
-        s_audio_energy_kick = 0.0f;
+        s_audio_raw_volume = 0.0f;
         led_pulse_unlock();
     }
 }
@@ -1984,6 +2016,17 @@ uint8_t led_beat_brightness_get(void){
     return s_beat_brightness;
 }
 
+void led_audio_energy_range_set(led_audio_energy_range_t range){
+    if (range < LED_AUDIO_ENERGY_RANGE_FULL || range > LED_AUDIO_ENERGY_RANGE_HIGH) {
+        range = LED_AUDIO_ENERGY_RANGE_FULL;
+    }
+    s_audio_energy_range = range;
+}
+
+led_audio_energy_range_t led_audio_energy_range_get(void){
+    return s_audio_energy_range;
+}
+
 void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
     if (!s_beat_enabled) return;
     if (!s_inited){
@@ -2037,12 +2080,6 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
         return;
     }
     if (s_beat_anim == LED_BEAT_ANIM_AUDIO_ENERGY){
-        s_flash_ticks = 0;
-        s_wave_amp = 0.0f;
-        memset(s_spark_energy, 0, sizeof(s_spark_energy));
-        led_geo_clear_locked();
-        led_comet_clear_locked();
-        s_audio_energy_kick = 1.0f;
         led_pulse_unlock();
         return;
     }

@@ -186,8 +186,8 @@ void anim_logo(void){
     oled_clear();
 
     const TickType_t frame_delay = pdMS_TO_TICKS(1000 / FPS);
-    const TickType_t hold_delay  = pdMS_TO_TICKS(1000);
-    const int slide_steps = (int)(3.5f * FPS);
+    const TickType_t hold_delay  = pdMS_TO_TICKS(250);
+    const int slide_steps = (int)(2.0f * FPS);
 
     // Play centered
     for (int f = 0; f < NFRAMES; ++f){
@@ -209,4 +209,3 @@ void anim_logo(void){
     // Safety: ensure fully off (SCROLL_TARGET == 104 in oled driver)
     oled_blit64_offset(gBuf, -104);
 }
-

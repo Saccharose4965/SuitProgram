@@ -18,7 +18,7 @@ static const float kDispPeakMin  = 1.0f;   // minimum display peak to avoid blow
 static const float kHopRateNominalHz = (float)FFT_CFG_SAMPLE_RATE_HZ / (float)FFT_CFG_HOP_SAMPLES;
 
 #ifndef FFT_RENDER_MAX_FPS
-#define FFT_RENDER_MAX_FPS 20
+#define FFT_RENDER_MAX_FPS 60
 #endif
 
 // ------------------- Framebuffer helpers -------------------
