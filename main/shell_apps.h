@@ -35,6 +35,7 @@ void adc_debug_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int
 
 void leds_audio_app_init(shell_app_context_t *ctx);
 void leds_custom_app_init(shell_app_context_t *ctx);
+void leds_app_tick(shell_app_context_t *ctx, float dt_sec);
 void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void leds_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t LEDS_LEGEND;

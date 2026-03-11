@@ -214,9 +214,11 @@ LED Audio / LED Custom (`main/app_leds.c`):
 - `D`:
   - on `Back`: return to `menu`
   - on mode item: apply selected mode
+- LED Audio and LED Custom use smooth menu scrolling for selection changes
 - Custom page config:
   - `speed:%` controls free-running custom animation speed (`10%` to `250%`, step `10%`)
   - `fill` is the full-strip/full-layout coverage mode using the active selected color source
+  - `random` rotates through the custom animation list about every 10 seconds
 
 LED Layout (`main/app_led_layout.c`):
 - `A`: previous field

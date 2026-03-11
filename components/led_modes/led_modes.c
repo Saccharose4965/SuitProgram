@@ -45,7 +45,7 @@ static const led_mode_desc_t s_modes[] = {
     { "aurora"  },
     { "vortex"  },
     { "helix"   },
-    { "shuffle" },
+    { "random"  },
 };
 static const int kModeCount = sizeof(s_modes) / sizeof(s_modes[0]);
 static const int kShuffleModeIndex = (int)(sizeof(s_modes) / sizeof(s_modes[0])) - 1;
@@ -86,7 +86,7 @@ static EXT_RAM_BSS_ATTR led_layout_config_t s_render_layout = {0};
 #endif
 
 #ifndef LED_MODES_SHUFFLE_INTERVAL_US
-#define LED_MODES_SHUFFLE_INTERVAL_US (10LL * 1000000LL)
+#define LED_MODES_SHUFFLE_INTERVAL_US (10LL * 1000000LL) // random mode switch interval
 #endif
 
 static inline int clamp_mode(int idx)

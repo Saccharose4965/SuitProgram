@@ -612,6 +612,13 @@ void leds_custom_app_init(shell_app_context_t *ctx)
     leds_init_page(ctx, LEDS_PAGE_CUSTOM);
 }
 
+void leds_app_tick(shell_app_context_t *ctx, float dt_sec)
+{
+    (void)ctx;
+    size_t selected = (s_leds.page == LEDS_PAGE_AUDIO) ? s_leds.audio_sel : s_leds.custom_sel;
+    shell_ui_menu_tick(dt_sec, selected);
+}
+
 void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 {
     if (!ctx || !ev) return;
@@ -634,12 +641,10 @@ void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 
     if (ev->button == INPUT_BTN_A && *sel > 0) {
         (*sel)--;
-        shell_ui_menu_reset(*sel);
         return;
     }
     if (ev->button == INPUT_BTN_B && (*sel + 1) < count) {
         (*sel)++;
-        shell_ui_menu_reset(*sel);
         return;
     }
 
