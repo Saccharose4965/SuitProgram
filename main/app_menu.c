@@ -13,6 +13,7 @@ typedef enum {
     MENU_GAMES,
     MENU_COMM,
     MENU_LED,
+    MENU_MISC,
 } menu_page_t;
 
 typedef struct {
@@ -29,7 +30,7 @@ static const menu_entry_t g_menu_root_entries[] = {
     { "menu_comm",     "Comm"        },
     { "menu_led",      "LEDs"        },
     { "music",         "Music"       },
-    { "calculator",    "Calculator"  },
+    { "menu_misc",     "Misc"        },
 };
 static const menu_entry_t g_menu_settings_entries[] = {
     { "menu_root", "Back"      },
@@ -47,7 +48,6 @@ static const menu_entry_t g_menu_sim_entries[] = {
     { "fft",       "FFT"    },
     { "fluid",     "Fluid"  },
     { "threedee",  "3D Render" },
-    { "bad_apple", "Bad Apple" },
 };
 static const menu_entry_t g_menu_games_entries[] = {
     { "menu_root", "Back"   },
@@ -71,6 +71,11 @@ static const menu_entry_t g_menu_led_entries[] = {
     { "fft_sync",    "FFT Sync"       },
     { "leds_custom", "Custom"         },
     { "leds_layout", "Layout Edit"    },
+};
+static const menu_entry_t g_menu_misc_entries[] = {
+    { "menu_root",  "Back"       },
+    { "calculator", "Calculator" },
+    { "bad_apple",  "Bad Apple"  },
 };
 
 static void menu_page_info(const menu_state_t *st, const menu_entry_t **entries, size_t *count, const char **title)
@@ -111,6 +116,11 @@ static void menu_page_info(const menu_state_t *st, const menu_entry_t **entries,
             if (count)   *count   = sizeof(g_menu_led_entries)/sizeof(g_menu_led_entries[0]);
             if (title)   *title   = "LED";
             break;
+        case MENU_MISC:
+            if (entries) *entries = g_menu_misc_entries;
+            if (count)   *count   = sizeof(g_menu_misc_entries)/sizeof(g_menu_misc_entries[0]);
+            if (title)   *title   = "MISC";
+            break;
         default:
             break;
     }
@@ -125,6 +135,7 @@ const char *menu_hud_label(void)
         case MENU_GAMES:    return "/games";
         case MENU_COMM:     return "/comm";
         case MENU_LED:      return "/led";
+        case MENU_MISC:     return "/misc";
         default:            return "/menu";
     }
 }
@@ -174,6 +185,10 @@ void menu_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
                 shell_ui_menu_reset(g_menu_state.selected);
             } else if (strcmp(id, "menu_led") == 0) {
                 g_menu_state.page = MENU_LED;
+                g_menu_state.selected = 0;
+                shell_ui_menu_reset(g_menu_state.selected);
+            } else if (strcmp(id, "menu_misc") == 0) {
+                g_menu_state.page = MENU_MISC;
                 g_menu_state.selected = 0;
                 shell_ui_menu_reset(g_menu_state.selected);
             } else if (strcmp(id, "reboot") == 0) {

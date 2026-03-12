@@ -1,6 +1,7 @@
 #include "app_shell.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "esp_err.h"
 #include "esp_log.h"
@@ -18,6 +19,11 @@ enum {
     LEDS_PAGE_CUSTOM = 1,
 };
 
+typedef enum {
+    LEDS_MODE_SOURCE_AUDIO = 0,
+    LEDS_MODE_SOURCE_CUSTOM = 1,
+} leds_mode_source_t;
+
 enum {
     LEDS_CFG_PRESET = 0,
     LEDS_CFG_STYLE,
@@ -29,11 +35,29 @@ enum {
     LEDS_CFG_G2,
     LEDS_CFG_B2,
     LEDS_CFG_SPEED,
-    LEDS_CFG_AUDIO_BRIGHTNESS,
-    LEDS_CFG_AUDIO_RANGE,
+    LEDS_CFG_AUDIO_INPUT,
     LEDS_CFG_BRIGHTNESS,
     LEDS_CFG_COUNT,
 };
+
+typedef enum {
+    LEDS_ENTRY_KIND_BACK = 0,
+    LEDS_ENTRY_KIND_ANIM,
+    LEDS_ENTRY_KIND_CFG,
+} leds_entry_kind_t;
+
+typedef struct {
+    leds_entry_kind_t kind;
+    int value;
+} leds_menu_meta_t;
+
+typedef struct {
+    const char *label;
+    const char *variant_labels[3];
+    const char *audio_names[3];
+    const char *custom_names[3];
+    uint8_t variant_count;
+} leds_animation_choice_t;
 
 typedef struct {
     const char *name;
@@ -63,12 +87,48 @@ static const leds_color_preset_t s_color_presets[] = {
 };
 static const int kColorPresetCount = (int)(sizeof(s_color_presets) / sizeof(s_color_presets[0]));
 
+// Both LED pages expose the same labels. Each label maps to the nearest
+// engine-native effect on the audio-reactive and continuous renderers.
+static const leds_animation_choice_t s_animation_choices[] = {
+    { "off",          { NULL,      NULL,      NULL      }, { NULL,          NULL,          NULL      }, { "off",     NULL,      NULL      }, 1 },
+    { "fill",         { NULL,      NULL,      NULL      }, { "flash",       NULL,          NULL      }, { "fill",    NULL,      NULL      }, 1 },
+    { "breathe",      { NULL,      NULL,      NULL      }, { "pulse",       NULL,          NULL      }, { "breathe", NULL,      NULL      }, 1 },
+    { "scanner",      { NULL,      NULL,      NULL      }, { "comet",       NULL,          NULL      }, { "scanner", NULL,      NULL      }, 1 },
+    { "energy",       { NULL,      NULL,      NULL      }, { "audio_energy",NULL,          NULL      }, { "energy",  NULL,      NULL      }, 1 },
+    { "blink",        { NULL,      NULL,      NULL      }, { "flash",       NULL,          NULL      }, { "blink",   NULL,      NULL      }, 1 },
+    { "chase",        { NULL,      NULL,      NULL      }, { "comet",       NULL,          NULL      }, { "chase",   NULL,      NULL      }, 1 },
+    { "twinkle",      { NULL,      NULL,      NULL      }, { "spark",       NULL,          NULL      }, { "twinkle", NULL,      NULL      }, 1 },
+    { "glitch",       { NULL,      NULL,      NULL      }, { "shock",       NULL,          NULL      }, { "glitch",  NULL,      NULL      }, 1 },
+    { "plane",        { "sweep",   "pair",    "fan"     }, { "plane_sweep", "plane_pair",  "plane_fan" },
+                                                                 { "plane",   "mirror",      "prism"   }, 3 },
+    { "ring",         { "pulse",   "train",   NULL      }, { "ring_pulse",  "ring_train",  NULL      },
+                                                                 { "ring",    "contour",     NULL      }, 2 },
+    { "orbit",        { NULL,      NULL,      NULL      }, { "ring_train",  NULL,          NULL      }, { "orbit",   NULL,      NULL      }, 1 },
+    { "aurora",       { NULL,      NULL,      NULL      }, { "plane_fan",   NULL,          NULL      }, { "aurora",  NULL,      NULL      }, 1 },
+    { "vortex",       { NULL,      NULL,      NULL      }, { "crossfire",   NULL,          NULL      }, { "vortex",  NULL,      NULL      }, 1 },
+    { "helix",        { NULL,      NULL,      NULL      }, { "crossfire",   NULL,          NULL      }, { "helix",   NULL,      NULL      }, 1 },
+    { "random",       { NULL,      NULL,      NULL      }, { "random",      NULL,          NULL      }, { "random",  NULL,      NULL      }, 1 },
+    { "flash",        { NULL,      NULL,      NULL      }, { "flash",       NULL,          NULL      }, { "blink",   NULL,      NULL      }, 1 },
+    { "pulse",        { NULL,      NULL,      NULL      }, { "pulse",       NULL,          NULL      }, { "breathe", NULL,      NULL      }, 1 },
+    { "spark",        { NULL,      NULL,      NULL      }, { "spark",       NULL,          NULL      }, { "twinkle", NULL,      NULL      }, 1 },
+    { "comet",        { NULL,      NULL,      NULL      }, { "comet",       NULL,          NULL      }, { "chase",   NULL,      NULL      }, 1 },
+    { "shock",        { NULL,      NULL,      NULL      }, { "shock",       NULL,          NULL      }, { "glitch",  NULL,      NULL      }, 1 },
+    { "crossfire",    { NULL,      NULL,      NULL      }, { "crossfire",   NULL,          NULL      }, { "vortex",  NULL,      NULL      }, 1 },
+    { "audio_energy", { NULL,      NULL,      NULL      }, { "audio_energy",NULL,          NULL      }, { "energy",  NULL,      NULL      }, 1 },
+};
+static const int kAnimationChoiceCount =
+    (int)(sizeof(s_animation_choices) / sizeof(s_animation_choices[0]));
+
 static const char *TAG = "app_leds";
 
-#define LEDS_MAX_AUDIO_ENTRIES 28
-#define LEDS_MAX_CUSTOM_ENTRIES 36
-static shell_menu_entry_t s_audio_entries[1 + LEDS_MAX_AUDIO_ENTRIES];
-static shell_menu_entry_t s_custom_entries[1 + LEDS_MAX_CUSTOM_ENTRIES];
+#define LEDS_MAX_PAGE_ENTRIES 48
+#define LEDS_ENTRY_LABEL_LEN 24
+static shell_menu_entry_t s_audio_entries[LEDS_MAX_PAGE_ENTRIES];
+static shell_menu_entry_t s_custom_entries[LEDS_MAX_PAGE_ENTRIES];
+static leds_menu_meta_t s_audio_meta[LEDS_MAX_PAGE_ENTRIES];
+static leds_menu_meta_t s_custom_meta[LEDS_MAX_PAGE_ENTRIES];
+static char s_audio_entry_labels[LEDS_MAX_PAGE_ENTRIES][LEDS_ENTRY_LABEL_LEN];
+static char s_custom_entry_labels[LEDS_MAX_PAGE_ENTRIES][LEDS_ENTRY_LABEL_LEN];
 
 static char s_preset_label[24];
 static char s_style_label[16];
@@ -80,16 +140,15 @@ static char s_r2_label[12];
 static char s_g2_label[12];
 static char s_b2_label[12];
 static char s_speed_label[14];
-static char s_audio_label[12];
-static char s_range_label[18];
+static char s_audio_label[18];
 static char s_bright_label[14];
 
 typedef struct {
     int page;
     size_t audio_sel;  // includes "Back" at index 0
     size_t custom_sel; // includes "Back" at index 0
-    int audio_mode;
-    int custom_mode;
+    int audio_choice;
+    int custom_choice;
     int preset_idx; // -1 for manual
     uint8_t color_r;
     uint8_t color_g;
@@ -107,6 +166,8 @@ typedef struct {
 } leds_state_t;
 static leds_state_t s_leds = {0};
 static bool s_leds_fft_owned = false;
+static uint8_t s_audio_choice_variants[LEDS_MAX_PAGE_ENTRIES];
+static uint8_t s_custom_choice_variants[LEDS_MAX_PAGE_ENTRIES];
 
 static int clamp_int(int v, int lo, int hi)
 {
@@ -120,6 +181,132 @@ static size_t clamp_sel(size_t sel, size_t count)
     if (count == 0) return 0;
     if (sel >= count) return count - 1;
     return sel;
+}
+
+static int mode_count_for_source(leds_mode_source_t source)
+{
+    return (source == LEDS_MODE_SOURCE_AUDIO) ? led_beat_anim_count() : led_modes_count();
+}
+
+static const char *mode_name_for_source(leds_mode_source_t source, int idx)
+{
+    return (source == LEDS_MODE_SOURCE_AUDIO) ? led_beat_anim_name(idx) : led_modes_name(idx);
+}
+
+static uint8_t *variant_state_for_page(int page)
+{
+    return (page == LEDS_PAGE_AUDIO) ? s_audio_choice_variants : s_custom_choice_variants;
+}
+
+static int animation_variant_count(int choice_idx)
+{
+    choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
+    int count = (int)s_animation_choices[choice_idx].variant_count;
+    return (count > 0) ? count : 1;
+}
+
+static int animation_variant_index_for_page(int page, int choice_idx)
+{
+    choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
+    uint8_t *variants = variant_state_for_page(page);
+    int count = animation_variant_count(choice_idx);
+    int idx = variants[choice_idx];
+    if (idx >= count) idx = 0;
+    return idx;
+}
+
+static const char *animation_choice_variant_label(int choice_idx, int variant_idx)
+{
+    choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
+    variant_idx = clamp_int(variant_idx, 0, animation_variant_count(choice_idx) - 1);
+    return s_animation_choices[choice_idx].variant_labels[variant_idx];
+}
+
+static const char *animation_choice_mode_name(leds_mode_source_t source,
+                                              int choice_idx,
+                                              int variant_idx)
+{
+    choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
+    variant_idx = clamp_int(variant_idx, 0, animation_variant_count(choice_idx) - 1);
+    return (source == LEDS_MODE_SOURCE_AUDIO)
+        ? s_animation_choices[choice_idx].audio_names[variant_idx]
+        : s_animation_choices[choice_idx].custom_names[variant_idx];
+}
+
+static int mode_index_for_source_name(leds_mode_source_t source, const char *name)
+{
+    if (!name) return -1;
+    int count = mode_count_for_source(source);
+    for (int i = 0; i < count; ++i) {
+        const char *candidate = mode_name_for_source(source, i);
+        if (candidate && strcmp(candidate, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int animation_choice_mode_index(leds_mode_source_t source,
+                                       int choice_idx,
+                                       int variant_idx)
+{
+    return mode_index_for_source_name(source, animation_choice_mode_name(source, choice_idx, variant_idx));
+}
+
+static bool animation_choice_find_for_source_mode(leds_mode_source_t source,
+                                                  const char *mode_name,
+                                                  int *choice_idx,
+                                                  int *variant_idx)
+{
+    if (!mode_name) return false;
+
+    for (int i = 0; i < kAnimationChoiceCount; ++i) {
+        int count = animation_variant_count(i);
+        for (int v = 0; v < count; ++v) {
+            const char *mapped = animation_choice_mode_name(source, i, v);
+            if (mapped && strcmp(mapped, mode_name) == 0 &&
+                strcmp(s_animation_choices[i].label, mode_name) == 0) {
+                if (choice_idx) *choice_idx = i;
+                if (variant_idx) *variant_idx = v;
+                return true;
+            }
+        }
+    }
+
+    for (int i = 0; i < kAnimationChoiceCount; ++i) {
+        int count = animation_variant_count(i);
+        for (int v = 0; v < count; ++v) {
+            const char *mapped = animation_choice_mode_name(source, i, v);
+            if (mapped && strcmp(mapped, mode_name) == 0) {
+                if (choice_idx) *choice_idx = i;
+                if (variant_idx) *variant_idx = v;
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static void animation_choice_format_label(int page, int choice_idx,
+                                          char *buf, size_t buf_len)
+{
+    if (!buf || buf_len == 0) return;
+
+    choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
+    int variant_idx = animation_variant_index_for_page(page, choice_idx);
+    const char *variant = animation_choice_variant_label(choice_idx, variant_idx);
+    if (animation_variant_count(choice_idx) > 1 && variant && variant[0]) {
+        snprintf(buf, buf_len, "%s:%s", s_animation_choices[choice_idx].label, variant);
+    } else {
+        snprintf(buf, buf_len, "%s", s_animation_choices[choice_idx].label);
+    }
+}
+
+static size_t animation_selection_index(int choice_idx)
+{
+    choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
+    return (size_t)choice_idx + 1u;
 }
 
 static const char *color_style_name(led_color_style_t style)
@@ -156,9 +343,47 @@ static const char *audio_energy_range_name(led_audio_energy_range_t range)
     }
 }
 
+static int audio_input_mode_get(void)
+{
+    if (!s_leds.audio_brightness_enabled) {
+        return 0;
+    }
+
+    switch (s_leds.audio_energy_range) {
+        case LED_AUDIO_ENERGY_RANGE_MID: return 2;
+        case LED_AUDIO_ENERGY_RANGE_HIGH: return 3;
+        case LED_AUDIO_ENERGY_RANGE_FULL:
+        default:
+            return 1;
+    }
+}
+
+static void audio_input_mode_set(int mode)
+{
+    mode = clamp_int(mode, 0, 3);
+    s_leds.audio_brightness_enabled = (mode != 0);
+    switch (mode) {
+        case 2:
+            s_leds.audio_energy_range = LED_AUDIO_ENERGY_RANGE_MID;
+            break;
+        case 3:
+            s_leds.audio_energy_range = LED_AUDIO_ENERGY_RANGE_HIGH;
+            break;
+        case 1:
+        case 0:
+        default:
+            s_leds.audio_energy_range = LED_AUDIO_ENERGY_RANGE_FULL;
+            break;
+    }
+}
+
 static bool leds_fft_needed(void)
 {
-    return (s_leds.page == LEDS_PAGE_AUDIO) || s_leds.audio_brightness_enabled;
+    return ((s_leds.page == LEDS_PAGE_AUDIO) &&
+            (animation_choice_mode_index(LEDS_MODE_SOURCE_AUDIO,
+                                         s_leds.audio_choice,
+                                         animation_variant_index_for_page(LEDS_PAGE_AUDIO, s_leds.audio_choice)) >= 0)) ||
+           s_leds.audio_brightness_enabled;
 }
 
 static int find_preset_match(led_color_cycle_t cycle,
@@ -282,124 +507,106 @@ static void refresh_color_labels(void)
     snprintf(s_g2_label, sizeof(s_g2_label), "G2:%u", (unsigned)s_leds.color2_g);
     snprintf(s_b2_label, sizeof(s_b2_label), "B2:%u", (unsigned)s_leds.color2_b);
     snprintf(s_speed_label, sizeof(s_speed_label), "speed:%u%%", (unsigned)s_leds.custom_speed_percent);
-    snprintf(s_audio_label, sizeof(s_audio_label), "audio:%s",
-             audio_brightness_name(s_leds.audio_brightness_enabled));
-    snprintf(s_range_label, sizeof(s_range_label), "range:%s",
-             audio_energy_range_name(s_leds.audio_energy_range));
+    if (s_leds.audio_brightness_enabled) {
+        snprintf(s_audio_label, sizeof(s_audio_label), "audio:%s",
+                 audio_energy_range_name(s_leds.audio_energy_range));
+    } else {
+        snprintf(s_audio_label, sizeof(s_audio_label), "audio:%s",
+                 audio_brightness_name(false));
+    }
     snprintf(s_bright_label, sizeof(s_bright_label), "bright:%u", (unsigned)s_leds.brightness);
 }
 
-static void append_color_entries(shell_menu_entry_t *entries, size_t *n, size_t cap)
+static void append_cfg_entry(shell_menu_entry_t *entries,
+                             leds_menu_meta_t *meta,
+                             size_t *n,
+                             size_t cap,
+                             int cfg_idx,
+                             const char *label)
 {
-    if (!entries || !n) return;
-    refresh_color_labels();
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_preset", .label = s_preset_label };
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_style", .label = s_style_label };
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_highlight", .label = s_hi_label };
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_r", .label = s_r_label };
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_g", .label = s_g_label };
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_b", .label = s_b_label };
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_r2", .label = s_r2_label };
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_g2", .label = s_g2_label };
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_b2", .label = s_b2_label };
+    if (!entries || !meta || !n || !label || *n >= cap) return;
+    entries[*n] = (shell_menu_entry_t){ .id = label, .label = label };
+    meta[*n] = (leds_menu_meta_t){ .kind = LEDS_ENTRY_KIND_CFG, .value = cfg_idx };
+    (*n)++;
 }
 
-static void append_custom_only_entries(shell_menu_entry_t *entries, size_t *n, size_t cap)
+static void append_color_entries(shell_menu_entry_t *entries,
+                                 leds_menu_meta_t *meta,
+                                 size_t *n,
+                                 size_t cap)
 {
-    if (!entries || !n) return;
+    if (!entries || !meta || !n) return;
     refresh_color_labels();
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_speed", .label = s_speed_label };
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_audio_brightness", .label = s_audio_label };
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_audio_range", .label = s_range_label };
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_brightness", .label = s_bright_label };
+    append_cfg_entry(entries, meta, n, cap, LEDS_CFG_PRESET, s_preset_label);
+    append_cfg_entry(entries, meta, n, cap, LEDS_CFG_STYLE, s_style_label);
+    append_cfg_entry(entries, meta, n, cap, LEDS_CFG_HIGHLIGHT, s_hi_label);
+    append_cfg_entry(entries, meta, n, cap, LEDS_CFG_R, s_r_label);
+    append_cfg_entry(entries, meta, n, cap, LEDS_CFG_G, s_g_label);
+    append_cfg_entry(entries, meta, n, cap, LEDS_CFG_B, s_b_label);
+    append_cfg_entry(entries, meta, n, cap, LEDS_CFG_R2, s_r2_label);
+    append_cfg_entry(entries, meta, n, cap, LEDS_CFG_G2, s_g2_label);
+    append_cfg_entry(entries, meta, n, cap, LEDS_CFG_B2, s_b2_label);
 }
 
-static void append_audio_only_entries(shell_menu_entry_t *entries, size_t *n, size_t cap)
+static void append_runtime_entries(shell_menu_entry_t *entries,
+                                   leds_menu_meta_t *meta,
+                                   size_t *n,
+                                   size_t cap,
+                                   int page)
 {
-    if (!entries || !n) return;
+    if (!entries || !meta || !n) return;
     refresh_color_labels();
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_audio_brightness", .label = s_audio_label };
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_audio_range", .label = s_range_label };
-    if (*n < cap) entries[(*n)++] = (shell_menu_entry_t){ .id = "cfg_brightness", .label = s_bright_label };
+    if (page == LEDS_PAGE_CUSTOM) {
+        append_cfg_entry(entries, meta, n, cap, LEDS_CFG_SPEED, s_speed_label);
+    }
+    append_cfg_entry(entries, meta, n, cap, LEDS_CFG_AUDIO_INPUT, s_audio_label);
+    append_cfg_entry(entries, meta, n, cap, LEDS_CFG_BRIGHTNESS, s_bright_label);
+}
+
+static void append_animation_entries(shell_menu_entry_t *entries,
+                                     leds_menu_meta_t *meta,
+                                     char labels[][LEDS_ENTRY_LABEL_LEN],
+                                     size_t *n,
+                                     size_t cap,
+                                     int page)
+{
+    if (!entries || !meta || !labels || !n) return;
+
+    for (int i = 0; i < kAnimationChoiceCount && *n < cap; ++i) {
+        animation_choice_format_label(page, i, labels[*n], LEDS_ENTRY_LABEL_LEN);
+        entries[*n] = (shell_menu_entry_t){ .id = labels[*n], .label = labels[*n] };
+        meta[*n] = (leds_menu_meta_t){ .kind = LEDS_ENTRY_KIND_ANIM, .value = i };
+        (*n)++;
+    }
+}
+
+static size_t build_entries_for_page(int page,
+                                     shell_menu_entry_t *entries,
+                                     leds_menu_meta_t *meta,
+                                     char labels[][LEDS_ENTRY_LABEL_LEN])
+{
+    if (!entries || !meta || !labels) return 0;
+
+    size_t n = 0;
+    const size_t cap = LEDS_MAX_PAGE_ENTRIES;
+    entries[n] = (shell_menu_entry_t){ .id = "back", .label = "Back" };
+    meta[n] = (leds_menu_meta_t){ .kind = LEDS_ENTRY_KIND_BACK, .value = 0 };
+    n++;
+
+    append_animation_entries(entries, meta, labels, &n, cap, page);
+    append_color_entries(entries, meta, &n, cap);
+    append_runtime_entries(entries, meta, &n, cap, page);
+    return n;
 }
 
 static size_t build_audio_entries(void)
 {
-    size_t n = 0;
-    const size_t cap = sizeof(s_audio_entries) / sizeof(s_audio_entries[0]);
-    s_audio_entries[n++] = (shell_menu_entry_t){ .id = "back", .label = "Back" };
-    int count = led_beat_anim_count();
-    for (int i = 0; i < count && n < cap; ++i) {
-        const char *name = led_beat_anim_name(i);
-        if (!name) name = "?";
-        s_audio_entries[n++] = (shell_menu_entry_t){ .id = name, .label = name };
-    }
-    append_color_entries(s_audio_entries, &n, cap);
-    append_audio_only_entries(s_audio_entries, &n, cap);
-    return n;
+    return build_entries_for_page(LEDS_PAGE_AUDIO, s_audio_entries, s_audio_meta, s_audio_entry_labels);
 }
 
 static size_t build_custom_entries(void)
 {
-    size_t n = 0;
-    const size_t cap = sizeof(s_custom_entries) / sizeof(s_custom_entries[0]);
-    s_custom_entries[n++] = (shell_menu_entry_t){ .id = "back", .label = "Back" };
-    int count = led_modes_count();
-    for (int i = 0; i < count && n < cap; ++i) {
-        const char *name = led_modes_name(i);
-        if (!name) name = "?";
-        s_custom_entries[n++] = (shell_menu_entry_t){ .id = name, .label = name };
-    }
-    append_color_entries(s_custom_entries, &n, cap);
-    append_custom_only_entries(s_custom_entries, &n, cap);
-    return n;
-}
-
-static int mode_count_for_page(int page)
-{
-    return (page == LEDS_PAGE_AUDIO) ? led_beat_anim_count() : led_modes_count();
-}
-
-static int cfg_index_for_page(int page, int local_cfg_idx)
-{
-    static const int kAudioCfgOrder[] = {
-        LEDS_CFG_PRESET,
-        LEDS_CFG_STYLE,
-        LEDS_CFG_HIGHLIGHT,
-        LEDS_CFG_R,
-        LEDS_CFG_G,
-        LEDS_CFG_B,
-        LEDS_CFG_R2,
-        LEDS_CFG_G2,
-        LEDS_CFG_B2,
-        LEDS_CFG_AUDIO_BRIGHTNESS,
-        LEDS_CFG_AUDIO_RANGE,
-        LEDS_CFG_BRIGHTNESS,
-    };
-    static const int kCustomCfgOrder[] = {
-        LEDS_CFG_PRESET,
-        LEDS_CFG_STYLE,
-        LEDS_CFG_HIGHLIGHT,
-        LEDS_CFG_R,
-        LEDS_CFG_G,
-        LEDS_CFG_B,
-        LEDS_CFG_R2,
-        LEDS_CFG_G2,
-        LEDS_CFG_B2,
-        LEDS_CFG_SPEED,
-        LEDS_CFG_AUDIO_BRIGHTNESS,
-        LEDS_CFG_AUDIO_RANGE,
-        LEDS_CFG_BRIGHTNESS,
-    };
-
-    const int *order = (page == LEDS_PAGE_AUDIO) ? kAudioCfgOrder : kCustomCfgOrder;
-    int count = (page == LEDS_PAGE_AUDIO)
-        ? (int)(sizeof(kAudioCfgOrder) / sizeof(kAudioCfgOrder[0]))
-        : (int)(sizeof(kCustomCfgOrder) / sizeof(kCustomCfgOrder[0]));
-    if (local_cfg_idx < 0 || local_cfg_idx >= count) {
-        return -1;
-    }
-    return order[local_cfg_idx];
+    return build_entries_for_page(LEDS_PAGE_CUSTOM, s_custom_entries, s_custom_meta, s_custom_entry_labels);
 }
 
 static void leds_audio_fft_ensure_started(void)
@@ -440,32 +647,66 @@ static void leds_sync_fft_state(void)
 
 static void leds_apply_audio(void)
 {
-    int count = led_beat_anim_count();
-    if (count <= 0) return;
-    s_leds.audio_mode = clamp_int(s_leds.audio_mode, 0, count - 1);
-    leds_sync_fft_state();
-    led_beat_anim_set((led_beat_anim_t)s_leds.audio_mode);
-    led_beat_enable(true);
+    char label[LEDS_ENTRY_LABEL_LEN];
     led_modes_enable(false);
+    s_leds.audio_choice = clamp_int(s_leds.audio_choice, 0, kAnimationChoiceCount - 1);
+    int variant_idx = animation_variant_index_for_page(LEDS_PAGE_AUDIO, s_leds.audio_choice);
+    animation_choice_format_label(LEDS_PAGE_AUDIO, s_leds.audio_choice, label, sizeof(label));
+    int mode_idx = animation_choice_mode_index(LEDS_MODE_SOURCE_AUDIO, s_leds.audio_choice, variant_idx);
+    if (mode_idx < 0) {
+        led_beat_enable(false);
+        leds_sync_fft_state();
+        system_state_set_led_mode(-1, label);
+        return;
+    }
 
-    const char *name = led_beat_anim_name(s_leds.audio_mode);
-    char label[24];
-    snprintf(label, sizeof(label), "beat:%s", name ? name : "?");
-    system_state_set_led_mode(100 + s_leds.audio_mode, label);
+    led_beat_anim_set((led_beat_anim_t)mode_idx);
+    led_beat_enable(true);
+    leds_sync_fft_state();
+    system_state_set_led_mode(100 + mode_idx, label);
 }
 
 static void leds_apply_custom(void)
 {
-    int count = led_modes_count();
-    if (count <= 0) return;
-    s_leds.custom_mode = clamp_int(s_leds.custom_mode, 0, count - 1);
-    led_modes_set(s_leds.custom_mode);
-    led_modes_enable(true);
+    char label[LEDS_ENTRY_LABEL_LEN];
     led_beat_enable(false);
-    leds_sync_fft_state();
+    s_leds.custom_choice = clamp_int(s_leds.custom_choice, 0, kAnimationChoiceCount - 1);
+    int variant_idx = animation_variant_index_for_page(LEDS_PAGE_CUSTOM, s_leds.custom_choice);
+    animation_choice_format_label(LEDS_PAGE_CUSTOM, s_leds.custom_choice, label, sizeof(label));
+    int mode_idx = animation_choice_mode_index(LEDS_MODE_SOURCE_CUSTOM, s_leds.custom_choice, variant_idx);
+    if (mode_idx < 0) {
+        led_modes_enable(false);
+        leds_sync_fft_state();
+        system_state_set_led_mode(-1, label);
+        return;
+    }
 
-    const char *name = led_modes_name(s_leds.custom_mode);
-    system_state_set_led_mode(s_leds.custom_mode, name ? name : "custom");
+    led_modes_set(mode_idx);
+    led_modes_enable(true);
+    leds_sync_fft_state();
+    system_state_set_led_mode(mode_idx, label);
+}
+
+static void leds_select_animation_for_page(int page, int choice_idx)
+{
+    choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
+    uint8_t *variants = variant_state_for_page(page);
+    int *current_choice = (page == LEDS_PAGE_AUDIO) ? &s_leds.audio_choice : &s_leds.custom_choice;
+
+    if (*current_choice == choice_idx) {
+        int count = animation_variant_count(choice_idx);
+        if (count > 1) {
+            variants[choice_idx] = (uint8_t)((variants[choice_idx] + 1u) % (uint8_t)count);
+        }
+    } else {
+        *current_choice = choice_idx;
+    }
+
+    if (page == LEDS_PAGE_AUDIO) {
+        leds_apply_audio();
+    } else {
+        leds_apply_custom();
+    }
 }
 
 static void leds_apply_mode_for_page(void)
@@ -555,13 +796,12 @@ static void leds_cycle_cfg(int cfg_idx, bool inc)
                                                         inc ? speed_step : -speed_step,
                                                         10, 250);
             break;
-        case LEDS_CFG_AUDIO_BRIGHTNESS:
-            s_leds.audio_brightness_enabled = !s_leds.audio_brightness_enabled;
+        case LEDS_CFG_AUDIO_INPUT: {
+            int mode = audio_input_mode_get();
+            mode = (mode + (inc ? 1 : -1) + 4) % 4;
+            audio_input_mode_set(mode);
             break;
-        case LEDS_CFG_AUDIO_RANGE:
-            s_leds.audio_energy_range = (led_audio_energy_range_t)
-                ((((int)s_leds.audio_energy_range) + (inc ? 1 : -1) + 3) % 3);
-            break;
+        }
         case LEDS_CFG_BRIGHTNESS:
             s_leds.brightness = step_u8_clamp(s_leds.brightness,
                                               inc ? bright_step : -bright_step,
@@ -584,12 +824,29 @@ static void leds_init_page(shell_app_context_t *ctx, int page)
     }
 
     s_leds.page = page;
-    int audio_count = led_beat_anim_count();
-    int custom_count = led_modes_count();
-    s_leds.audio_mode = (audio_count > 0) ? clamp_int((int)led_beat_anim_get(), 0, audio_count - 1) : 0;
-    s_leds.custom_mode = (custom_count > 0) ? clamp_int(led_modes_current(), 0, custom_count - 1) : 0;
-    s_leds.audio_sel = (size_t)s_leds.audio_mode + 1;
-    s_leds.custom_sel = (size_t)s_leds.custom_mode + 1;
+    memset(s_audio_choice_variants, 0, sizeof(s_audio_choice_variants));
+    memset(s_custom_choice_variants, 0, sizeof(s_custom_choice_variants));
+
+    s_leds.audio_choice = 0;
+    s_leds.custom_choice = 0;
+    int choice_idx = 0;
+    int variant_idx = 0;
+    if (animation_choice_find_for_source_mode(LEDS_MODE_SOURCE_AUDIO,
+                                              led_beat_anim_name((int)led_beat_anim_get()),
+                                              &choice_idx,
+                                              &variant_idx)) {
+        s_leds.audio_choice = choice_idx;
+        s_audio_choice_variants[choice_idx] = (uint8_t)variant_idx;
+    }
+    if (animation_choice_find_for_source_mode(LEDS_MODE_SOURCE_CUSTOM,
+                                              led_modes_name(led_modes_current()),
+                                              &choice_idx,
+                                              &variant_idx)) {
+        s_leds.custom_choice = choice_idx;
+        s_custom_choice_variants[choice_idx] = (uint8_t)variant_idx;
+    }
+    s_leds.audio_sel = animation_selection_index(s_leds.audio_choice);
+    s_leds.custom_sel = animation_selection_index(s_leds.custom_choice);
 
     leds_load_color_state();
     leds_apply_color();
@@ -625,18 +882,21 @@ void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
     if (ev->type != INPUT_EVENT_PRESS) return;
 
     shell_menu_entry_t *entries = NULL;
+    leds_menu_meta_t *meta = NULL;
     size_t count = 0;
     size_t *sel = NULL;
     if (s_leds.page == LEDS_PAGE_AUDIO) {
         entries = s_audio_entries;
+        meta = s_audio_meta;
         count = build_audio_entries();
         sel = &s_leds.audio_sel;
     } else {
         entries = s_custom_entries;
+        meta = s_custom_meta;
         count = build_custom_entries();
         sel = &s_leds.custom_sel;
     }
-    if (!entries || !sel || count == 0) return;
+    if (!entries || !meta || !sel || count == 0) return;
     *sel = clamp_sel(*sel, count);
 
     if (ev->button == INPUT_BTN_A && *sel > 0) {
@@ -647,35 +907,29 @@ void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
         (*sel)++;
         return;
     }
-
-    int mode_count = mode_count_for_page(s_leds.page);
-    size_t first_cfg = 1u + (size_t)(mode_count > 0 ? mode_count : 0);
+    leds_menu_meta_t selected = meta[*sel];
 
     if (ev->button == INPUT_BTN_D) {
-        if (*sel == 0) {
-            if (ctx->request_switch) {
-                ctx->request_switch("menu", ctx->request_user_data);
-            }
-            return;
+        switch (selected.kind) {
+            case LEDS_ENTRY_KIND_BACK:
+                if (ctx->request_switch) {
+                    ctx->request_switch("menu", ctx->request_user_data);
+                }
+                return;
+            case LEDS_ENTRY_KIND_ANIM:
+                leds_select_animation_for_page(s_leds.page, selected.value);
+                return;
+            case LEDS_ENTRY_KIND_CFG:
+                leds_cycle_cfg(selected.value, true);
+                return;
+            default:
+                return;
         }
-        if (*sel < first_cfg) {
-            if (s_leds.page == LEDS_PAGE_AUDIO) {
-                s_leds.audio_mode = (int)(*sel - 1);
-            } else {
-                s_leds.custom_mode = (int)(*sel - 1);
-            }
-            leds_apply_mode_for_page();
-            return;
-        }
-        int cfg_idx = cfg_index_for_page(s_leds.page, (int)(*sel - first_cfg));
-        leds_cycle_cfg(cfg_idx, true);
-        return;
     }
 
     if (ev->button == INPUT_BTN_C) {
-        if (*sel >= first_cfg) {
-            int cfg_idx = cfg_index_for_page(s_leds.page, (int)(*sel - first_cfg));
-            leds_cycle_cfg(cfg_idx, false);
+        if (selected.kind == LEDS_ENTRY_KIND_CFG) {
+            leds_cycle_cfg(selected.value, false);
         }
     }
 }

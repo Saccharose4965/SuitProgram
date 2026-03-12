@@ -142,7 +142,7 @@ Root:
 - Comm
 - LEDs
 - Music
-- Calculator
+- Misc
 
 Settings:
 - Back
@@ -160,7 +160,6 @@ Simulations:
 - FFT
 - Fluid
 - 3D Render
-- Bad Apple
 
 Games:
 - Back
@@ -184,6 +183,11 @@ LED:
 - FFT Sync
 - Custom
 - Layout Edit
+
+Misc:
+- Back
+- Calculator
+- Bad Apple
 
 Current menu stubs (not registered as apps):
 - `gps`
@@ -215,6 +219,7 @@ LED Audio / LED Custom (`main/app_leds.c`):
   - on `Back`: return to `menu`
   - on mode item: apply selected mode
 - LED Audio and LED Custom use smooth menu scrolling for selection changes
+- Audio `random` rotates through the beat-reactive animation list about every 10 seconds
 - Custom page config:
   - `speed:%` controls free-running custom animation speed (`10%` to `250%`, step `10%`)
   - `fill` is the full-strip/full-layout coverage mode using the active selected color source
@@ -468,6 +473,7 @@ Open TODO / wishlist (legacy backlog)
 - Power: integrate current reading and store every now and then in sd card
 
 Extras:
+- wide putin
 - create audio file that when displayed on the spectrogram, spell out words, as hidden messages
 - port more titles (tron/doom/pacman/etc.)
 - asteroids game !

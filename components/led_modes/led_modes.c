@@ -66,6 +66,13 @@ static volatile led_color_cycle_t s_color_cycle = LED_COLOR_CYCLE_STATIC;
 static volatile led_color_style_t s_color_style = LED_COLOR_STYLE_MONO;
 static volatile led_highlight_mode_t s_highlight_mode = LED_HIGHLIGHT_OFF;
 static EXT_RAM_BSS_ATTR led_layout_config_t s_render_layout = {0};
+static EXT_RAM_BSS_ATTR led_layout_config_t s_helix_cache_layout = {0};
+static EXT_RAM_BSS_ATTR float s_helix_phase_base[LED_LAYOUT_MAX_PIXELS];
+static EXT_RAM_BSS_ATTR float s_helix_shimmer_base[LED_LAYOUT_MAX_PIXELS];
+static EXT_RAM_BSS_ATTR float s_helix_ring_band[LED_LAYOUT_MAX_PIXELS];
+static EXT_RAM_BSS_ATTR uint8_t s_helix_point_valid[LED_LAYOUT_MAX_PIXELS];
+static size_t s_helix_cache_count = 0;
+static bool s_helix_cache_valid = false;
 
 #if configNUMBER_OF_CORES > 1
 #define BG_TASK_CORE 0
@@ -99,6 +106,11 @@ static inline int clamp_mode(int idx)
 static bool mode_uses_layout(int mode)
 {
     return (mode == 4) || (mode >= 10 && mode < kShuffleModeIndex);
+}
+
+static bool mode_needs_layout_point_stats(int mode)
+{
+    return (mode == 4) || (mode == 10) || (mode == 12) || (mode == 14);
 }
 
 static int pick_shuffle_mode(int prev_mode)
@@ -239,6 +251,25 @@ static float ring_distance(const layout_stats_t *stats, const led_point_t *p)
 
     float radial_delta = planar - stats->ring_radius;
     return sqrtf(radial_delta * radial_delta + dz * dz);
+}
+
+static void layout_stats_init(const led_layout_config_t *cfg, layout_stats_t *stats)
+{
+    if (!stats) return;
+    memset(stats, 0, sizeof(*stats));
+    stats->min_x = stats->min_y = stats->min_z = 1e9f;
+    stats->max_x = stats->max_y = stats->max_z = -1e9f;
+
+    if (!cfg) return;
+
+    for (size_t i = 0; i < cfg->section_count; ++i) {
+        const led_layout_section_t *sec = &cfg->sections[i];
+        if (sec->geom_kind == LED_LAYOUT_GEOM_ARC && strstr(sec->name, "ring") != NULL) {
+            stats->ring_center = sec->center;
+            stats->ring_radius = fabsf(sec->radius);
+            break;
+        }
+    }
 }
 
 static void add_rgb(uint8_t *buf, size_t idx, float add_r, float add_g, float add_b)
@@ -437,20 +468,7 @@ static void led_modes_sample_secondary_color(float t_sec, uint8_t *r, uint8_t *g
 static void layout_stats_collect(const led_layout_config_t *cfg, size_t count, layout_stats_t *stats)
 {
     if (!stats) return;
-    memset(stats, 0, sizeof(*stats));
-    stats->min_x = stats->min_y = stats->min_z = 1e9f;
-    stats->max_x = stats->max_y = stats->max_z = -1e9f;
-
-    if (cfg) {
-        for (size_t i = 0; i < cfg->section_count; ++i) {
-            const led_layout_section_t *sec = &cfg->sections[i];
-            if (sec->geom_kind == LED_LAYOUT_GEOM_ARC && strstr(sec->name, "ring") != NULL) {
-                stats->ring_center = sec->center;
-                stats->ring_radius = fabsf(sec->radius);
-                break;
-            }
-        }
-    }
+    layout_stats_init(cfg, stats);
 
     bool have_point = false;
     size_t point_count = 0;
@@ -500,6 +518,49 @@ static void layout_stats_collect(const led_layout_config_t *cfg, size_t count, l
     }
 }
 
+// Cache layout-derived helix terms so the frame loop only does time-varying math.
+static void helix_cache_ensure(const led_layout_config_t *cfg,
+                               const layout_stats_t *stats,
+                               size_t count)
+{
+    if (!cfg || !stats) {
+        s_helix_cache_valid = false;
+        s_helix_cache_count = 0;
+        return;
+    }
+
+    if (count > LED_LAYOUT_MAX_PIXELS) count = LED_LAYOUT_MAX_PIXELS;
+
+    if (s_helix_cache_valid &&
+        s_helix_cache_count == count &&
+        memcmp(cfg, &s_helix_cache_layout, sizeof(*cfg)) == 0) {
+        return;
+    }
+
+    for (size_t i = 0; i < count; ++i) {
+        led_point_t p;
+        if (!led_layout_get_from_config(cfg, (int)i, &p)) {
+            s_helix_point_valid[i] = 0;
+            continue;
+        }
+
+        float dx = p.x - stats->ring_center.x;
+        float y = p.y - stats->ring_center.y;
+        float radial = sqrtf(dx * dx + y * y);
+        float ang = atan2f(y, dx);
+
+        float abs_y = absf_local(y);
+        s_helix_phase_base[i] = 2.5f * ang + 0.18f * y;
+        s_helix_shimmer_base[i] = 0.33f * y + 0.12f * dx;
+        s_helix_ring_band[i] = expf(-absf_local(radial - (stats->ring_radius + 0.12f * abs_y)) / 4.2f);
+        s_helix_point_valid[i] = 1;
+    }
+
+    s_helix_cache_layout = *cfg;
+    s_helix_cache_count = count;
+    s_helix_cache_valid = true;
+}
+
 static float layout_projection_extent(const layout_stats_t *stats,
                                       float nx, float ny, float nz)
 {
@@ -509,6 +570,21 @@ static float layout_projection_extent(const layout_stats_t *stats,
     float hz = 0.5f * (stats->max_z - stats->min_z);
     float extent = absf_local(nx) * hx + absf_local(ny) * hy + absf_local(nz) * hz;
     return (extent < 1.0f) ? 1.0f : extent;
+}
+
+static void layout_bounds_center(const layout_stats_t *stats,
+                                 float *cx, float *cy, float *cz)
+{
+    if (!stats) {
+        if (cx) *cx = 0.0f;
+        if (cy) *cy = 0.0f;
+        if (cz) *cz = 0.0f;
+        return;
+    }
+
+    if (cx) *cx = 0.5f * (stats->min_x + stats->max_x);
+    if (cy) *cy = 0.5f * (stats->min_y + stats->max_y);
+    if (cz) *cz = 0.5f * (stats->min_z + stats->max_z);
 }
 
 static void render_plane(uint8_t *buf, size_t count,
@@ -535,9 +611,12 @@ static void render_plane(uint8_t *buf, size_t count,
     float sweep = (phase <= 1.0f) ? phase : (2.0f - phase);
     float offset = (2.0f * sweep - 1.0f) * (extent + 0.35f * width);
 
-    float cx = stats->avg_x;
-    float cy = stats->avg_y;
-    float cz = stats->avg_z;
+    // Use the actual layout bounds center so rotation stays visually centered
+    // even when LEDs are distributed unevenly across the geometry.
+    float cx = 0.0f;
+    float cy = 0.0f;
+    float cz = 0.0f;
+    layout_bounds_center(stats, &cx, &cy, &cz);
 
     for (size_t i = 0; i < count; ++i) {
         led_point_t p;
@@ -754,23 +833,24 @@ static void render_helix(uint8_t *buf, size_t count,
                          const layout_stats_t *stats,
                          float t_sec, uint8_t r, uint8_t g, uint8_t b)
 {
+    if (!cfg || !stats || count == 0) return;
+
+    if (count > LED_LAYOUT_MAX_PIXELS) count = LED_LAYOUT_MAX_PIXELS;
+
     uint8_t sr = 0, sg = 0, sb = 0;
     led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
+    helix_cache_ensure(cfg, stats, count);
+    if (!s_helix_cache_valid) return;
 
+    float phase_t = t_sec * 4.8f;
+    float shimmer_t = t_sec * 6.0f;
     for (size_t i = 0; i < count; ++i) {
-        led_point_t p;
-        if (!led_layout_get_from_config(cfg, (int)i, &p)) continue;
-        float dx = p.x - stats->ring_center.x;
-        float dy = p.y - stats->ring_center.y;
-        float radial = sqrtf(dx * dx + dy * dy);
-        float ang = atan2f(dy, dx);
-        float y = p.y - stats->ring_center.y;
+        if (!s_helix_point_valid[i]) continue;
 
-        float phase = 2.5f * ang + 0.18f * y - t_sec * 4.8f;
-        float band0 = 0.5f + 0.5f * cosf(phase);
-        float band1 = 0.5f + 0.5f * cosf(phase + (float)M_PI);
-        float ring_band = expf(-fabsf(radial - (stats->ring_radius + 0.12f * fabsf(y))) / 4.2f);
-        float shimmer = 0.5f + 0.5f * sinf(0.33f * y - t_sec * 6.0f + 0.12f * dx);
+        float band = 0.5f + 0.5f * cosf(s_helix_phase_base[i] - phase_t);
+        float band0 = band;
+        float band1 = 1.0f - band;
+        float shimmer = 0.5f + 0.5f * sinf(s_helix_shimmer_base[i] - shimmer_t);
 
         band0 *= band0;
         band0 *= band0;
@@ -780,8 +860,8 @@ static void render_helix(uint8_t *buf, size_t count,
         shimmer *= shimmer;
 
         add_mixed_color(buf, i, r, g, b, sr, sg, sb,
-                        band0 * (0.18f + 0.82f * ring_band),
-                        band1 * (0.12f + 0.68f * ring_band) + 0.18f * shimmer,
+                        band0 * (0.18f + 0.82f * s_helix_ring_band[i]),
+                        band1 * (0.12f + 0.68f * s_helix_ring_band[i]) + 0.18f * shimmer,
                         0.08f * (band0 + band1) * shimmer);
     }
 }
@@ -1057,7 +1137,11 @@ static void led_modes_task(void *arg)
             if (s_render_layout.total_leds > 0 && count > s_render_layout.total_leds) {
                 count = s_render_layout.total_leds;
             }
-            layout_stats_collect(&s_render_layout, count, &stats);
+            if (mode_needs_layout_point_stats(effective_mode)) {
+                layout_stats_collect(&s_render_layout, count, &stats);
+            } else {
+                layout_stats_init(&s_render_layout, &stats);
+            }
         }
         switch (effective_mode) {
             case 0: render_fill(frame, count, 0, 0, 0); break;

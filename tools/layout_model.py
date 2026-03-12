@@ -98,6 +98,21 @@ RIGHT_BACK_GROUPS_2D: dict[str, tuple[tuple[float, float], ...]] = {
     "back_4": ((7.0, 34.0), (7.0, 43.0), (10.0, 48.5)),
 }
 
+# Worn-left arm coordinates. Positive x is left when worn.
+LEFT_ARM_GROUPS_3D: dict[str, tuple[Point3, ...]] = {
+    "upper_arm": (
+        (16.0, -6.0, -2.0),
+        (17.5, -1.5, -2.0),
+        (20.0, 6.0, 0.0),
+        (18.5, 4.0, 1.5),
+        (17.0, 0.5, 2.0),
+    ),
+    "forearm": (
+        (20.0, 6.0, 0.0),
+        (23.0, 15.5, 0.0),
+    ),
+}
+
 DEFAULT_FRONT_PROFILE = SuitProfile(
     name="chest_front_v1",
     section_led_counts=(("front_left_ring", 35),),
@@ -320,20 +335,48 @@ def right_back_geometry() -> list[GeometrySection]:
     return sections
 
 
+def left_arm_geometry() -> list[GeometrySection]:
+    sections = [
+        polyline_section("left_upper_arm", 0, LEFT_ARM_GROUPS_3D["upper_arm"]),
+        polyline_section("left_forearm", 0, LEFT_ARM_GROUPS_3D["forearm"], connected_to_prev=True),
+    ]
+
+    for section in sections:
+        ensure_name_fits(section.name, "section name")
+    return sections
+
+
+def right_arm_geometry() -> list[GeometrySection]:
+    right = {
+        name: tuple(mirror_point(point) for point in points)
+        for name, points in LEFT_ARM_GROUPS_3D.items()
+    }
+    sections = [
+        polyline_section("right_upper_arm", 1, right["upper_arm"]),
+        polyline_section("right_forearm", 1, right["forearm"], connected_to_prev=True),
+    ]
+
+    for section in sections:
+        ensure_name_fits(section.name, "section name")
+    return sections
+
+
 def front_geometry() -> list[GeometrySection]:
-    return left_front_geometry() + right_front_geometry()
+    return left_front_geometry() + left_arm_geometry() + right_front_geometry() + right_arm_geometry()
 
 
 def back_geometry() -> list[GeometrySection]:
-    return left_back_geometry() + right_back_geometry()
+    return left_back_geometry() + left_arm_geometry() + right_back_geometry() + right_arm_geometry()
 
 
 def chestplate_geometry() -> list[GeometrySection]:
     sections = (
         left_front_geometry() +
         left_back_geometry() +
+        left_arm_geometry() +
         right_front_geometry() +
-        right_back_geometry()
+        right_back_geometry() +
+        right_arm_geometry()
     )
     for section in sections:
         ensure_name_fits(section.name, "section name")

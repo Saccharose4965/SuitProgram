@@ -43,23 +43,27 @@ typedef struct {
 } led_layout_default_section_t;
 
 static const led_layout_default_section_t k_default_sections[] = {
-    { "front_left_top",        0, 72, false },
+    { "front_left_top",        0, 27, false },
     { "front_left_ring",       0, 35, false },
-    { "front_left_rib",        0, 56, false },
-    { "front_left_abs",        0, 32, false },
-    { "front_left_belt",       0, 32, false },
-    { "back_left_belt",        0, 33, false },
-    { "back_left_vertebra",    0, 33, false },
-    { "back_left_rib",         0, 34, false },
-    { "back_left_top",         0, 34, false },
-    { "front_right_top",       1, 72, true  },
-    { "front_right_rib",       1, 56, true  },
-    { "front_right_abs",       1, 32, true  },
-    { "front_right_belt",      1, 32, true  },
-    { "back_right_belt",       1, 42, true  },
-    { "back_right_vertebra",   1, 42, true  },
-    { "back_right_rib",        1, 42, true  },
-    { "back_right_top",        1, 42, true  },
+    { "front_left_rib",        0, 47, false },
+    { "front_left_abs",        0, 31, false },
+    { "front_left_belt",       0, 39, false },
+    { "back_left_belt",        0, 31, false },
+    { "back_left_vertebra",    0, 28, false },
+    { "back_left_rib",         0, 37, false },
+    { "back_left_top",         0, 35, false },
+    { "left_upper_arm",        0, 45, false },
+    { "left_forearm",          0, 23, false },
+    { "front_right_top",       1, 27, true  },
+    { "front_right_rib",       1, 47, true  },
+    { "front_right_abs",       1, 31, true  },
+    { "front_right_belt",      1, 39, true  },
+    { "back_right_belt",       1, 31, true  },
+    { "back_right_vertebra",   1, 28, true  },
+    { "back_right_rib",        1, 37, true  },
+    { "back_right_top",        1, 35, true  },
+    { "right_upper_arm",       1, 45, true  },
+    { "right_forearm",         1, 23, true  },
 };
 
 typedef struct {
@@ -106,6 +110,8 @@ static const char *k_canonical_section_order[] = {
     "back_left_vertebra",
     "back_left_rib",
     "back_left_top",
+    "left_upper_arm",
+    "left_forearm",
     "front_right_top",
     "front_right_rib",
     "front_right_abs",
@@ -114,6 +120,8 @@ static const char *k_canonical_section_order[] = {
     "back_right_vertebra",
     "back_right_rib",
     "back_right_top",
+    "right_upper_arm",
+    "right_forearm",
 };
 
 static SemaphoreHandle_t layout_lock_handle(void)
@@ -485,6 +493,25 @@ static bool layout_assign_measured_geometry(led_layout_section_t *sec)
         section_set_polyline_points(sec, false, pts, 3);
         return true;
     }
+    if (strcmp(sec->name, "left_upper_arm") == 0) {
+        const led_point_t pts[] = {
+            { 16.0f, -6.0f, -2.0f },
+            { 17.5f, -1.5f, -2.0f },
+            { 20.0f,  6.0f,  0.0f },
+            { 18.5f,  4.0f,  1.5f },
+            { 17.0f,  0.5f,  2.0f },
+        };
+        section_set_polyline_points(sec, false, pts, 5);
+        return true;
+    }
+    if (strcmp(sec->name, "left_forearm") == 0) {
+        const led_point_t pts[] = {
+            { 20.0f,  6.0f, 0.0f },
+            { 23.0f, 15.5f, 0.0f },
+        };
+        section_set_polyline_points(sec, true, pts, 2);
+        return true;
+    }
 
     if (strcmp(sec->name, "front_right_top") == 0) {
         const led_point_t pts[] = {
@@ -556,6 +583,25 @@ static bool layout_assign_measured_geometry(led_layout_section_t *sec)
         section_set_polyline_points(sec, false, pts, 3);
         return true;
     }
+    if (strcmp(sec->name, "right_upper_arm") == 0) {
+        const led_point_t pts[] = {
+            { -16.0f, -6.0f, -2.0f },
+            { -17.5f, -1.5f, -2.0f },
+            { -20.0f,  6.0f,  0.0f },
+            { -18.5f,  4.0f,  1.5f },
+            { -17.0f,  0.5f,  2.0f },
+        };
+        section_set_polyline_points(sec, false, pts, 5);
+        return true;
+    }
+    if (strcmp(sec->name, "right_forearm") == 0) {
+        const led_point_t pts[] = {
+            { -20.0f,  6.0f, 0.0f },
+            { -23.0f, 15.5f, 0.0f },
+        };
+        section_set_polyline_points(sec, true, pts, 2);
+        return true;
+    }
 
     return false;
 }
@@ -570,7 +616,10 @@ static bool layout_geometry_looks_placeholder(const led_layout_config_t *cfg)
 
     for (size_t i = 0; i < cfg->section_count; ++i) {
         const led_layout_section_t *sec = &cfg->sections[i];
-        if (strncmp(sec->name, "front_", 6) == 0 || strncmp(sec->name, "back_", 5) == 0) {
+        if (strncmp(sec->name, "front_", 6) == 0 ||
+            strncmp(sec->name, "back_", 5) == 0 ||
+            strstr(sec->name, "_arm") != NULL ||
+            strstr(sec->name, "forearm") != NULL) {
             saw_known = true;
         }
         for (size_t p = 0; p < sec->point_count && p < LED_LAYOUT_MAX_SECTION_POINTS; ++p) {
@@ -663,6 +712,16 @@ static void layout_assign_default_geometry(led_layout_section_t *sec, size_t idx
         z = -0.18f;
         start_y = -0.10f + 0.12f * (float)((idx / 2u) % 4u);
         end_y = start_y + 0.28f;
+    } else if (strstr(sec->name, "forearm") != NULL) {
+        base_x = (sec->strip == 0) ? 0.58f : -0.58f;
+        start_y = 0.00f + 0.08f * (float)(idx % 2u);
+        end_y = start_y + 0.32f;
+        z = 0.00f;
+    } else if (strstr(sec->name, "_arm") != NULL) {
+        base_x = (sec->strip == 0) ? 0.50f : -0.50f;
+        start_y = -0.28f;
+        end_y = 0.08f;
+        z = 0.00f;
     } else if (strstr(sec->name, "side") != NULL) {
         z = 0.05f;
         start_y = -0.25f + 0.08f * (float)(idx % 4u);

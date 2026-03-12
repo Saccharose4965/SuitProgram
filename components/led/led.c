@@ -289,6 +289,9 @@ static bool s_pulse_was_on = false;
 static uint8_t *s_pulse_frame = NULL;
 static volatile led_beat_anim_t s_beat_anim = LED_BEAT_ANIM_PULSE;
 static volatile bool s_beat_enabled = true;
+static volatile bool s_auto_beat_enabled = false;
+static volatile uint32_t s_auto_beat_period_ms = 500;
+static int64_t s_auto_beat_next_us = 0;
 static uint8_t s_flash_r = 0;
 static uint8_t s_flash_g = 0;
 static uint8_t s_flash_b = 0;
@@ -313,6 +316,8 @@ static uint8_t s_beat_brightness = 96;
 static uint32_t s_beat_duo_flip = 0;
 static float s_audio_energy_phase = 0.0f;
 static volatile float s_audio_raw_volume = 0.0f;
+static led_beat_anim_t s_beat_random_anim = LED_BEAT_ANIM_FLASH;
+static int64_t s_beat_random_next_switch_us = 0;
 static uint8_t s_spark_r = 255;
 static uint8_t s_spark_g = 96;
 static uint8_t s_spark_b = 0;
@@ -338,7 +343,12 @@ static const float kLedPulseMinPeriodSec = 60.0f / 240.0f; // 240 BPM cap
 static const float kLedPulseMaxPeriodSec = 60.0f / 40.0f;  // 40 BPM floor
 static const float kLedPulseTempoSmooth = 0.25f;
 static const float kLedPulseSnapBpmDelta = 6.0f;
+static const uint32_t kLedAutoBeatMinPeriodMs = 120;
+static const uint32_t kLedAutoBeatMaxPeriodMs = 5000;
 static const float kLedAudioEnergyBaseSpeed = 8.5f;
+#ifndef LED_BEAT_RANDOM_INTERVAL_US
+#define LED_BEAT_RANDOM_INTERVAL_US (10LL * 1000000LL)
+#endif
 static const float kLedAudioBrightnessThreshold = 0.07f;
 static const float kLedWaveHz = 5.0f;
 static const float kLedWaveDecay = 0.90f;
@@ -1180,6 +1190,51 @@ static bool led_geo_any_active_locked(void)
     return false;
 }
 
+static void led_beat_clear_effect_state_locked(void)
+{
+    memset(s_pulses, 0, sizeof(s_pulses));
+    memset(s_spark_energy, 0, sizeof(s_spark_energy));
+    led_geo_clear_locked();
+    led_comet_clear_locked();
+    s_flash_ticks = 0;
+    s_wave_amp = 0.0f;
+}
+
+static led_beat_anim_t led_beat_pick_random_anim_locked(led_beat_anim_t prev_mode)
+{
+    const int first = LED_BEAT_ANIM_FLASH;
+    const int last = LED_BEAT_ANIM_AUDIO_ENERGY;
+    const int count = last - first + 1;
+    int picked = first + (int)(esp_random() % (uint32_t)count);
+    if (count > 1 && picked == (int)prev_mode) {
+        picked = first + ((picked - first + 1 + (int)(esp_random() % (uint32_t)(count - 1))) % count);
+    }
+    return (led_beat_anim_t)picked;
+}
+
+static led_beat_anim_t led_beat_effective_mode_locked(int64_t now_us)
+{
+    if (s_beat_anim != LED_BEAT_ANIM_RANDOM) {
+        return s_beat_anim;
+    }
+
+    if (s_beat_random_anim < LED_BEAT_ANIM_FLASH ||
+        s_beat_random_anim > LED_BEAT_ANIM_AUDIO_ENERGY ||
+        now_us >= s_beat_random_next_switch_us) {
+        led_beat_anim_t next = led_beat_pick_random_anim_locked(s_beat_random_anim);
+        if (next != s_beat_random_anim) {
+            led_beat_clear_effect_state_locked();
+            if (next == LED_BEAT_ANIM_AUDIO_ENERGY) {
+                s_audio_energy_phase = 0.0f;
+            }
+            s_beat_random_anim = next;
+        }
+        s_beat_random_next_switch_us = now_us + LED_BEAT_RANDOM_INTERVAL_US;
+    }
+
+    return s_beat_random_anim;
+}
+
 static void led_geo_add_rgb_locked(size_t led, float add_r, float add_g, float add_b)
 {
     uint8_t cur_r = 0, cur_g = 0, cur_b = 0;
@@ -1648,6 +1703,7 @@ static bool led_pulse_step_locked(void){
     bool any_active = false;
     size_t active = led_active_count();
     float brightness_scale = (float)s_beat_brightness / 255.0f;
+    led_beat_anim_t effective_mode = led_beat_effective_mode_locked(esp_timer_get_time());
     memset(s_pulse_frame, 0, LED_COUNT * 3);
     led_layout_snapshot(&s_effect_layout);
     if (s_effect_layout.total_leds > 0 && active > s_effect_layout.total_leds) {
@@ -1741,7 +1797,7 @@ static bool led_pulse_step_locked(void){
         }
         any_active = true;
     }
-    if (s_beat_enabled && s_beat_anim == LED_BEAT_ANIM_AUDIO_ENERGY) {
+    if (s_beat_enabled && effective_mode == LED_BEAT_ANIM_AUDIO_ENERGY) {
         if (led_audio_energy_render_locked(&s_effect_layout, active, brightness_scale)) {
             any_active = true;
         }
@@ -1832,7 +1888,7 @@ void sendpulse(uint8_t r, uint8_t g, uint8_t b){
 }
 
 int led_beat_anim_count(void){
-    return 12;
+    return LED_BEAT_ANIM_RANDOM + 1;
 }
 
 const char *led_beat_anim_name(int idx){
@@ -1849,6 +1905,7 @@ const char *led_beat_anim_name(int idx){
         case LED_BEAT_ANIM_CROSSFIRE: return "crossfire";
         case LED_BEAT_ANIM_PLANE_FAN: return "plane_fan";
         case LED_BEAT_ANIM_AUDIO_ENERGY: return "audio_energy";
+        case LED_BEAT_ANIM_RANDOM: return "random";
         default: return NULL;
     }
 }
@@ -1865,19 +1922,19 @@ void led_beat_anim_set(led_beat_anim_t mode){
         mode != LED_BEAT_ANIM_PLANE_SWEEP &&
         mode != LED_BEAT_ANIM_CROSSFIRE &&
         mode != LED_BEAT_ANIM_PLANE_FAN &&
-        mode != LED_BEAT_ANIM_AUDIO_ENERGY){
+        mode != LED_BEAT_ANIM_AUDIO_ENERGY &&
+        mode != LED_BEAT_ANIM_RANDOM){
         mode = LED_BEAT_ANIM_FLASH;
     }
     s_beat_anim = mode;
-    if (mode == LED_BEAT_ANIM_AUDIO_ENERGY && led_pulse_lock()) {
-        memset(s_pulses, 0, sizeof(s_pulses));
-        memset(s_spark_energy, 0, sizeof(s_spark_energy));
-        led_geo_clear_locked();
-        led_comet_clear_locked();
-        s_flash_ticks = 0;
-        s_wave_amp = 0.0f;
+    s_beat_random_anim = LED_BEAT_ANIM_FLASH;
+    s_beat_random_next_switch_us = 0;
+    if ((mode == LED_BEAT_ANIM_AUDIO_ENERGY || mode == LED_BEAT_ANIM_RANDOM) && led_pulse_lock()) {
+        led_beat_clear_effect_state_locked();
         s_audio_energy_phase = 0.0f;
-        s_audio_raw_volume = 0.0f;
+        if (mode == LED_BEAT_ANIM_AUDIO_ENERGY) {
+            s_audio_raw_volume = 0.0f;
+        }
         led_pulse_unlock();
     }
 }
@@ -2034,36 +2091,38 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
             return;
         }
     }
-    float t_sec = (float)esp_timer_get_time() / 1000000.0f;
+    int64_t now_us = esp_timer_get_time();
+    float t_sec = (float)now_us / 1000000.0f;
     led_beat_select_trigger_color(t_sec, &r, &g, &b);
     led_pulse_start_task();
 
-    if (s_beat_anim == LED_BEAT_ANIM_PULSE){
-        if (!led_pulse_lock()) return;
+    if (!led_pulse_lock()) return;
+    led_beat_anim_t effective_mode = led_beat_effective_mode_locked(now_us);
+    if (effective_mode == LED_BEAT_ANIM_PULSE){
         led_comet_clear_locked();
         led_geo_clear_locked();
         s_flash_ticks = 0;
         s_wave_amp = 0.0f;
         memset(s_spark_energy, 0, sizeof(s_spark_energy));
+        led_pulse_update_period_locked();
+        led_pulse_spawn_locked(r, g, b, -kLedPulseWidth);
         led_pulse_unlock();
-        led_pulse_spawn(r, g, b);
         return;
     }
 
-    if (!led_pulse_lock()) return;
     led_pulse_update_period_locked();
     for (size_t i = 0; i < sizeof(s_pulses) / sizeof(s_pulses[0]); ++i){
         s_pulses[i].active = false;
     }
     led_comet_clear_locked();
-    if (led_beat_mode_uses_ring(s_beat_anim) && !led_beat_mode_uses_plane(s_beat_anim)) {
+    if (led_beat_mode_uses_ring(effective_mode) && !led_beat_mode_uses_plane(effective_mode)) {
         led_geo_clear_plane_locked();
-    } else if (led_beat_mode_uses_plane(s_beat_anim) && !led_beat_mode_uses_ring(s_beat_anim)) {
+    } else if (led_beat_mode_uses_plane(effective_mode) && !led_beat_mode_uses_ring(effective_mode)) {
         led_geo_clear_ring_locked();
-    } else if (!led_beat_mode_uses_ring(s_beat_anim) && !led_beat_mode_uses_plane(s_beat_anim)) {
+    } else if (!led_beat_mode_uses_ring(effective_mode) && !led_beat_mode_uses_plane(effective_mode)) {
         led_geo_clear_locked();
     }
-    if (s_beat_anim == LED_BEAT_ANIM_PLANE_PAIR){
+    if (effective_mode == LED_BEAT_ANIM_PLANE_PAIR){
         s_flash_ticks = 0;
         s_wave_amp = 0.0f;
         memset(s_spark_energy, 0, sizeof(s_spark_energy));
@@ -2071,7 +2130,7 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
         led_pulse_unlock();
         return;
     }
-    if (s_beat_anim == LED_BEAT_ANIM_PLANE_FAN){
+    if (effective_mode == LED_BEAT_ANIM_PLANE_FAN){
         s_flash_ticks = 0;
         s_wave_amp = 0.0f;
         memset(s_spark_energy, 0, sizeof(s_spark_energy));
@@ -2079,18 +2138,18 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
         led_pulse_unlock();
         return;
     }
-    if (s_beat_anim == LED_BEAT_ANIM_AUDIO_ENERGY){
+    if (effective_mode == LED_BEAT_ANIM_AUDIO_ENERGY){
         led_pulse_unlock();
         return;
     }
-    if (s_beat_anim == LED_BEAT_ANIM_SPARK){
+    if (effective_mode == LED_BEAT_ANIM_SPARK){
         s_flash_ticks = 0;
         s_wave_amp = 0.0f;
         led_spark_seed_locked(r, g, b);
         led_pulse_unlock();
         return;
     }
-    if (s_beat_anim == LED_BEAT_ANIM_COMET){
+    if (effective_mode == LED_BEAT_ANIM_COMET){
         s_flash_ticks = 0;
         s_wave_amp = 0.0f;
         led_pulse_update_period_locked();
@@ -2098,7 +2157,7 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
         led_pulse_unlock();
         return;
     }
-    if (s_beat_anim == LED_BEAT_ANIM_SHOCK){
+    if (effective_mode == LED_BEAT_ANIM_SHOCK){
         memset(s_spark_energy, 0, sizeof(s_spark_energy));
         s_flash_r = r;
         s_flash_g = g;
@@ -2113,7 +2172,7 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
         led_pulse_unlock();
         return;
     }
-    if (s_beat_anim == LED_BEAT_ANIM_RING_PULSE){
+    if (effective_mode == LED_BEAT_ANIM_RING_PULSE){
         s_flash_ticks = 0;
         s_wave_amp = 0.0f;
         memset(s_spark_energy, 0, sizeof(s_spark_energy));
@@ -2121,7 +2180,7 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
         led_pulse_unlock();
         return;
     }
-    if (s_beat_anim == LED_BEAT_ANIM_RING_TRAIN){
+    if (effective_mode == LED_BEAT_ANIM_RING_TRAIN){
         s_flash_ticks = 0;
         s_wave_amp = 0.0f;
         memset(s_spark_energy, 0, sizeof(s_spark_energy));
@@ -2131,7 +2190,7 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
         led_pulse_unlock();
         return;
     }
-    if (s_beat_anim == LED_BEAT_ANIM_PLANE_SWEEP){
+    if (effective_mode == LED_BEAT_ANIM_PLANE_SWEEP){
         s_flash_ticks = 0;
         s_wave_amp = 0.0f;
         memset(s_spark_energy, 0, sizeof(s_spark_energy));
@@ -2139,7 +2198,7 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
         led_pulse_unlock();
         return;
     }
-    if (s_beat_anim == LED_BEAT_ANIM_CROSSFIRE){
+    if (effective_mode == LED_BEAT_ANIM_CROSSFIRE){
         s_flash_ticks = 0;
         memset(s_spark_energy, 0, sizeof(s_spark_energy));
         s_wave_amp = 0.0f;

@@ -6,6 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "oled.h"
+#include "logo.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -14,12 +15,47 @@
 // ======= Offscreen buffer (64x64 1bpp) =======
 enum { W = 64, H = 64 };
 static uint8_t gBuf[W * H / 8];
+static logo_skip_check_fn_t s_skip_check = NULL;
+static void *s_skip_ctx = NULL;
 
 static inline void buf_clear(void){ memset(gBuf, 0, sizeof(gBuf)); }
 static inline void pset(int x,int y){
     if ((unsigned)x >= W || (unsigned)y >= H) return;
     int idx = y * W + x;                            // <-- use W here
     gBuf[idx >> 3] |= (uint8_t)(1u << (7 - (idx & 7)));
+}
+
+void logo_set_skip_check(logo_skip_check_fn_t fn, void *ctx)
+{
+    s_skip_check = fn;
+    s_skip_ctx = ctx;
+}
+
+static bool logo_should_skip(void)
+{
+    return s_skip_check && s_skip_check(s_skip_ctx);
+}
+
+static bool logo_wait_or_skip(TickType_t total_delay)
+{
+    const TickType_t poll_delay = pdMS_TO_TICKS(10);
+    TickType_t waited = 0;
+    while (waited < total_delay) {
+        if (logo_should_skip()) {
+            oled_clear();
+            return true;
+        }
+        TickType_t step = total_delay - waited;
+        if (step > poll_delay) step = poll_delay;
+        vTaskDelay(step);
+        waited += step;
+    }
+
+    if (logo_should_skip()) {
+        oled_clear();
+        return true;
+    }
+    return false;
 }
 
 // ===== Geometry stampers =====
@@ -191,19 +227,27 @@ void anim_logo(void){
 
     // Play centered
     for (int f = 0; f < NFRAMES; ++f){
+        if (logo_should_skip()) {
+            oled_clear();
+            return;
+        }
         draw_frame(f);
         oled_blit64_center(gBuf);
-        vTaskDelay(frame_delay);
+        if (logo_wait_or_skip(frame_delay)) return;
     }
 
     // Hold centered
-    vTaskDelay(hold_delay);
+    if (logo_wait_or_skip(hold_delay)) return;
 
     // Slingshot slide (reuse last gBuf)
     for (int s = 0; s < slide_steps; ++s){
+        if (logo_should_skip()) {
+            oled_clear();
+            return;
+        }
         int xoff = oled_calc_scroll_px_slick(s, slide_steps);
         oled_blit64_offset(gBuf, xoff);
-        vTaskDelay(frame_delay);
+        if (logo_wait_or_skip(frame_delay)) return;
     }
 
     // Safety: ensure fully off (SCROLL_TARGET == 104 in oled driver)

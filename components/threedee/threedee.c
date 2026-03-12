@@ -2,11 +2,11 @@
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "threedee.h"
 #include "hw.h"
-#include "oled.h"
 #include "orientation.h"
 
 #ifndef M_PI
@@ -39,6 +39,7 @@ static inline vec3 v3(float x, float y, float z) { return (vec3){x,y,z}; }
 static inline vec3 v3_add(vec3 a, vec3 b) { return v3(a.x+b.x, a.y+b.y, a.z+b.z); }
 static inline vec3 v3_sub(vec3 a, vec3 b) { return v3(a.x-b.x, a.y-b.y, a.z-b.z); }
 static inline vec3 v3_scale(vec3 a, float s) { return v3(a.x*s, a.y*s, a.z*s); }
+static inline vec3 v3_hadamard(vec3 a, vec3 b) { return v3(a.x*b.x, a.y*b.y, a.z*b.z); }
 
 static inline float v3_dot(vec3 a, vec3 b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
 static inline vec3 v3_cross(vec3 a, vec3 b) {
@@ -51,6 +52,17 @@ static inline vec3 v3_normed(vec3 a) {
     float n = v3_norm(a);
     if (n < 1e-6f) return v3(0,0,0);
     return v3_scale(a, 1.0f/n);
+}
+
+static inline vec3 v3_rotate_axis(vec3 p, vec3 axis, float angle)
+{
+    axis = v3_normed(axis);
+    float c = cosf(angle);
+    float s = sinf(angle);
+    return v3_add(
+        v3_add(v3_scale(p, c), v3_scale(v3_cross(axis, p), s)),
+        v3_scale(axis, v3_dot(axis, p) * (1.0f - c))
+    );
 }
 
 static inline quat q_ident(void) { return (quat){1,0,0,0}; }
@@ -138,6 +150,96 @@ static void draw_line(uint8_t *fb, int x0, int y0, int x1, int y1)
 
 static threedee_request_switch_fn s_switch_cb = NULL;
 static void *s_switch_user = NULL;
+static float s_scene_time = 0.0f;
+
+typedef enum {
+    SHAPE_CUBE = 0,
+    SHAPE_OCTA,
+    SHAPE_PYRAMID,
+    SHAPE_PRISM,
+} wire_shape_t;
+
+typedef struct {
+    wire_shape_t kind;
+    vec3 center;
+    vec3 scale;
+    vec3 spin_axis;
+    float spin_rate;
+    float spin_phase;
+} wire_instance_t;
+
+typedef struct {
+    const vec3 *verts;
+    size_t vert_count;
+    const uint8_t (*edges)[2];
+    size_t edge_count;
+} wire_shape_def_t;
+
+static const vec3 kCubeVerts[] = {
+    {-1,-1,-1}, { 1,-1,-1}, {-1, 1,-1}, { 1, 1,-1},
+    {-1,-1, 1}, { 1,-1, 1}, {-1, 1, 1}, { 1, 1, 1},
+};
+
+static const uint8_t kCubeEdges[][2] = {
+    {0,1},{0,2},{0,4},
+    {1,3},{1,5},
+    {2,3},{2,6},
+    {3,7},
+    {4,5},{4,6},
+    {5,7},
+    {6,7},
+};
+
+static const vec3 kOctaVerts[] = {
+    { 1, 0, 0}, {-1, 0, 0},
+    { 0, 1, 0}, { 0,-1, 0},
+    { 0, 0, 1}, { 0, 0,-1},
+};
+
+static const uint8_t kOctaEdges[][2] = {
+    {0,2},{0,3},{0,4},{0,5},
+    {1,2},{1,3},{1,4},{1,5},
+    {2,4},{2,5},{3,4},{3,5},
+};
+
+static const vec3 kPyramidVerts[] = {
+    {-1,-1,-1}, { 1,-1,-1}, { 1, 1,-1}, {-1, 1,-1},
+    { 0, 0, 1},
+};
+
+static const uint8_t kPyramidEdges[][2] = {
+    {0,1},{1,2},{2,3},{3,0},
+    {0,4},{1,4},{2,4},{3,4},
+};
+
+static const vec3 kPrismVerts[] = {
+    {-1,-1,-1}, { 1,-1,-1}, { 0, 1,-1},
+    {-1,-1, 1}, { 1,-1, 1}, { 0, 1, 1},
+};
+
+static const uint8_t kPrismEdges[][2] = {
+    {0,1},{1,2},{2,0},
+    {3,4},{4,5},{5,3},
+    {0,3},{1,4},{2,5},
+};
+
+static const wire_shape_def_t kWireShapes[] = {
+    { kCubeVerts,    sizeof(kCubeVerts) / sizeof(kCubeVerts[0]),       kCubeEdges,    sizeof(kCubeEdges) / sizeof(kCubeEdges[0]) },
+    { kOctaVerts,    sizeof(kOctaVerts) / sizeof(kOctaVerts[0]),       kOctaEdges,    sizeof(kOctaEdges) / sizeof(kOctaEdges[0]) },
+    { kPyramidVerts, sizeof(kPyramidVerts) / sizeof(kPyramidVerts[0]), kPyramidEdges, sizeof(kPyramidEdges) / sizeof(kPyramidEdges[0]) },
+    { kPrismVerts,   sizeof(kPrismVerts) / sizeof(kPrismVerts[0]),     kPrismEdges,   sizeof(kPrismEdges) / sizeof(kPrismEdges[0]) },
+};
+
+static const wire_instance_t kSceneInstances[] = {
+    { SHAPE_CUBE,    { -72, -38, -56 }, { 18, 18, 18 }, { 0.3f,  1.0f,  0.2f },  0.55f, 0.1f },
+    { SHAPE_OCTA,    {  58, -52, -34 }, { 22, 22, 22 }, { 1.0f,  0.1f,  0.4f }, -0.70f, 0.8f },
+    { SHAPE_PYRAMID, { -24,  76, -20 }, { 20, 20, 24 }, { 0.2f, -0.7f,  1.0f },  0.48f, 1.4f },
+    { SHAPE_PRISM,   {  86,  48,  -6 }, { 24, 18, 20 }, { 0.8f,  0.5f,  0.2f }, -0.38f, 2.0f },
+    { SHAPE_CUBE,    { -88,  18,  18 }, { 14, 24, 14 }, { 0.0f,  1.0f,  0.6f },  0.62f, 2.4f },
+    { SHAPE_OCTA,    {  28, 106,  26 }, { 18, 26, 18 }, { 0.6f,  0.2f, -0.8f },  0.44f, 3.0f },
+    { SHAPE_PRISM,   {  -8, -96,  36 }, { 20, 16, 24 }, { 0.4f, -1.0f,  0.1f }, -0.52f, 3.5f },
+    { SHAPE_PYRAMID, {  96, -74,  46 }, { 16, 16, 22 }, { 1.0f,  0.3f,  0.7f },  0.58f, 4.1f },
+};
 static inline quat imu_quat_to_local(imu_quat_t q)
 {
     return (quat){ q.w, q.x, q.y, q.z };
@@ -184,6 +286,7 @@ void threedee_set_mount_quat(imu_quat_t q_ds)
 
 void threedee_app_init(void)
 {
+    s_scene_time = 0.0f;
 }
 
 void threedee_app_deinit(void)
@@ -203,6 +306,10 @@ void threedee_app_handle_input(const input_event_t *ev)
 void threedee_app_tick(float dt_sec)
 {
     if (dt_sec < 0) dt_sec = 0;
+    s_scene_time += dt_sec;
+    if (s_scene_time > 1000.0f) {
+        s_scene_time = fmodf(s_scene_time, 1000.0f);
+    }
 }
 
 void threedee_app_draw(uint8_t *fb, int x, int y, int w, int h)
@@ -213,102 +320,39 @@ void threedee_app_draw(uint8_t *fb, int x, int y, int w, int h)
     // Focal length tuned for tiny OLED; adjust if you want more/less FOV.
     const float focal = 100.0f;
 
-    // Draw reticle
-    fb_pset_local(fb, cx, cy);
-    fb_pset_local(fb, cx+1, cy);
-    fb_pset_local(fb, cx-1, cy);
-    fb_pset_local(fb, cx, cy+1);
-    fb_pset_local(fb, cx, cy-1);
-
-    if (!s_ori || !imu_orientation_ready(s_ori)) {
-        oled_draw_text3x5(fb, x+2, y+2, "Hold still...");
-        return;
-    }
-    oled_draw_text3x5(fb, x+2, y+2, "D=recenter");
-
     // Camera rotation: q_sensor->world from filter, then apply mounting to device frame.
-    imu_quat_t qf = imu_orientation_get(s_ori); // sensor -> world
-    quat q_rel = imu_quat_to_local(qf);
+    quat q_rel = q_ident();
+    if (s_ori && imu_orientation_ready(s_ori)) {
+        imu_quat_t qf = imu_orientation_get(s_ori); // sensor -> world
+        q_rel = imu_quat_to_local(qf);
+    }
     quat q_dw = apply_mount(q_rel, s_mount_ds); // device -> world
     // World->camera (view) uses the inverse rotation.
     quat q_view = q_conj(q_dw);
     float R_wc[9];
-    float R_cw[9];
     q_to_mat3(q_view, R_wc); // world->camera
-    // camera->world (transpose)
-    R_cw[0]=R_wc[0]; R_cw[1]=R_wc[3]; R_cw[2]=R_wc[6];
-    R_cw[3]=R_wc[1]; R_cw[4]=R_wc[4]; R_cw[5]=R_wc[7];
-    R_cw[6]=R_wc[2]; R_cw[7]=R_wc[5]; R_cw[8]=R_wc[8];
 
-    // World-anchored cubes
-    static const vec3 cube_centers[] = {
-        { -50, -30, -40 }, { 60, -40, -30 }, { -30, 70, -20 }, { 80, 50, -10 },
-        { -80, 20, 10 }, { 40, 100, 20 }, { -10, -90, 30 }, { 90, -70, 40 },
-    };
-    const float half = 15.0f; // 30x30x30 cubes
-    static const uint8_t edges[][2] = {
-        {0,1},{0,2},{0,4},
-        {1,3},{1,5},
-        {2,3},{2,6},
-        {3,7},
-        {4,5},{4,6},
-        {5,7},
-        {6,7},
-    };
-
-    for (size_t c = 0; c < sizeof(cube_centers)/sizeof(cube_centers[0]); ++c) {
+    for (size_t s = 0; s < sizeof(kSceneInstances)/sizeof(kSceneInstances[0]); ++s) {
+        const wire_instance_t *inst = &kSceneInstances[s];
+        const wire_shape_def_t *shape = &kWireShapes[inst->kind];
         vec3 vertsW[8];
-        int idx = 0;
-        for (int sx = -1; sx <= 1; sx += 2) {
-            for (int sy = -1; sy <= 1; sy += 2) {
-                for (int sz = -1; sz <= 1; sz += 2) {
-                    float lx = half * (float)sx;
-                    float ly = half * (float)sy;
-                    float lz = half * (float)sz;
-                    vertsW[idx++] = v3_add(cube_centers[c], v3(lx, ly, lz));
-                }
-            }
-        }
-
         int pxv[8], pyv[8];
         bool okv[8];
-        for (int i = 0; i < 8; ++i) {
+        float spin = inst->spin_phase + s_scene_time * inst->spin_rate;
+
+        for (size_t i = 0; i < shape->vert_count; ++i) {
+            vec3 local = v3_hadamard(shape->verts[i], inst->scale);
+            local = v3_rotate_axis(local, inst->spin_axis, spin);
+            vertsW[i] = v3_add(inst->center, local);
             vec3 pC = mat3_mul_vec(R_wc, vertsW[i]);
             okv[i] = project_point(pC, cx, cy, focal, &pxv[i], &pyv[i]);
         }
-        for (size_t e = 0; e < sizeof(edges)/sizeof(edges[0]); ++e) {
-            uint8_t a = edges[e][0], b = edges[e][1];
+
+        for (size_t e = 0; e < shape->edge_count; ++e) {
+            uint8_t a = shape->edges[e][0];
+            uint8_t b = shape->edges[e][1];
             if (!okv[a] || !okv[b]) continue;
             draw_line(fb, pxv[a], pyv[a], pxv[b], pyv[b]);
         }
     }
-
-    // World-fixed axes gizmo placed in front of the camera (origin moves with camera, axes stay earth-fixed)
-    const float axis_len = 60.0f;
-    const float gizmo_dist = 200.0f;
-
-    // Camera forward in world (third column of R_cw)
-    vec3 forward_w = v3(R_cw[2], R_cw[5], R_cw[8]);
-    vec3 origin_w = v3_scale(forward_w, gizmo_dist);
-
-    vec3 ends_w[3] = {
-        v3_add(origin_w, v3(axis_len, 0, 0)),   // world +X
-        v3_add(origin_w, v3(0, axis_len, 0)),   // world +Y
-        v3_add(origin_w, v3(0, 0, axis_len)),   // world +Z
-    };
-
-    vec3 origin_c = mat3_mul_vec(R_wc, origin_w);
-    int ox, oy;
-    if (!project_point(origin_c, cx, cy, focal, &ox, &oy)) return;
-
-    int px[3], py[3];
-    bool ok[3];
-    for (int i = 0; i < 3; ++i) {
-        vec3 pC = mat3_mul_vec(R_wc, ends_w[i]);
-        ok[i] = project_point(pC, cx, cy, focal, &px[i], &py[i]);
-    }
-
-    if (ok[0]) draw_line(fb, ox, oy, px[0], py[0]); // X axis
-    if (ok[1]) draw_line(fb, ox, oy, px[1], py[1]); // Y axis
-    if (ok[2]) draw_line(fb, ox, oy, px[2], py[2]); // Z axis
 }

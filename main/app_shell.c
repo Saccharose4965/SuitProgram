@@ -55,6 +55,18 @@ static TaskHandle_t s_startup_tone_task = NULL;
 static TaskHandle_t s_shell_task = NULL;
 static esp_timer_handle_t s_shell_frame_timer = NULL;
 
+typedef struct {
+    input_button_t last_button;
+    int press_count;
+    int64_t last_press_us;
+} startup_logo_skip_state_t;
+
+static startup_logo_skip_state_t s_logo_skip = {
+    .last_button = INPUT_BTN_NONE,
+    .press_count = 0,
+    .last_press_us = 0,
+};
+
 static size_t s_current_app = 0;
 static size_t s_prev_app = 0;
 static size_t s_queued_app_index = 0;
@@ -199,14 +211,50 @@ static void startup_logo_task(void *arg)
 {
     (void)arg;
     anim_logo();
+    logo_set_skip_check(NULL, NULL);
     s_logo_active = false;
     s_logo_task = NULL;
     vTaskDelete(NULL);
 }
 
+static bool shell_logo_skip_check(void *arg)
+{
+    (void)arg;
+
+    input_button_t button = INPUT_BTN_NONE;
+    int mv = 0;
+    if (!input_sample(&button, &mv)) {
+        return false;
+    }
+
+    int64_t now_us = esp_timer_get_time();
+    if (button != s_logo_skip.last_button) {
+        if (button != INPUT_BTN_NONE &&
+            s_logo_skip.last_button == INPUT_BTN_NONE &&
+            (now_us - s_logo_skip.last_press_us) >= 50000LL) {
+            s_logo_skip.press_count++;
+            s_logo_skip.last_press_us = now_us;
+        }
+        s_logo_skip.last_button = button;
+    }
+
+    return s_logo_skip.press_count >= 3;
+}
+
 static void shell_start_logo_async(void)
 {
     if (s_logo_active || s_logo_task) return;
+    s_logo_skip.press_count = 0;
+    s_logo_skip.last_press_us = 0;
+    s_logo_skip.last_button = INPUT_BTN_NONE;
+    {
+        input_button_t button = INPUT_BTN_NONE;
+        int mv = 0;
+        if (input_sample(&button, &mv)) {
+            s_logo_skip.last_button = button;
+        }
+    }
+    logo_set_skip_check(shell_logo_skip_check, NULL);
     s_logo_active = true;
     BaseType_t ok = xTaskCreatePinnedToCore(
         startup_logo_task,
@@ -222,6 +270,7 @@ static void shell_start_logo_async(void)
         s_logo_task = NULL;
         ESP_LOGW(TAG, "logo task create failed; falling back to blocking logo");
         anim_logo();
+        logo_set_skip_check(NULL, NULL);
     }
 }
 

@@ -103,6 +103,7 @@ typedef enum {
     LED_BEAT_ANIM_CROSSFIRE = 9,
     LED_BEAT_ANIM_PLANE_FAN = 10,
     LED_BEAT_ANIM_AUDIO_ENERGY = 11,
+    LED_BEAT_ANIM_RANDOM = 12,
 } led_beat_anim_t;
 
 // Beat animation mode helpers (used by FFT beat trigger path).
@@ -112,6 +113,10 @@ void led_beat_anim_set(led_beat_anim_t mode);
 led_beat_anim_t led_beat_anim_get(void);
 void led_beat_enable(bool enabled);
 bool led_beat_enabled(void);
+void led_beat_auto_trigger_enable(bool enabled);
+bool led_beat_auto_trigger_enabled(void);
+void led_beat_auto_trigger_period_ms_set(uint32_t period_ms);
+uint32_t led_beat_auto_trigger_period_ms_get(void);
 
 // Trigger one beat event using currently selected animation mode.
 void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b);
