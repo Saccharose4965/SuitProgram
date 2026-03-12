@@ -289,9 +289,6 @@ static bool s_pulse_was_on = false;
 static uint8_t *s_pulse_frame = NULL;
 static volatile led_beat_anim_t s_beat_anim = LED_BEAT_ANIM_PULSE;
 static volatile bool s_beat_enabled = true;
-static volatile bool s_auto_beat_enabled = false;
-static volatile uint32_t s_auto_beat_period_ms = 500;
-static int64_t s_auto_beat_next_us = 0;
 static uint8_t s_flash_r = 0;
 static uint8_t s_flash_g = 0;
 static uint8_t s_flash_b = 0;
@@ -343,8 +340,6 @@ static const float kLedPulseMinPeriodSec = 60.0f / 240.0f; // 240 BPM cap
 static const float kLedPulseMaxPeriodSec = 60.0f / 40.0f;  // 40 BPM floor
 static const float kLedPulseTempoSmooth = 0.25f;
 static const float kLedPulseSnapBpmDelta = 6.0f;
-static const uint32_t kLedAutoBeatMinPeriodMs = 120;
-static const uint32_t kLedAutoBeatMaxPeriodMs = 5000;
 static const float kLedAudioEnergyBaseSpeed = 8.5f;
 #ifndef LED_BEAT_RANDOM_INTERVAL_US
 #define LED_BEAT_RANDOM_INTERVAL_US (10LL * 1000000LL)

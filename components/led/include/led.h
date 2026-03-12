@@ -113,10 +113,6 @@ void led_beat_anim_set(led_beat_anim_t mode);
 led_beat_anim_t led_beat_anim_get(void);
 void led_beat_enable(bool enabled);
 bool led_beat_enabled(void);
-void led_beat_auto_trigger_enable(bool enabled);
-bool led_beat_auto_trigger_enabled(void);
-void led_beat_auto_trigger_period_ms_set(uint32_t period_ms);
-uint32_t led_beat_auto_trigger_period_ms_get(void);
 
 // Trigger one beat event using currently selected animation mode.
 void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b);
