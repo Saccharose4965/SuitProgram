@@ -101,15 +101,15 @@ From `main/app_shell.c` (`s_builtin_apps`):
 - `title`
 - `menu`
 - `status`
-- `adc_debug`
-- `service_restart`
 - `volume`
+- `service_restart`
+- `adc_debug`
 - `calculator`
 - `leds_audio`
-- `manual_bpm`
-- `fft_sync`
 - `leds_custom`
 - `leds_layout`
+- `manual_bpm`
+- `fft_sync`
 - `music`
 - `bt`
 - `file_rx`
@@ -219,8 +219,21 @@ LED Audio / LED Custom (`main/app_leds.c`):
 - `B`: down in list
 - `D`:
   - on `Back`: return to `menu`
-  - on mode item: apply selected mode
+  - on a new mode item: apply the mapped mode for the current page
+  - on the current `plane` or `ring` row: cycle to the next variant
 - LED Audio and LED Custom use smooth menu scrolling for selection changes
+- Both pages expose the same animation catalog; the Audio page runs the beat/audio-reactive mapping and the Custom page runs the continuous renderer mapping
+- `plane` variants:
+  - Audio: `plane:sweep`, `plane:pair`, `plane:fan`
+  - Custom: `plane:sweep`, `plane:mirror`, `plane:prism`
+- `ring` variants:
+  - Audio: `ring:pulse`, `ring:train`
+  - Custom: `ring:pulse`, `ring:contour`
+- Shared config exposed on both pages:
+  - color preset / style / highlight
+  - primary + secondary RGB values
+  - `audio:*`
+  - `bright:*`
 - Audio `random` rotates through the beat-reactive animation list about every 10 seconds
 - Custom page config:
   - `speed:%` controls free-running custom animation speed (`10%` to `250%`, step `10%`)
@@ -290,13 +303,18 @@ FFT (`main/app_fft.c`):
 - `A`: previous FFT view
 - `B`: next FFT view
 
+3D Render (`components/threedee/threedee.c`):
+- `D`: recenter orientation
+- Draws a simple animated wireframe scene with multiple rotating shapes
+- If IMU orientation is not ready yet, it still renders the neutral scene instead of showing a text prompt
+
 Arm Pose (`main/app_stickman.c`):
 - `A`: return to `menu`
 - `C`: toggle tracked arm left/right
 - `D`: recenter orientation
 - Renders a simple projected stick figure with the selected arm driven by IMU orientation
 
-Keyboard/Fluid/3D/Pong/Snake/Flappy/2048/Tetris:
+Keyboard/Fluid/Pong/Snake/Flappy/2048/Tetris:
 - Shell forwards input/tick/draw to their app/component handlers.
 
 
