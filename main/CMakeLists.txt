@@ -23,6 +23,7 @@ idf_component_register(
         "app_snake.c"
         "app_pong.c"
         "app_threedee.c"
+        "app_stickman.c"
         "app_fluid.c"
         "app_bad_apple.c"
         "app_calculator.c"

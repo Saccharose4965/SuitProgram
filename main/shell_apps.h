@@ -118,6 +118,11 @@ void threedee_tick_wrapper(shell_app_context_t *ctx, float dt_sec);
 void threedee_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t THREEDEE_LEGEND;
 
+void stickman_app_init(shell_app_context_t *ctx);
+void stickman_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
+void stickman_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
+extern const shell_legend_t STICKMAN_LEGEND;
+
 void fluid_app_init_wrapper(shell_app_context_t *ctx);
 void fluid_app_deinit_wrapper(shell_app_context_t *ctx);
 void fluid_app_handle_input_wrapper(shell_app_context_t *ctx, const input_event_t *ev);

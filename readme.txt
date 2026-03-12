@@ -116,6 +116,7 @@ From `main/app_shell.c` (`s_builtin_apps`):
 - `keyboard`
 - `fft`
 - `fluid`
+- `stickman`
 - `threedee`
 - `bad_apple`
 - `pong`
@@ -159,6 +160,7 @@ Simulations:
 - GPS
 - FFT
 - Fluid
+- Arm Pose
 - 3D Render
 
 Games:
@@ -287,6 +289,12 @@ File RX (`main/app_file_rx.c`):
 FFT (`main/app_fft.c`):
 - `A`: previous FFT view
 - `B`: next FFT view
+
+Arm Pose (`main/app_stickman.c`):
+- `A`: return to `menu`
+- `C`: toggle tracked arm left/right
+- `D`: recenter orientation
+- Renders a simple projected stick figure with the selected arm driven by IMU orientation
 
 Keyboard/Fluid/3D/Pong/Snake/Flappy/2048/Tetris:
 - Shell forwards input/tick/draw to their app/component handlers.

@@ -649,6 +649,17 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .draw   = fluid_app_draw_wrapper,
     },
     {
+        .id     = "stickman",
+        .name   = "Arm Pose",
+        .flags  = SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &STICKMAN_LEGEND,
+        .init   = stickman_app_init,
+        .deinit = NULL,
+        .tick   = NULL,
+        .handle_input = stickman_app_handle_input,
+        .draw   = stickman_app_draw,
+    },
+    {
         .id     = "threedee",
         .name   = "3D Render",
         .flags  = SHELL_APP_FLAG_SHOW_LEGEND,

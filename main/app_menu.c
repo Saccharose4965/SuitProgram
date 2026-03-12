@@ -47,6 +47,7 @@ static const menu_entry_t g_menu_sim_entries[] = {
     { "gps",       "GPS"    },
     { "fft",       "FFT"    },
     { "fluid",     "Fluid"  },
+    { "stickman",  "Arm Pose" },
     { "threedee",  "3D Render" },
 };
 static const menu_entry_t g_menu_games_entries[] = {
