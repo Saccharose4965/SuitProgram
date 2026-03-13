@@ -13,6 +13,7 @@ const shell_legend_t MANUAL_BPM_LEGEND = {
 };
 
 typedef struct {
+    bool active;
     float bpm;
     float cycle_phase;
     float phase_offset;
@@ -108,6 +109,7 @@ static int manual_bpm_beat_count_between(float start_phase, float end_phase, flo
 void manual_bpm_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
+    s_manual_bpm.active = true;
     s_manual_bpm.bpm = clamp_bpm(s_manual_bpm.bpm);
     s_manual_bpm.cycle_phase = wrap01(s_manual_bpm.cycle_phase);
     s_manual_bpm.phase_offset = wrap01(s_manual_bpm.phase_offset);
@@ -125,6 +127,7 @@ void manual_bpm_app_init(shell_app_context_t *ctx)
 void manual_bpm_app_deinit(shell_app_context_t *ctx)
 {
     (void)ctx;
+    s_manual_bpm.active = false;
 }
 
 void manual_bpm_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
@@ -212,4 +215,14 @@ void manual_bpm_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, in
         fb_rect_fill(fb, x + w - 8, y + 2, 5, 5);
     }
 
+}
+
+bool manual_bpm_get_sync_state(manual_bpm_sync_state_t *out)
+{
+    if (!out) return false;
+    out->active = s_manual_bpm.active;
+    out->bpm = clamp_bpm(s_manual_bpm.bpm);
+    out->cycle_phase = wrap01(s_manual_bpm.cycle_phase);
+    out->phase_offset = wrap01(s_manual_bpm.phase_offset);
+    return true;
 }

@@ -55,9 +55,14 @@ static message_state_t s_message = {
     .send_err = ESP_OK,
 };
 
-const shell_legend_t MESSAGE_LEGEND = {
-    .slots = { SHELL_ICON_NONE, SHELL_ICON_PLAY, SHELL_ICON_NONE, SHELL_ICON_SELECT },
+shell_legend_t MESSAGE_LEGEND = {
+    .slots = { SHELL_ICON_RECORD, SHELL_ICON_PLAY, SHELL_ICON_NONE, SHELL_ICON_SELECT },
 };
+
+static void message_update_legend(void)
+{
+    MESSAGE_LEGEND.slots[0] = mic_rec_is_recording() ? SHELL_ICON_STOP : SHELL_ICON_RECORD;
+}
 
 static uint16_t message_port(void)
 {
@@ -334,6 +339,7 @@ void message_app_init(shell_app_context_t *ctx)
     if (message_ensure_mic_ready() != ESP_OK) {
         s_message.mic_ready = false;
     }
+    message_update_legend();
 }
 
 void message_app_deinit(shell_app_context_t *ctx)
@@ -342,6 +348,7 @@ void message_app_deinit(shell_app_context_t *ctx)
     if (mic_rec_is_recording()) {
         (void)message_stop_recording();
     }
+    message_update_legend();
 }
 
 void message_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
@@ -354,10 +361,11 @@ void message_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
         return;
     }
 
-    if (ev->button == INPUT_BTN_C) {
+    if (ev->button == INPUT_BTN_A) {
         s_message.last_err = mic_rec_is_recording()
             ? message_stop_recording()
             : message_start_recording();
+        message_update_legend();
         return;
     }
 

@@ -103,7 +103,15 @@ typedef enum {
     LED_BEAT_ANIM_CROSSFIRE = 9,
     LED_BEAT_ANIM_PLANE_FAN = 10,
     LED_BEAT_ANIM_AUDIO_ENERGY = 11,
-    LED_BEAT_ANIM_RANDOM = 12,
+    LED_BEAT_ANIM_BREATHE = 12,
+    LED_BEAT_ANIM_PLANE_SPAN = 13,
+    LED_BEAT_ANIM_COMET_PAIR = 14,
+    LED_BEAT_ANIM_COMET_SWARM = 15,
+    LED_BEAT_ANIM_COMET_BG = 16,
+    LED_BEAT_ANIM_COMET_PAIR_BG = 17,
+    LED_BEAT_ANIM_COMET_SWARM_BG = 18,
+    LED_BEAT_ANIM_SOFT_FLASH = 19,
+    LED_BEAT_ANIM_RANDOM = 20,
 } led_beat_anim_t;
 
 // Beat animation mode helpers (used by FFT beat trigger path).
@@ -127,6 +135,8 @@ void led_beat_secondary_color_set(uint8_t r, uint8_t g, uint8_t b);
 void led_beat_secondary_color_get(uint8_t *r, uint8_t *g, uint8_t *b);
 void led_beat_plane_background_enable(bool enabled);
 bool led_beat_plane_background_enabled(void);
+void led_beat_ring_background_enable(bool enabled);
+bool led_beat_ring_background_enabled(void);
 void led_beat_color_cycle_set(led_color_cycle_t mode);
 led_color_cycle_t led_beat_color_cycle_get(void);
 void led_beat_color_style_set(led_color_style_t style);

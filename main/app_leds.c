@@ -11,7 +11,7 @@
 #include "shell_audio.h"
 
 const shell_legend_t LEDS_LEGEND = {
-    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_LEFT, SHELL_ICON_SELECT },
+    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_LEFT, SHELL_ICON_RIGHT },
 };
 
 enum {
@@ -51,7 +51,7 @@ typedef struct {
     int value;
 } leds_menu_meta_t;
 
-#define LEDS_VARIANT_MAX 6
+#define LEDS_VARIANT_MAX 8
 
 typedef struct {
     const char *label;
@@ -94,18 +94,23 @@ static const int kColorPresetCount = (int)(sizeof(s_color_presets) / sizeof(s_co
 static const leds_animation_choice_t s_animation_choices[] = {
     { "off",          { NULL,      NULL,      NULL      }, { NULL,          NULL,          NULL      }, { "off",     NULL,      NULL      }, 1 },
     { "fill",         { NULL,      NULL,      NULL      }, { "flash",       NULL,          NULL      }, { "fill",    NULL,      NULL      }, 1 },
-    { "breathe",      { NULL,      NULL,      NULL      }, { "pulse",       NULL,          NULL      }, { "breathe", NULL,      NULL      }, 1 },
-    { "scanner",      { NULL,      NULL,      NULL      }, { "comet",       NULL,          NULL      }, { "scanner", NULL,      NULL      }, 1 },
-    { "energy",       { NULL,      NULL,      NULL      }, { "audio_energy",NULL,          NULL      }, { "energy",  NULL,      NULL      }, 1 },
-    { "blink",        { NULL,      NULL,      NULL      }, { "flash",       NULL,          NULL      }, { "blink",   NULL,      NULL      }, 1 },
-    { "chase",        { NULL,      NULL,      NULL      }, { "comet",       NULL,          NULL      }, { "chase",   NULL,      NULL      }, 1 },
-    { "twinkle",      { NULL,      NULL,      NULL      }, { "spark",       NULL,          NULL      }, { "twinkle", NULL,      NULL      }, 1 },
-    { "glitch",       { NULL,      NULL,      NULL      }, { "shock",       NULL,          NULL      }, { "glitch",  NULL,      NULL      }, 1 },
-    { "plane",        { "sweep",   "pair",    "fan",       "sweep+bg",   "pair+bg",   "fan+bg"   },
-                       { "plane_sweep", "plane_pair", "plane_fan", "plane_sweep", "plane_pair", "plane_fan" },
-                       { "plane",  "mirror",  "prism",     "plane",      "mirror",    "prism"    }, 6 },
-    { "ring",         { "pulse",   "train",   NULL      }, { "ring_pulse",  "ring_train",  NULL      },
-                                                                 { "ring",    "contour",     NULL      }, 2 },
+    { "breathe",      { NULL,      NULL,      NULL      }, { "breathe",     NULL,          NULL      }, { "breathe", NULL,      NULL      }, 1 },
+    { "energy",       { NULL,      NULL,      NULL      }, { "energy",      NULL,          NULL      }, { "energy",  NULL,      NULL      }, 1 },
+    { "blink",        { "hard",    "smooth",  NULL      }, { "flash",       "soft_flash",  NULL      }, { "blink",   "blink_smooth", NULL }, 2 },
+    { "chase",        { "single",  "pair",    "swarm",     "single+bg", "pair+bg", "swarm+bg" },
+                       { "comet",       "comet_pair",    "comet_swarm",
+                         "comet_bg",    "comet_pair_bg", "comet_swarm_bg" },
+                       { "chase",       "chase_pair",    "chase_swarm",
+                         "chase_bg",    "chase_pair_bg", "chase_swarm_bg" }, 6 },
+    { "twinkle",      { "soft",    "scatter", NULL      }, { "spark",       "shock",       NULL      }, { "twinkle", "glitch",  NULL      }, 2 },
+    { "plane",        { "span",    "pair",    "fan",       "sweep",
+                         "span+bg", "pair+bg", "fan+bg",   "sweep+bg" },
+                       { "plane_span", "plane_pair", "plane_fan", "plane_sweep",
+                         "plane_span", "plane_pair", "plane_fan", "plane_sweep" },
+                       { "plane",  "mirror",  "prism",     "sweep",
+                         "plane",  "mirror",  "prism",     "sweep" }, 8 },
+    { "ring",         { "long",    "short",   "long+bg",  "short+bg" }, { "ring_pulse", "ring_train", "ring_pulse", "ring_train" },
+                                                                 { "ring",    "contour",     "ring",     "contour" }, 4 },
     { "orbit",        { NULL,      NULL,      NULL      }, { "ring_train",  NULL,          NULL      }, { "orbit",   NULL,      NULL      }, 1 },
     { "aurora",       { NULL,      NULL,      NULL      }, { "plane_fan",   NULL,          NULL      }, { "aurora",  NULL,      NULL      }, 1 },
     { "vortex",       { NULL,      NULL,      NULL      }, { "crossfire",   NULL,          NULL      }, { "vortex",  NULL,      NULL      }, 1 },
@@ -113,11 +118,8 @@ static const leds_animation_choice_t s_animation_choices[] = {
     { "random",       { NULL,      NULL,      NULL      }, { "random",      NULL,          NULL      }, { "random",  NULL,      NULL      }, 1 },
     { "flash",        { NULL,      NULL,      NULL      }, { "flash",       NULL,          NULL      }, { "blink",   NULL,      NULL      }, 1 },
     { "pulse",        { NULL,      NULL,      NULL      }, { "pulse",       NULL,          NULL      }, { "breathe", NULL,      NULL      }, 1 },
-    { "spark",        { NULL,      NULL,      NULL      }, { "spark",       NULL,          NULL      }, { "twinkle", NULL,      NULL      }, 1 },
     { "comet",        { NULL,      NULL,      NULL      }, { "comet",       NULL,          NULL      }, { "chase",   NULL,      NULL      }, 1 },
-    { "shock",        { NULL,      NULL,      NULL      }, { "shock",       NULL,          NULL      }, { "glitch",  NULL,      NULL      }, 1 },
     { "crossfire",    { NULL,      NULL,      NULL      }, { "crossfire",   NULL,          NULL      }, { "vortex",  NULL,      NULL      }, 1 },
-    { "audio_energy", { NULL,      NULL,      NULL      }, { "audio_energy",NULL,          NULL      }, { "energy",  NULL,      NULL      }, 1 },
 };
 static const int kAnimationChoiceCount =
     (int)(sizeof(s_animation_choices) / sizeof(s_animation_choices[0]));
@@ -166,11 +168,15 @@ typedef struct {
     bool audio_brightness_enabled;
     led_audio_energy_range_t audio_energy_range;
     uint8_t brightness;
+    size_t audio_armed_sel;
+    size_t custom_armed_sel;
 } leds_state_t;
 static leds_state_t s_leds = {0};
 static bool s_leds_fft_owned = false;
 static uint8_t s_audio_choice_variants[LEDS_MAX_PAGE_ENTRIES];
 static uint8_t s_custom_choice_variants[LEDS_MAX_PAGE_ENTRIES];
+
+#define LEDS_ARMED_NONE ((size_t)-1)
 
 static int clamp_int(int v, int lo, int hi)
 {
@@ -224,37 +230,62 @@ static bool animation_choice_is_plane(int choice_idx)
     return strcmp(s_animation_choices[choice_idx].label, "plane") == 0;
 }
 
+static bool animation_choice_is_ring(int choice_idx)
+{
+    choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
+    return strcmp(s_animation_choices[choice_idx].label, "ring") == 0;
+}
+
+static int animation_choice_background_variant_span(int choice_idx)
+{
+    if (animation_choice_is_plane(choice_idx)) return 4;
+    if (animation_choice_is_ring(choice_idx)) return 2;
+    return 0;
+}
+
 static int animation_variant_base_index(int choice_idx, int variant_idx)
 {
     choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
     variant_idx = clamp_int(variant_idx, 0, animation_variant_count(choice_idx) - 1);
-    if (animation_choice_is_plane(choice_idx) && variant_idx >= 3) {
-        return variant_idx - 3;
+    int span = animation_choice_background_variant_span(choice_idx);
+    if (span > 0 && variant_idx >= span) {
+        return variant_idx - span;
     }
     return variant_idx;
 }
 
-static bool animation_variant_has_plane_background(int choice_idx, int variant_idx)
+static bool animation_variant_has_background(int choice_idx, int variant_idx)
 {
     choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
     variant_idx = clamp_int(variant_idx, 0, animation_variant_count(choice_idx) - 1);
-    return animation_choice_is_plane(choice_idx) && variant_idx >= 3;
+    int span = animation_choice_background_variant_span(choice_idx);
+    return span > 0 && variant_idx >= span;
 }
 
-static int animation_variant_with_plane_background(int choice_idx, int variant_idx, bool enabled)
+static int animation_variant_with_background(int choice_idx, int variant_idx, bool enabled)
 {
     int base_idx = animation_variant_base_index(choice_idx, variant_idx);
-    if (!animation_choice_is_plane(choice_idx)) {
+    int span = animation_choice_background_variant_span(choice_idx);
+    if (span <= 0) {
         return base_idx;
     }
-    return enabled ? (base_idx + 3) : base_idx;
+    return enabled ? (base_idx + span) : base_idx;
 }
 
 static bool plane_background_enabled_for_page(int page)
 {
     int choice_idx = (page == LEDS_PAGE_AUDIO) ? s_leds.audio_choice : s_leds.custom_choice;
     int variant_idx = animation_variant_index_for_page(page, choice_idx);
-    return animation_variant_has_plane_background(choice_idx, variant_idx);
+    return animation_choice_is_plane(choice_idx) &&
+           animation_variant_has_background(choice_idx, variant_idx);
+}
+
+static bool ring_background_enabled_for_page(int page)
+{
+    int choice_idx = (page == LEDS_PAGE_AUDIO) ? s_leds.audio_choice : s_leds.custom_choice;
+    int variant_idx = animation_variant_index_for_page(page, choice_idx);
+    return animation_choice_is_ring(choice_idx) &&
+           animation_variant_has_background(choice_idx, variant_idx);
 }
 
 static const char *animation_choice_variant_label(int choice_idx, int variant_idx)
@@ -301,6 +332,11 @@ static bool animation_choice_find_for_source_mode(leds_mode_source_t source,
                                                   int *variant_idx)
 {
     if (!mode_name) return false;
+    if (strcmp(mode_name, "scanner") == 0) {
+        mode_name = (source == LEDS_MODE_SOURCE_AUDIO) ? "comet" : "chase";
+    } else if (strcmp(mode_name, "audio_energy") == 0) {
+        mode_name = "energy";
+    }
 
     for (int i = 0; i < kAnimationChoiceCount; ++i) {
         int count = animation_variant_count(i);
@@ -494,9 +530,11 @@ static void leds_apply_color(void)
     led_audio_brightness_enable(s_leds.audio_brightness_enabled);
     led_audio_energy_range_set(s_leds.audio_energy_range);
     led_beat_plane_background_enable(plane_background_enabled_for_page(LEDS_PAGE_AUDIO));
+    led_beat_ring_background_enable(ring_background_enabled_for_page(LEDS_PAGE_AUDIO));
     led_modes_set_primary_color(s_leds.color_r, s_leds.color_g, s_leds.color_b);
     led_modes_set_secondary_color(s_leds.color2_r, s_leds.color2_g, s_leds.color2_b);
     led_modes_plane_background_enable(plane_background_enabled_for_page(LEDS_PAGE_CUSTOM));
+    led_modes_ring_background_enable(ring_background_enabled_for_page(LEDS_PAGE_CUSTOM));
     led_modes_color_cycle_set(s_leds.color_cycle);
     led_modes_color_style_set(s_leds.color_style);
     led_modes_highlight_mode_set(s_leds.highlight_mode);
@@ -696,6 +734,7 @@ static void leds_apply_audio(void)
     s_leds.audio_choice = clamp_int(s_leds.audio_choice, 0, kAnimationChoiceCount - 1);
     int variant_idx = animation_variant_index_for_page(LEDS_PAGE_AUDIO, s_leds.audio_choice);
     led_beat_plane_background_enable(plane_background_enabled_for_page(LEDS_PAGE_AUDIO));
+    led_beat_ring_background_enable(ring_background_enabled_for_page(LEDS_PAGE_AUDIO));
     animation_choice_format_label(LEDS_PAGE_AUDIO, s_leds.audio_choice, label, sizeof(label));
     int mode_idx = animation_choice_mode_index(LEDS_MODE_SOURCE_AUDIO, s_leds.audio_choice, variant_idx);
     if (mode_idx < 0) {
@@ -718,6 +757,7 @@ static void leds_apply_custom(void)
     s_leds.custom_choice = clamp_int(s_leds.custom_choice, 0, kAnimationChoiceCount - 1);
     int variant_idx = animation_variant_index_for_page(LEDS_PAGE_CUSTOM, s_leds.custom_choice);
     led_modes_plane_background_enable(plane_background_enabled_for_page(LEDS_PAGE_CUSTOM));
+    led_modes_ring_background_enable(ring_background_enabled_for_page(LEDS_PAGE_CUSTOM));
     animation_choice_format_label(LEDS_PAGE_CUSTOM, s_leds.custom_choice, label, sizeof(label));
     int mode_idx = animation_choice_mode_index(LEDS_MODE_SOURCE_CUSTOM, s_leds.custom_choice, variant_idx);
     if (mode_idx < 0) {
@@ -733,19 +773,28 @@ static void leds_apply_custom(void)
     system_state_set_led_mode(mode_idx, label);
 }
 
-static void leds_select_animation_for_page(int page, int choice_idx)
+static void leds_activate_animation_for_page(int page, int choice_idx)
+{
+    choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
+    int *current_choice = (page == LEDS_PAGE_AUDIO) ? &s_leds.audio_choice : &s_leds.custom_choice;
+    *current_choice = choice_idx;
+
+    if (page == LEDS_PAGE_AUDIO) {
+        leds_apply_audio();
+    } else {
+        leds_apply_custom();
+    }
+}
+
+static void leds_cycle_animation_variant_for_page(int page, int choice_idx, bool inc)
 {
     choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
     uint8_t *variants = variant_state_for_page(page);
-    int *current_choice = (page == LEDS_PAGE_AUDIO) ? &s_leds.audio_choice : &s_leds.custom_choice;
-
-    if (*current_choice == choice_idx) {
-        int count = animation_variant_count(choice_idx);
-        if (count > 1) {
-            variants[choice_idx] = (uint8_t)((variants[choice_idx] + 1u) % (uint8_t)count);
-        }
-    } else {
-        *current_choice = choice_idx;
+    int count = animation_variant_count(choice_idx);
+    if (count > 1) {
+        int idx = animation_variant_index_for_page(page, choice_idx);
+        idx = (idx + (inc ? 1 : -1) + count) % count;
+        variants[choice_idx] = (uint8_t)idx;
     }
 
     if (page == LEDS_PAGE_AUDIO) {
@@ -875,6 +924,8 @@ static void leds_init_page(shell_app_context_t *ctx, int page)
 
     s_leds.audio_choice = 0;
     s_leds.custom_choice = 0;
+    s_leds.audio_armed_sel = LEDS_ARMED_NONE;
+    s_leds.custom_armed_sel = LEDS_ARMED_NONE;
     int choice_idx = 0;
     int variant_idx = 0;
     if (animation_choice_find_for_source_mode(LEDS_MODE_SOURCE_AUDIO,
@@ -882,9 +933,11 @@ static void leds_init_page(shell_app_context_t *ctx, int page)
                                               &choice_idx,
                                               &variant_idx)) {
         s_leds.audio_choice = choice_idx;
-        variant_idx = animation_variant_with_plane_background(choice_idx,
-                                                              variant_idx,
-                                                              led_beat_plane_background_enabled());
+        variant_idx = animation_variant_with_background(choice_idx,
+                                                        variant_idx,
+                                                        animation_choice_is_plane(choice_idx)
+                                                            ? led_beat_plane_background_enabled()
+                                                            : led_beat_ring_background_enabled());
         s_audio_choice_variants[choice_idx] = (uint8_t)variant_idx;
     }
     if (animation_choice_find_for_source_mode(LEDS_MODE_SOURCE_CUSTOM,
@@ -892,9 +945,11 @@ static void leds_init_page(shell_app_context_t *ctx, int page)
                                               &choice_idx,
                                               &variant_idx)) {
         s_leds.custom_choice = choice_idx;
-        variant_idx = animation_variant_with_plane_background(choice_idx,
-                                                              variant_idx,
-                                                              led_modes_plane_background_enabled());
+        variant_idx = animation_variant_with_background(choice_idx,
+                                                        variant_idx,
+                                                        animation_choice_is_plane(choice_idx)
+                                                            ? led_modes_plane_background_enabled()
+                                                            : led_modes_ring_background_enabled());
         s_custom_choice_variants[choice_idx] = (uint8_t)variant_idx;
     }
     s_leds.audio_sel = animation_selection_index(s_leds.audio_choice);
@@ -937,51 +992,56 @@ void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
     leds_menu_meta_t *meta = NULL;
     size_t count = 0;
     size_t *sel = NULL;
+    size_t *armed_sel = NULL;
     if (s_leds.page == LEDS_PAGE_AUDIO) {
         entries = s_audio_entries;
         meta = s_audio_meta;
         count = build_audio_entries();
         sel = &s_leds.audio_sel;
+        armed_sel = &s_leds.audio_armed_sel;
     } else {
         entries = s_custom_entries;
         meta = s_custom_meta;
         count = build_custom_entries();
         sel = &s_leds.custom_sel;
+        armed_sel = &s_leds.custom_armed_sel;
     }
-    if (!entries || !meta || !sel || count == 0) return;
+    if (!entries || !meta || !sel || !armed_sel || count == 0) return;
     *sel = clamp_sel(*sel, count);
 
     if (ev->button == INPUT_BTN_A && *sel > 0) {
         (*sel)--;
+        *armed_sel = LEDS_ARMED_NONE;
         return;
     }
     if (ev->button == INPUT_BTN_B && (*sel + 1) < count) {
         (*sel)++;
+        *armed_sel = LEDS_ARMED_NONE;
         return;
     }
     leds_menu_meta_t selected = meta[*sel];
 
-    if (ev->button == INPUT_BTN_D) {
-        switch (selected.kind) {
-            case LEDS_ENTRY_KIND_BACK:
-                if (ctx->request_switch) {
-                    ctx->request_switch("menu", ctx->request_user_data);
-                }
-                return;
-            case LEDS_ENTRY_KIND_ANIM:
-                leds_select_animation_for_page(s_leds.page, selected.value);
-                return;
-            case LEDS_ENTRY_KIND_CFG:
-                leds_cycle_cfg(selected.value, true);
-                return;
-            default:
-                return;
+    if (ev->button == INPUT_BTN_C || ev->button == INPUT_BTN_D) {
+        bool inc = (ev->button == INPUT_BTN_D);
+        if (selected.kind == LEDS_ENTRY_KIND_BACK) {
+            if (ctx->request_switch) {
+                ctx->request_switch("menu", ctx->request_user_data);
+            }
+            return;
         }
-    }
-
-    if (ev->button == INPUT_BTN_C) {
+        if (*armed_sel != *sel) {
+            *armed_sel = *sel;
+            if (selected.kind == LEDS_ENTRY_KIND_ANIM) {
+                leds_activate_animation_for_page(s_leds.page, selected.value);
+            }
+            return;
+        }
+        if (selected.kind == LEDS_ENTRY_KIND_ANIM) {
+            leds_cycle_animation_variant_for_page(s_leds.page, selected.value, inc);
+            return;
+        }
         if (selected.kind == LEDS_ENTRY_KIND_CFG) {
-            leds_cycle_cfg(selected.value, false);
+            leds_cycle_cfg(selected.value, inc);
         }
     }
 }

@@ -93,9 +93,10 @@ static void recorder_task(void *arg){
         vTaskDelete(NULL);
     }
 
-    int  slot_index = 0;     // 0=LEFT, 1=RIGHT
-    bool decided    = false; // set after first non-empty buffer
-    bool warned_z   = false; // printed “zeros” warning once
+    const int slot_index = 0; // 0=LEFT
+    bool warned_z = false; // printed “zeros” warning once
+
+    ESP_LOGI(TAG, "Mic slot fixed: LEFT");
 
     while (s_rec) {
         size_t nread = 0;
@@ -110,18 +111,7 @@ static void recorder_task(void *arg){
         size_t words32   = nread / sizeof(int32_t);   // total 32-bit words
         size_t frames_rd = words32 / 2;               // (L,R) pairs
 
-        if (!decided && frames_rd >= 8) {
-            uint64_t sumL = 0, sumR = 0;
-            for (size_t i = 0; i < frames_rd; i++) {
-                sumL += llabs((long long)rx32[2*i + 0]);
-                sumR += llabs((long long)rx32[2*i + 1]);
-            }
-            slot_index = (sumR > sumL) ? 1 : 0;
-            decided = true;
-            ESP_LOGI(TAG, "Mic slot picked: %s", slot_index ? "RIGHT" : "LEFT");
-        }
-
-        // Convert chosen slot’s MSB-justified 32-bit to s16
+        // Convert the left slot's MSB-justified 32-bit samples to s16.
         for (size_t i = 0; i < frames_rd; i++) {
             int32_t v = rx32[2*i + slot_index];
             pcm16[i]  = (int16_t)(v >> 14);           // adjust gain via shift

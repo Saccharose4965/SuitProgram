@@ -68,12 +68,33 @@ static const uint8_t ICONS[][5] = {
     {0b11011, 0b11011, 0b11011, 0b11011, 0b11011}, // PAUSE (bars)
     {0b00110, 0b00101, 0b00100, 0b01100, 0b01100}, // music note
     {0b01110, 0b01010, 0b11111, 0b11111, 0b11111}, // lock
+    {0b01110, 0b11111, 0b11111, 0b11111, 0b01110}, // record
+    {0b11111, 0b11111, 0b11111, 0b11111, 0b11111}, // stop
 };
+
+static const uint8_t DIR_ICONS_2048[][5] = {
+    {0b00100, 0b01010, 0b10001, 0b10001, 0b11111}, // UP
+    {0b11111, 0b10001, 0b10001, 0b01010, 0b00100}, // DOWN
+    {0b00111, 0b01001, 0b10001, 0b01001, 0b00111}, // LEFT
+    {0b11100, 0b10010, 0b10001, 0b10010, 0b11100}, // RIGHT
+};
+
+static shell_direction_icon_style_t s_direction_icon_style = SHELL_DIRECTION_ICON_STYLE_SHELL;
+
+static const uint8_t *legend_icon_rows(shell_icon_id_t icon)
+{
+    if (icon >= SHELL_ICON_UP && icon <= SHELL_ICON_RIGHT &&
+        s_direction_icon_style == SHELL_DIRECTION_ICON_STYLE_2048) {
+        return DIR_ICONS_2048[icon - SHELL_ICON_UP];
+    }
+    if (icon <= SHELL_ICON_NONE || icon > SHELL_ICON_STOP) return NULL;
+    return ICONS[icon];
+}
 
 static void draw_icon5(uint8_t *fb, int x, int y, shell_icon_id_t icon)
 {
-    if (icon <= SHELL_ICON_NONE || icon > SHELL_ICON_LOCK) return;
-    const uint8_t *rows = ICONS[icon];
+    const uint8_t *rows = legend_icon_rows(icon);
+    if (!rows) return;
     for (int r = 0; r < 5; ++r) {
         uint8_t row = rows[r];
         for (int c = 0; c < 5; ++c) {
@@ -82,6 +103,19 @@ static void draw_icon5(uint8_t *fb, int x, int y, shell_icon_id_t icon)
             }
         }
     }
+}
+
+void shell_ui_set_direction_icon_style(shell_direction_icon_style_t style)
+{
+    if (style != SHELL_DIRECTION_ICON_STYLE_2048) {
+        style = SHELL_DIRECTION_ICON_STYLE_SHELL;
+    }
+    s_direction_icon_style = style;
+}
+
+shell_direction_icon_style_t shell_ui_get_direction_icon_style(void)
+{
+    return s_direction_icon_style;
 }
 
 static void draw_battery_icon(uint8_t *fb, int x, int y, uint8_t pct)

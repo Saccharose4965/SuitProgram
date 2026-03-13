@@ -11,6 +11,7 @@
 #include "bt_audio.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "shell_ui.h"
 #include "storage_sd.h"
 
 #define SETTINGS_FILE_NAME "suit_settings.txt"
@@ -22,6 +23,7 @@ static app_settings_t s_settings = {
     .bt_volume = 1.0f,
     .speaker_muted = false,
     .bt_muted = false,
+    .use_2048_direction_icons = false,
 };
 
 static float clamp_volume(float v)
@@ -47,6 +49,14 @@ static void apply_audio_volume(const app_settings_t *s)
 
     audio_set_volume(s->speaker_muted ? 0.0f : spk);
     bt_audio_volume_set_percent(s->bt_muted ? 0 : volume_to_bt_percent(bt));
+}
+
+static void apply_shell_preferences(const app_settings_t *s)
+{
+    if (!s) return;
+    shell_ui_set_direction_icon_style(
+        s->use_2048_direction_icons ? SHELL_DIRECTION_ICON_STYLE_2048
+                                    : SHELL_DIRECTION_ICON_STYLE_SHELL);
 }
 
 static char *trim(char *s)
@@ -122,6 +132,18 @@ static bool settings_load_from_sd(app_settings_t *out)
             if (end != val) {
                 tmp.bt_muted = (m != 0);
             }
+        } else if (strcmp(key, "direction_icons") == 0) {
+            if (strcmp(val, "2048") == 0) {
+                tmp.use_2048_direction_icons = true;
+            } else if (strcmp(val, "shell") == 0) {
+                tmp.use_2048_direction_icons = false;
+            } else {
+                char *end = NULL;
+                long mode = strtol(val, &end, 10);
+                if (end != val) {
+                    tmp.use_2048_direction_icons = (mode != 0);
+                }
+            }
         }
     }
 
@@ -150,6 +172,7 @@ static void settings_save_to_sd(const app_settings_t *s)
     fprintf(f, "bt_volume=%.2f\n", clamp_volume(s->bt_volume));
     fprintf(f, "speaker_muted=%d\n", s->speaker_muted ? 1 : 0);
     fprintf(f, "bt_muted=%d\n", s->bt_muted ? 1 : 0);
+    fprintf(f, "direction_icons=%s\n", s->use_2048_direction_icons ? "2048" : "shell");
     fflush(f);
     int fd = fileno(f);
     if (fd >= 0) fsync(fd);
@@ -169,6 +192,7 @@ void app_settings_init(void)
     }
 
     apply_audio_volume(&s_settings);
+    apply_shell_preferences(&s_settings);
 }
 
 const app_settings_t *app_settings_get(void)
@@ -187,6 +211,15 @@ void app_settings_set_audio(float speaker_volume,
     s_settings.speaker_muted = speaker_muted;
     s_settings.bt_muted = bt_muted;
     apply_audio_volume(&s_settings);
+    if (persist) {
+        settings_save_to_sd(&s_settings);
+    }
+}
+
+void app_settings_set_direction_icons(bool use_2048_direction_icons, bool persist)
+{
+    s_settings.use_2048_direction_icons = use_2048_direction_icons;
+    apply_shell_preferences(&s_settings);
     if (persist) {
         settings_save_to_sd(&s_settings);
     }

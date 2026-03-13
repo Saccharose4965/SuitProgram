@@ -45,6 +45,13 @@ static const led_mode_desc_t s_modes[] = {
     { "aurora"  },
     { "vortex"  },
     { "helix"   },
+    { "sweep"   },
+    { "blink_smooth" },
+    { "chase_pair" },
+    { "chase_swarm" },
+    { "chase_bg" },
+    { "chase_pair_bg" },
+    { "chase_swarm_bg" },
     { "random"  },
 };
 static const int kModeCount = sizeof(s_modes) / sizeof(s_modes[0]);
@@ -63,17 +70,11 @@ static uint8_t s_secondary_r = 255;
 static uint8_t s_secondary_g = 64;
 static uint8_t s_secondary_b = 0;
 static volatile bool s_plane_background_enabled = false;
+static volatile bool s_ring_background_enabled = false;
 static volatile led_color_cycle_t s_color_cycle = LED_COLOR_CYCLE_STATIC;
 static volatile led_color_style_t s_color_style = LED_COLOR_STYLE_MONO;
 static volatile led_highlight_mode_t s_highlight_mode = LED_HIGHLIGHT_OFF;
 static EXT_RAM_BSS_ATTR led_layout_config_t s_render_layout = {0};
-static EXT_RAM_BSS_ATTR led_layout_config_t s_helix_cache_layout = {0};
-static EXT_RAM_BSS_ATTR float s_helix_phase_base[LED_LAYOUT_MAX_PIXELS];
-static EXT_RAM_BSS_ATTR float s_helix_shimmer_base[LED_LAYOUT_MAX_PIXELS];
-static EXT_RAM_BSS_ATTR float s_helix_ring_band[LED_LAYOUT_MAX_PIXELS];
-static EXT_RAM_BSS_ATTR uint8_t s_helix_point_valid[LED_LAYOUT_MAX_PIXELS];
-static size_t s_helix_cache_count = 0;
-static bool s_helix_cache_valid = false;
 
 #if configNUMBER_OF_CORES > 1
 #define BG_TASK_CORE 0
@@ -91,6 +92,10 @@ static bool s_helix_cache_valid = false;
 
 #ifndef LED_MODES_IDLE_PERIOD_MS
 #define LED_MODES_IDLE_PERIOD_MS 80
+#endif
+
+#ifndef LED_MODES_TASK_PRIORITY
+#define LED_MODES_TASK_PRIORITY 1
 #endif
 
 #ifndef LED_MODES_SHUFFLE_INTERVAL_US
@@ -111,7 +116,7 @@ static bool mode_uses_layout(int mode)
 
 static bool mode_needs_layout_point_stats(int mode)
 {
-    return (mode == 4) || (mode == 10) || (mode == 12) || (mode == 14);
+    return mode_uses_layout(mode);
 }
 
 static int pick_shuffle_mode(int prev_mode)
@@ -167,6 +172,8 @@ void led_modes_get_secondary_color(uint8_t *r, uint8_t *g, uint8_t *b) {
 }
 void led_modes_plane_background_enable(bool enabled) { s_plane_background_enabled = enabled; }
 bool led_modes_plane_background_enabled(void) { return s_plane_background_enabled; }
+void led_modes_ring_background_enable(bool enabled) { s_ring_background_enabled = enabled; }
+bool led_modes_ring_background_enabled(void) { return s_ring_background_enabled; }
 void led_modes_color_cycle_set(led_color_cycle_t mode) {
     if (mode < LED_COLOR_CYCLE_STATIC || mode > LED_COLOR_CYCLE_BIOHAZARD) {
         mode = LED_COLOR_CYCLE_STATIC;
@@ -225,6 +232,18 @@ typedef struct {
     float radial_max;
     float ring_wave_max;
 } layout_stats_t;
+
+static EXT_RAM_BSS_ATTR led_layout_config_t s_spatial_cache_layout = {0};
+static EXT_RAM_BSS_ATTR led_point_t s_spatial_points[LED_LAYOUT_MAX_PIXELS];
+static EXT_RAM_BSS_ATTR float s_spatial_radial[LED_LAYOUT_MAX_PIXELS];
+static EXT_RAM_BSS_ATTR float s_spatial_angle[LED_LAYOUT_MAX_PIXELS];
+static EXT_RAM_BSS_ATTR float s_spatial_ring_distance[LED_LAYOUT_MAX_PIXELS];
+static EXT_RAM_BSS_ATTR float s_spatial_helix_phase[LED_LAYOUT_MAX_PIXELS];
+static EXT_RAM_BSS_ATTR float s_spatial_helix_band[LED_LAYOUT_MAX_PIXELS];
+static EXT_RAM_BSS_ATTR uint8_t s_spatial_point_valid[LED_LAYOUT_MAX_PIXELS];
+static EXT_RAM_BSS_ATTR layout_stats_t s_spatial_stats = {0};
+static size_t s_spatial_cache_count = 0;
+static bool s_spatial_cache_valid = false;
 
 static inline float absf_local(float v)
 {
@@ -471,97 +490,97 @@ static void led_modes_sample_secondary_color(float t_sec, uint8_t *r, uint8_t *g
 static void layout_stats_collect(const led_layout_config_t *cfg, size_t count, layout_stats_t *stats)
 {
     if (!stats) return;
-    layout_stats_init(cfg, stats);
-
-    bool have_point = false;
-    size_t point_count = 0;
-    for (size_t i = 0; i < count; ++i) {
-        led_point_t p;
-        if (!led_layout_get_from_config(cfg, (int)i, &p)) continue;
-        have_point = true;
-        point_count++;
-        stats->avg_x += p.x;
-        stats->avg_y += p.y;
-        stats->avg_z += p.z;
-        if (p.x < stats->min_x) stats->min_x = p.x;
-        if (p.x > stats->max_x) stats->max_x = p.x;
-        if (p.y < stats->min_y) stats->min_y = p.y;
-        if (p.y > stats->max_y) stats->max_y = p.y;
-        if (p.z < stats->min_z) stats->min_z = p.z;
-        if (p.z > stats->max_z) stats->max_z = p.z;
-        float dx = p.x - stats->ring_center.x;
-        float dy = p.y - stats->ring_center.y;
-        float dz = p.z - stats->ring_center.z;
-        float radial = sqrtf(dx * dx + dy * dy);
-        if (radial > stats->radial_max) stats->radial_max = radial;
-        float ring_delta = radial - stats->ring_radius;
-        float ring_wave = sqrtf(ring_delta * ring_delta + dz * dz);
-        if (ring_wave > stats->ring_wave_max) stats->ring_wave_max = ring_wave;
-    }
-
-    if (!have_point) {
-        stats->min_x = stats->min_y = stats->min_z = -1.0f;
-        stats->max_x = stats->max_y = stats->max_z = 1.0f;
-        stats->avg_x = 0.0f;
-        stats->avg_y = 0.0f;
-        stats->avg_z = 0.0f;
-    } else if (point_count > 0u) {
-        float inv_count = 1.0f / (float)point_count;
-        stats->avg_x *= inv_count;
-        stats->avg_y *= inv_count;
-        stats->avg_z *= inv_count;
-    }
-    if (stats->radial_max < 1.0f) {
-        float hx = 0.5f * (stats->max_x - stats->min_x);
-        float hy = 0.5f * (stats->max_y - stats->min_y);
-        stats->radial_max = sqrtf(hx * hx + hy * hy);
-    }
-    if (stats->ring_wave_max < 1.0f) {
-        stats->ring_wave_max = stats->radial_max;
-    }
-}
-
-// Cache layout-derived helix terms so the frame loop only does time-varying math.
-static void helix_cache_ensure(const led_layout_config_t *cfg,
-                               const layout_stats_t *stats,
-                               size_t count)
-{
-    if (!cfg || !stats) {
-        s_helix_cache_valid = false;
-        s_helix_cache_count = 0;
+    if (!cfg) {
+        s_spatial_cache_valid = false;
+        s_spatial_cache_count = 0;
+        layout_stats_init(NULL, stats);
         return;
     }
 
     if (count > LED_LAYOUT_MAX_PIXELS) count = LED_LAYOUT_MAX_PIXELS;
 
-    if (s_helix_cache_valid &&
-        s_helix_cache_count == count &&
-        memcmp(cfg, &s_helix_cache_layout, sizeof(*cfg)) == 0) {
+    if (s_spatial_cache_valid &&
+        s_spatial_cache_count == count &&
+        memcmp(cfg, &s_spatial_cache_layout, sizeof(*cfg)) == 0) {
+        *stats = s_spatial_stats;
         return;
     }
 
+    layout_stats_init(cfg, &s_spatial_stats);
+
+    bool have_point = false;
+    size_t point_count = 0;
     for (size_t i = 0; i < count; ++i) {
         led_point_t p;
         if (!led_layout_get_from_config(cfg, (int)i, &p)) {
-            s_helix_point_valid[i] = 0;
+            s_spatial_point_valid[i] = 0;
             continue;
         }
 
-        float dx = p.x - stats->ring_center.x;
-        float y = p.y - stats->ring_center.y;
-        float radial = sqrtf(dx * dx + y * y);
-        float ang = atan2f(y, dx);
-
-        float abs_y = absf_local(y);
-        s_helix_phase_base[i] = 2.5f * ang + 0.18f * y;
-        s_helix_shimmer_base[i] = 0.33f * y + 0.12f * dx;
-        s_helix_ring_band[i] = expf(-absf_local(radial - (stats->ring_radius + 0.12f * abs_y)) / 4.2f);
-        s_helix_point_valid[i] = 1;
+        s_spatial_points[i] = p;
+        s_spatial_point_valid[i] = 1;
+        have_point = true;
+        point_count++;
+        s_spatial_stats.avg_x += p.x;
+        s_spatial_stats.avg_y += p.y;
+        s_spatial_stats.avg_z += p.z;
+        if (p.x < s_spatial_stats.min_x) s_spatial_stats.min_x = p.x;
+        if (p.x > s_spatial_stats.max_x) s_spatial_stats.max_x = p.x;
+        if (p.y < s_spatial_stats.min_y) s_spatial_stats.min_y = p.y;
+        if (p.y > s_spatial_stats.max_y) s_spatial_stats.max_y = p.y;
+        if (p.z < s_spatial_stats.min_z) s_spatial_stats.min_z = p.z;
+        if (p.z > s_spatial_stats.max_z) s_spatial_stats.max_z = p.z;
+    }
+    for (size_t i = count; i < s_spatial_cache_count && i < LED_LAYOUT_MAX_PIXELS; ++i) {
+        s_spatial_point_valid[i] = 0;
     }
 
-    s_helix_cache_layout = *cfg;
-    s_helix_cache_count = count;
-    s_helix_cache_valid = true;
+    if (!have_point) {
+        s_spatial_stats.min_x = s_spatial_stats.min_y = s_spatial_stats.min_z = -1.0f;
+        s_spatial_stats.max_x = s_spatial_stats.max_y = s_spatial_stats.max_z = 1.0f;
+        s_spatial_stats.avg_x = 0.0f;
+        s_spatial_stats.avg_y = 0.0f;
+        s_spatial_stats.avg_z = 0.0f;
+    } else if (point_count > 0u) {
+        float inv_count = 1.0f / (float)point_count;
+        s_spatial_stats.avg_x *= inv_count;
+        s_spatial_stats.avg_y *= inv_count;
+        s_spatial_stats.avg_z *= inv_count;
+    }
+
+    for (size_t i = 0; i < count; ++i) {
+        if (!s_spatial_point_valid[i]) continue;
+        const led_point_t *p = &s_spatial_points[i];
+        float dx = p->x - s_spatial_stats.ring_center.x;
+        float dy = p->y - s_spatial_stats.ring_center.y;
+        float radial = sqrtf(dx * dx + dy * dy);
+        float ring_wave = ring_distance(&s_spatial_stats, p);
+
+        s_spatial_radial[i] = radial;
+        s_spatial_angle[i] = atan2f(dy, dx);
+        s_spatial_ring_distance[i] = ring_wave;
+
+        if (radial > s_spatial_stats.radial_max) s_spatial_stats.radial_max = radial;
+        if (ring_wave > s_spatial_stats.ring_wave_max) s_spatial_stats.ring_wave_max = ring_wave;
+
+        float abs_y = absf_local(p->y - s_spatial_stats.ring_center.y);
+        s_spatial_helix_phase[i] = s_spatial_angle[i] + 0.055f * (p->y - s_spatial_stats.avg_y);
+        s_spatial_helix_band[i] = expf(-absf_local(radial - (s_spatial_stats.ring_radius + 0.10f * abs_y)) / 4.8f);
+    }
+
+    if (s_spatial_stats.radial_max < 1.0f) {
+        float hx = 0.5f * (s_spatial_stats.max_x - s_spatial_stats.min_x);
+        float hy = 0.5f * (s_spatial_stats.max_y - s_spatial_stats.min_y);
+        s_spatial_stats.radial_max = sqrtf(hx * hx + hy * hy);
+    }
+    if (s_spatial_stats.ring_wave_max < 1.0f) {
+        s_spatial_stats.ring_wave_max = s_spatial_stats.radial_max;
+    }
+
+    s_spatial_cache_layout = *cfg;
+    s_spatial_cache_count = count;
+    s_spatial_cache_valid = true;
+    *stats = s_spatial_stats;
 }
 
 static float layout_projection_extent(const layout_stats_t *stats,
@@ -595,19 +614,17 @@ static void render_plane(uint8_t *buf, size_t count,
                          const layout_stats_t *stats,
                          float t_sec, uint8_t r, uint8_t g, uint8_t b)
 {
+    (void)cfg;
     uint8_t sr = 0, sg = 0, sb = 0;
     led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
     bool background_enabled = s_plane_background_enabled;
     if (background_enabled) {
-        uint8_t bg_r = (uint8_t)(s_secondary_r * 0.18f);
-        uint8_t bg_g = (uint8_t)(s_secondary_g * 0.18f);
-        uint8_t bg_b = (uint8_t)(s_secondary_b * 0.18f);
+        uint8_t bg_r = (uint8_t)(r * 0.18f);
+        uint8_t bg_g = (uint8_t)(g * 0.18f);
+        uint8_t bg_b = (uint8_t)(b * 0.18f);
         for (size_t i = 0; i < count; ++i) {
             led_set_pixel_rgb(buf, i, bg_r, bg_g, bg_b);
         }
-        sr = s_secondary_r;
-        sg = s_secondary_g;
-        sb = s_secondary_b;
     }
 
     float angle = t_sec * 0.52f;
@@ -634,9 +651,9 @@ static void render_plane(uint8_t *buf, size_t count,
     layout_bounds_center(stats, &cx, &cy, &cz);
 
     for (size_t i = 0; i < count; ++i) {
-        led_point_t p;
-        if (!led_layout_get_from_config(cfg, (int)i, &p)) continue;
-        float proj = (p.x - cx) * nx + (p.y - cy) * ny + (p.z - cz) * nz;
+        if (!s_spatial_point_valid[i]) continue;
+        const led_point_t *p = &s_spatial_points[i];
+        float proj = (p->x - cx) * nx + (p->y - cy) * ny + (p->z - cz) * nz;
         float d = proj - offset;
         float core = expf(-fabsf(d) / width);
         float ripple = 0.5f + 0.5f * sinf(1.4f * d - t_sec * 4.0f);
@@ -644,9 +661,57 @@ static void render_plane(uint8_t *buf, size_t count,
         float primary_w = core * (background_enabled ? (0.95f + 0.70f * ripple)
                                                      : (0.55f + 0.45f * ripple));
         float secondary_w = background_enabled
-            ? core * core * 0.04f
+            ? 0.0f
             : core * core * (0.06f + 0.28f * (1.0f - ripple));
         float white_w = core * core * (background_enabled ? 0.18f : 0.08f);
+        add_mixed_color(buf, i, r, g, b, sr, sg, sb,
+                        primary_w,
+                        secondary_w,
+                        white_w);
+    }
+}
+
+static void render_sweep(uint8_t *buf, size_t count,
+                         const led_layout_config_t *cfg,
+                         const layout_stats_t *stats,
+                         float t_sec, uint8_t r, uint8_t g, uint8_t b)
+{
+    (void)cfg;
+    uint8_t sr = 0, sg = 0, sb = 0;
+    led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
+    bool background_enabled = s_plane_background_enabled;
+    if (background_enabled) {
+        uint8_t bg_r = (uint8_t)(r * 0.18f);
+        uint8_t bg_g = (uint8_t)(g * 0.18f);
+        uint8_t bg_b = (uint8_t)(b * 0.18f);
+        for (size_t i = 0; i < count; ++i) {
+            led_set_pixel_rgb(buf, i, bg_r, bg_g, bg_b);
+        }
+    }
+
+    float plane_x = 0.5f * (stats->min_x + stats->max_x);
+    float x_extent = fmaxf(fabsf(stats->min_x - plane_x), fabsf(stats->max_x - plane_x));
+    if (x_extent < 1.0f) x_extent = 1.0f;
+
+    float phase = fmodf(t_sec * 0.28f, 2.0f);
+    if (phase < 0.0f) phase += 2.0f;
+    float sweep = (phase <= 1.0f) ? phase : (2.0f - phase);
+    float pos = (2.0f * sweep - 1.0f) * x_extent;
+    float width = 0.75f + 0.05f * stats->radial_max;
+
+    for (size_t i = 0; i < count; ++i) {
+        if (!s_spatial_point_valid[i]) continue;
+        const led_point_t *p = &s_spatial_points[i];
+        float dx = (p->x - plane_x) - pos;
+        float crest = expf(-fabsf(dx) / width);
+        if (crest < 0.01f) continue;
+        float shimmer = 0.5f + 0.5f * sinf(0.20f * (p->y - stats->avg_y) - t_sec * 3.4f);
+        shimmer *= shimmer;
+        float primary_w = crest * (background_enabled ? (0.98f + 0.52f * shimmer)
+                                                      : (0.76f + 0.38f * shimmer));
+        float secondary_w = background_enabled ? 0.0f
+                                               : (0.14f * crest * (1.0f - shimmer));
+        float white_w = crest * crest * (background_enabled ? 0.16f : 0.08f);
         add_mixed_color(buf, i, r, g, b, sr, sg, sb,
                         primary_w,
                         secondary_w,
@@ -659,6 +724,7 @@ static void render_prism(uint8_t *buf, size_t count,
                          const layout_stats_t *stats,
                          float t_sec, uint8_t r, uint8_t g, uint8_t b)
 {
+    (void)cfg;
     uint8_t sr = 0, sg = 0, sb = 0;
     led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
 
@@ -671,10 +737,10 @@ static void render_prism(uint8_t *buf, size_t count,
     float n1y = sinf(a1);
 
     for (size_t i = 0; i < count; ++i) {
-        led_point_t p;
-        if (!led_layout_get_from_config(cfg, (int)i, &p)) continue;
-        float proj0 = p.x * n0x + p.y * n0y;
-        float proj1 = p.x * n1x + p.y * n1y;
+        if (!s_spatial_point_valid[i]) continue;
+        const led_point_t *p = &s_spatial_points[i];
+        float proj0 = p->x * n0x + p->y * n0y;
+        float proj1 = p->x * n1x + p->y * n1y;
         float band = 0.5f + 0.5f * sinf(0.42f * proj0 - t_sec * 4.3f +
                                         1.5f * sinf(0.24f * proj1 + t_sec * 1.6f));
         float cut = 0.5f + 0.5f * sinf(0.75f * proj1 + t_sec * 2.0f);
@@ -696,8 +762,18 @@ static void render_ring(uint8_t *buf, size_t count,
                         const layout_stats_t *stats,
                         float t_sec, uint8_t r, uint8_t g, uint8_t b)
 {
+    (void)cfg;
     uint8_t sr = 0, sg = 0, sb = 0;
     led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
+    bool background_enabled = s_ring_background_enabled;
+    if (background_enabled) {
+        uint8_t bg_r = (uint8_t)(r * 0.18f);
+        uint8_t bg_g = (uint8_t)(g * 0.18f);
+        uint8_t bg_b = (uint8_t)(b * 0.18f);
+        for (size_t i = 0; i < count; ++i) {
+            led_set_pixel_rgb(buf, i, bg_r, bg_g, bg_b);
+        }
+    }
 
     float cycle = stats->ring_wave_max + 4.0f;
     if (cycle < 1.0f) cycle = 1.0f;
@@ -709,16 +785,18 @@ static void render_ring(uint8_t *buf, size_t count,
     if (origin_width < 0.30f) origin_width = 0.30f;
 
     for (size_t i = 0; i < count; ++i) {
-        led_point_t p;
-        if (!led_layout_get_from_config(cfg, (int)i, &p)) continue;
-        float ring_d = ring_distance(stats, &p);
+        if (!s_spatial_point_valid[i]) continue;
+        float ring_d = s_spatial_ring_distance[i];
         float origin = expf(-ring_d / origin_width);
         float wave0 = expf(-fabsf(ring_d - front0) / width0);
         float wave1 = expf(-fabsf(ring_d - front1) / width1);
         add_mixed_color(buf, i, r, g, b, sr, sg, sb,
-                        0.18f * origin + 0.95f * wave0,
-                        0.32f * wave1,
-                        0.10f * wave0 * wave0);
+                        background_enabled ? (0.12f * origin + 1.05f * wave0)
+                                           : (0.18f * origin + 0.95f * wave0),
+                        background_enabled ? 0.0f
+                                           : (0.32f * wave1),
+                        background_enabled ? (0.16f * wave0 * wave0)
+                                           : (0.10f * wave0 * wave0));
     }
 }
 
@@ -727,19 +805,18 @@ static void render_contour(uint8_t *buf, size_t count,
                            const layout_stats_t *stats,
                            float t_sec, uint8_t r, uint8_t g, uint8_t b)
 {
+    (void)cfg;
     uint8_t sr = 0, sg = 0, sb = 0;
     led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
 
     for (size_t i = 0; i < count; ++i) {
-        led_point_t p;
-        if (!led_layout_get_from_config(cfg, (int)i, &p)) continue;
-        float dx = p.x - stats->ring_center.x;
-        float dy = p.y - stats->ring_center.y;
-        float radial = sqrtf(dx * dx + dy * dy);
-        float iso = 0.22f * p.y + 0.14f * fabsf(p.x) + 0.18f * radial;
+        if (!s_spatial_point_valid[i]) continue;
+        const led_point_t *p = &s_spatial_points[i];
+        float radial = s_spatial_radial[i];
+        float iso = 0.22f * p->y + 0.14f * fabsf(p->x) + 0.18f * radial;
         float bands = 0.5f + 0.5f * sinf(iso - t_sec * 3.1f);
-        float valley = 0.5f + 0.5f * sinf(0.13f * p.x + t_sec * 1.2f);
-        float shimmer = 0.5f + 0.5f * sinf(0.31f * p.y - t_sec * 5.0f + 0.18f * p.x);
+        float valley = 0.5f + 0.5f * sinf(0.13f * p->x + t_sec * 1.2f);
+        float shimmer = 0.5f + 0.5f * sinf(0.31f * p->y - t_sec * 5.0f + 0.18f * p->x);
         bands *= bands;
         bands *= bands;
         shimmer *= shimmer;
@@ -756,6 +833,7 @@ static void render_orbit(uint8_t *buf, size_t count,
                          const layout_stats_t *stats,
                          float t_sec, uint8_t r, uint8_t g, uint8_t b)
 {
+    (void)cfg;
     uint8_t sr = 0, sg = 0, sb = 0;
     led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
 
@@ -766,12 +844,9 @@ static void render_orbit(uint8_t *buf, size_t count,
     }
 
     for (size_t i = 0; i < count; ++i) {
-        led_point_t p;
-        if (!led_layout_get_from_config(cfg, (int)i, &p)) continue;
-        float dx = p.x - stats->ring_center.x;
-        float dy = p.y - stats->ring_center.y;
-        float radial = sqrtf(dx * dx + dy * dy);
-        float ang = atan2f(dy, dx);
+        if (!s_spatial_point_valid[i]) continue;
+        float radial = s_spatial_radial[i];
+        float ang = s_spatial_angle[i];
         float spoke = expf(-angular_distance(ang, head) / 0.30f);
         float counter = expf(-angular_distance(ang, head + 2.2f) / 0.55f);
         float radial_band = expf(-fabsf(radial - orbit_radius) / 3.8f);
@@ -788,27 +863,28 @@ static void render_aurora(uint8_t *buf, size_t count,
                           const layout_stats_t *stats,
                           float t_sec, uint8_t r, uint8_t g, uint8_t b)
 {
+    (void)cfg;
     uint8_t sr = 0, sg = 0, sb = 0;
     led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
 
-    (void)stats;
+    float span_x = stats->max_x - stats->min_x;
+    float span_y = stats->max_y - stats->min_y;
+    if (span_x < 1.0f) span_x = 1.0f;
+    if (span_y < 1.0f) span_y = 1.0f;
     for (size_t i = 0; i < count; ++i) {
-        led_point_t p;
-        if (!led_layout_get_from_config(cfg, (int)i, &p)) continue;
-        float curtain_a = 0.5f + 0.5f * sinf(0.18f * p.x + 0.42f * p.y - t_sec * 2.4f +
-                                             1.4f * sinf(0.09f * p.y + t_sec * 0.7f));
-        float curtain_b = 0.5f + 0.5f * sinf(-0.14f * p.x + 0.31f * p.y + t_sec * 1.8f);
-        float sparkle = 0.5f + 0.5f * sinf(0.45f * p.y - t_sec * 9.0f + 0.20f * p.x);
-        curtain_a *= curtain_a;
-        curtain_b *= curtain_b;
-        sparkle *= sparkle;
-        sparkle *= sparkle;
-        sparkle *= sparkle;
-        sparkle *= sparkle;
+        if (!s_spatial_point_valid[i]) continue;
+        const led_point_t *p = &s_spatial_points[i];
+        float lift = (p->y - stats->min_y) / span_y;
+        float curtain = 0.5f + 0.5f * sinf(0.12f * p->x + 0.21f * p->y - t_sec * 1.6f +
+                                           0.70f * sinf(0.05f * p->y + t_sec * 0.45f));
+        float fold = 0.5f + 0.5f * sinf(-0.08f * p->x + 0.17f * p->y + t_sec * 1.1f);
+        float glow = expf(-fabsf(p->x - stats->avg_x) / (0.20f * span_x + 1.2f));
+        curtain *= curtain;
+        fold *= fold;
         add_mixed_color(buf, i, r, g, b, sr, sg, sb,
-                        curtain_a * (0.22f + 0.78f * curtain_b),
-                        curtain_b * (0.12f + 0.48f * (1.0f - curtain_a)),
-                        sparkle * 0.55f);
+                        curtain * (0.18f + 0.72f * lift) + 0.10f * glow,
+                        fold * (0.08f + 0.24f * (1.0f - curtain)),
+                        0.05f * glow * curtain);
     }
 }
 
@@ -817,25 +893,25 @@ static void render_vortex(uint8_t *buf, size_t count,
                           const layout_stats_t *stats,
                           float t_sec, uint8_t r, uint8_t g, uint8_t b)
 {
+    (void)cfg;
     uint8_t sr = 0, sg = 0, sb = 0;
     led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
 
-    float throat = 0.55f + 0.10f * stats->ring_radius;
+    float throat = 0.85f + 0.08f * stats->ring_radius;
     if (throat < 0.55f) throat = 0.55f;
+    float rim_center = stats->ring_radius + 0.18f * stats->radial_max;
 
     for (size_t i = 0; i < count; ++i) {
-        led_point_t p;
-        if (!led_layout_get_from_config(cfg, (int)i, &p)) continue;
-        float dx = p.x - stats->ring_center.x;
-        float dy = p.y - stats->ring_center.y;
-        float radial = sqrtf(dx * dx + dy * dy);
-        float ang = atan2f(dy, dx);
-        float ring_d = ring_distance(stats, &p);
-
-        float arm0 = 0.5f + 0.5f * sinf(3.4f * ang + 0.28f * radial - t_sec * 5.4f + 0.07f * p.y);
-        float arm1 = 0.5f + 0.5f * sinf(-2.1f * ang + 0.19f * radial + t_sec * 4.0f - 0.05f * p.y);
+        if (!s_spatial_point_valid[i]) continue;
+        const led_point_t *p = &s_spatial_points[i];
+        float radial = s_spatial_radial[i];
+        float ang = s_spatial_angle[i];
+        float ring_d = s_spatial_ring_distance[i];
+        float spin = 2.8f * ang + 0.18f * radial - t_sec * 2.8f + 0.03f * p->y;
+        float arm0 = 0.5f + 0.5f * sinf(spin);
+        float arm1 = 0.5f + 0.5f * sinf(spin + 2.1f);
         float core = expf(-ring_d / throat);
-        float rim = expf(-fabsf(radial - (stats->ring_radius + 0.10f * fabsf(p.y))) / 5.0f);
+        float rim = expf(-fabsf(radial - rim_center) / 4.4f);
 
         arm0 *= arm0;
         arm0 *= arm0;
@@ -843,9 +919,9 @@ static void render_vortex(uint8_t *buf, size_t count,
         arm1 *= arm1;
 
         add_mixed_color(buf, i, r, g, b, sr, sg, sb,
-                        0.15f * core + 0.95f * arm0 * (0.25f + 0.75f * rim),
-                        0.10f * core + 0.55f * arm1,
-                        0.12f * core * core);
+                        0.16f * core + 0.74f * arm0 * (0.30f + 0.70f * rim),
+                        0.08f * core + 0.34f * arm1,
+                        0.07f * core * arm0);
     }
 }
 
@@ -854,36 +930,27 @@ static void render_helix(uint8_t *buf, size_t count,
                          const layout_stats_t *stats,
                          float t_sec, uint8_t r, uint8_t g, uint8_t b)
 {
-    if (!cfg || !stats || count == 0) return;
-
-    if (count > LED_LAYOUT_MAX_PIXELS) count = LED_LAYOUT_MAX_PIXELS;
+    (void)cfg;
+    if (!stats || count == 0) return;
 
     uint8_t sr = 0, sg = 0, sb = 0;
     led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
-    helix_cache_ensure(cfg, stats, count);
-    if (!s_helix_cache_valid) return;
-
-    float phase_t = t_sec * 4.8f;
-    float shimmer_t = t_sec * 6.0f;
+    float twist = t_sec * 1.8f;
+    float rise = 0.055f;
     for (size_t i = 0; i < count; ++i) {
-        if (!s_helix_point_valid[i]) continue;
-
-        float band = 0.5f + 0.5f * cosf(s_helix_phase_base[i] - phase_t);
-        float band0 = band;
-        float band1 = 1.0f - band;
-        float shimmer = 0.5f + 0.5f * sinf(s_helix_shimmer_base[i] - shimmer_t);
-
-        band0 *= band0;
-        band0 *= band0;
-        band1 *= band1;
-        band1 *= band1;
-        shimmer *= shimmer;
-        shimmer *= shimmer;
+        if (!s_spatial_point_valid[i]) continue;
+        const led_point_t *p = &s_spatial_points[i];
+        float head0 = twist - rise * (p->y - stats->avg_y);
+        float head1 = head0 + (float)M_PI;
+        float band0 = expf(-angular_distance(s_spatial_helix_phase[i], head0) / 0.34f);
+        float band1 = expf(-angular_distance(s_spatial_helix_phase[i], head1) / 0.34f);
+        float core = s_spatial_helix_band[i];
+        float inner = expf(-s_spatial_ring_distance[i] / (1.5f + 0.08f * stats->ring_wave_max));
 
         add_mixed_color(buf, i, r, g, b, sr, sg, sb,
-                        band0 * (0.18f + 0.82f * s_helix_ring_band[i]),
-                        band1 * (0.12f + 0.68f * s_helix_ring_band[i]) + 0.18f * shimmer,
-                        0.08f * (band0 + band1) * shimmer);
+                        band0 * (0.28f + 0.72f * core) + 0.10f * inner,
+                        band1 * (0.18f + 0.48f * core),
+                        0.06f * (band0 + band1) * core);
     }
 }
 
@@ -910,6 +977,30 @@ static void render_blink(uint8_t *buf, size_t count, float t_sec,
     } else {
         render_fill(buf, count, 0, 0, 0);
     }
+}
+
+static void render_blink_smooth(uint8_t *buf, size_t count, float t_sec,
+                                uint8_t r, uint8_t g, uint8_t b)
+{
+    float phase = fmodf(t_sec * 1.85f, 1.0f);
+    if (phase < 0.0f) phase += 1.0f;
+
+    float w = 0.0f;
+    if (phase < 0.18f) {
+        float rise = phase / 0.18f;
+        w = rise * rise;
+    } else {
+        float fall = (phase - 0.18f) / 0.82f;
+        w = expf(-4.2f * fall);
+    }
+
+    if (w < 0.01f) {
+        w = 0.0f;
+    }
+    render_fill(buf, count,
+                (uint8_t)((float)r * w),
+                (uint8_t)((float)g * w),
+                (uint8_t)((float)b * w));
 }
 
 static void render_chase(uint8_t *buf, size_t count, float t_sec,
@@ -1000,12 +1091,12 @@ static void render_mirror(uint8_t *buf, size_t count,
     float width = 0.75f + 0.05f * stats->radial_max;
 
     for (size_t i = 0; i < count; ++i) {
-        led_point_t p;
-        if (!led_layout_get_from_config(cfg, (int)i, &p)) continue;
-        float dx = fabsf(p.x - plane_x);
+        if (!s_spatial_point_valid[i]) continue;
+        const led_point_t *p = &s_spatial_points[i];
+        float dx = fabsf(p->x - plane_x);
         float crest = expf(-fabsf(dx - pos) / width);
         if (crest < 0.01f) continue;
-        float shimmer = 0.5f + 0.5f * sinf(0.20f * (p.y - stats->avg_y) - t_sec * 3.4f);
+        float shimmer = 0.5f + 0.5f * sinf(0.20f * (p->y - stats->avg_y) - t_sec * 3.4f);
         shimmer *= shimmer;
         add_mixed_color(buf, i, r, g, b, sr, sg, sb,
                         crest * (0.70f + 0.30f * shimmer),
@@ -1022,6 +1113,78 @@ static float hashf(float x)
 static float noise2(float x, float y)
 {
     return hashf(sinf(x * 12.9898f + y * 78.233f) * 43758.5453f);
+}
+
+static void render_chase_config(uint8_t *buf, size_t count, float t_sec,
+                                uint8_t r, uint8_t g, uint8_t b,
+                                int profile, bool background_enabled)
+{
+    if (count == 0) return;
+
+    if (background_enabled) {
+        uint8_t bg_r = (uint8_t)(r * 0.10f);
+        uint8_t bg_g = (uint8_t)(g * 0.10f);
+        uint8_t bg_b = (uint8_t)(b * 0.10f);
+        for (size_t i = 0; i < count; ++i) {
+            led_set_pixel_rgb(buf, i, bg_r, bg_g, bg_b);
+        }
+    }
+
+    static const float kSoloSpeeds[] = { 18.0f };
+    static const float kSoloOffsets[] = { 0.0f };
+    static const float kSoloTails[] = { 11.0f };
+
+    static const float kPairSpeeds[] = { 18.0f, 12.0f };
+    static const float kPairOffsets[] = { 0.00f, 0.44f };
+    static const float kPairTails[] = { 11.0f, 8.5f };
+
+    static const float kSwarmSpeeds[] = { 10.0f, 14.0f, 18.0f, 23.0f, 29.0f };
+    static const float kSwarmOffsets[] = { 0.00f, 0.19f, 0.41f, 0.67f, 0.83f };
+    static const float kSwarmTails[] = { 13.0f, 11.0f, 9.0f, 8.0f, 6.5f };
+
+    const float *speeds = kSoloSpeeds;
+    const float *offsets = kSoloOffsets;
+    const float *tails = kSoloTails;
+    size_t head_count = sizeof(kSoloSpeeds) / sizeof(kSoloSpeeds[0]);
+
+    if (profile == 1) {
+        speeds = kPairSpeeds;
+        offsets = kPairOffsets;
+        tails = kPairTails;
+        head_count = sizeof(kPairSpeeds) / sizeof(kPairSpeeds[0]);
+    } else if (profile == 2) {
+        speeds = kSwarmSpeeds;
+        offsets = kSwarmOffsets;
+        tails = kSwarmTails;
+        head_count = sizeof(kSwarmSpeeds) / sizeof(kSwarmSpeeds[0]);
+    }
+
+    for (size_t head_idx = 0; head_idx < head_count; ++head_idx) {
+        float head = fmodf(t_sec * speeds[head_idx] + offsets[head_idx] * (float)count,
+                           (float)count);
+        if (head < 0.0f) head += (float)count;
+        float tail = tails[head_idx];
+        float head_core = 0.7f + 0.14f * (float)head_idx;
+        if (head_core > 1.0f) head_core = 1.0f;
+
+        for (size_t i = 0; i < count; ++i) {
+            float delta = head - (float)i;
+            while (delta < 0.0f) delta += (float)count;
+            if (delta > tail) continue;
+
+            float trail = 1.0f - (delta / tail);
+            trail *= trail;
+            float head_glow = expf(-1.9f * fabsf((float)i - head));
+            float level = 0.58f * trail + head_core * head_glow;
+            if (level < 0.01f) continue;
+
+            float white = (s_highlight_mode == LED_HIGHLIGHT_PEAKS) ? (0.08f * head_glow) : 0.0f;
+            add_rgb(buf, i,
+                    level * (float)r + white * 255.0f,
+                    level * (float)g + white * 255.0f,
+                    level * (float)b + white * 255.0f);
+        }
+    }
 }
 
 static void render_twinkle(uint8_t *buf, size_t count, float t_sec,
@@ -1044,24 +1207,32 @@ static void render_twinkle(uint8_t *buf, size_t count, float t_sec,
 static void render_glitch(uint8_t *buf, size_t count, float t_sec,
                           uint8_t r, uint8_t g, uint8_t b)
 {
-    if (count == 0) return;
-    float head = fmodf(t_sec * 30.0f, (float)count);
-    if (head < 0.0f) head += (float)count;
-    float frame = floorf(t_sec * 26.0f);
+    float frame = floorf(t_sec * 24.0f);
     for (size_t i = 0; i < count; ++i) {
-        float d = fabsf((float)i - head);
-        float w = expf(-fminf(d, (float)count - d) / 8.0f);
-        float n = noise2((float)i * 1.7f, frame);
-        if (n > 0.992f) {
+        float n0 = noise2((float)i * 0.83f, frame);
+        float n1 = noise2((float)i * 1.91f + 17.0f, frame * 0.5f + 11.0f);
+        float n2 = noise2((float)i * 0.37f + 29.0f, frame * 0.25f + 7.0f);
+        if (n0 < 0.86f && n1 < 0.92f) continue;
+
+        float phase = t_sec * (8.0f + 12.0f * n2) + (float)i * (0.19f + 0.34f * n1);
+        float flicker = 0.5f + 0.5f * sinf(phase);
+        flicker *= flicker;
+
+        float w = 0.18f + 0.40f * flicker;
+        if (n0 > 0.985f || n1 > 0.992f) {
             w = 1.0f;
-        } else if (n > 0.97f) {
-            w = fmaxf(w, 0.65f);
+        } else if (n0 > 0.95f || n1 > 0.97f) {
+            w = fmaxf(w, 0.78f);
+        } else if (n0 > 0.90f || n1 > 0.94f) {
+            w = fmaxf(w, 0.52f);
         }
+
         if (w < 0.01f) continue;
-        float white = (s_highlight_mode == LED_HIGHLIGHT_PEAKS && n > 0.992f) ? 1.0f : 0.0f;
-        float rr = (float)r * w + 180.0f * white;
-        float gg = (float)g * w + 180.0f * white;
-        float bb = (float)b * w + 180.0f * white;
+        float white = (s_highlight_mode == LED_HIGHLIGHT_PEAKS &&
+                       (n0 > 0.985f || n1 > 0.992f)) ? 1.0f : 0.0f;
+        float rr = (float)r * w + 160.0f * white;
+        float gg = (float)g * w + 160.0f * white;
+        float bb = (float)b * w + 160.0f * white;
         if (rr > 255.0f) rr = 255.0f;
         if (gg > 255.0f) gg = 255.0f;
         if (bb > 255.0f) bb = 255.0f;
@@ -1186,6 +1357,13 @@ static void led_modes_task(void *arg)
             case 15: render_aurora(frame, count, &s_render_layout, &stats, render_t_sec, pr, pg, pb); break;
             case 16: render_vortex(frame, count, &s_render_layout, &stats, render_t_sec, pr, pg, pb); break;
             case 17: render_helix(frame, count, &s_render_layout, &stats, render_t_sec, pr, pg, pb); break;
+            case 18: render_sweep(frame, count, &s_render_layout, &stats, render_t_sec, pr, pg, pb); break;
+            case 19: render_blink_smooth(frame, count, render_t_sec, pr, pg, pb); break;
+            case 20: render_chase_config(frame, count, render_t_sec, pr, pg, pb, 1, false); break;
+            case 21: render_chase_config(frame, count, render_t_sec, pr, pg, pb, 2, false); break;
+            case 22: render_chase_config(frame, count, render_t_sec, pr, pg, pb, 0, true); break;
+            case 23: render_chase_config(frame, count, render_t_sec, pr, pg, pb, 1, true); break;
+            case 24: render_chase_config(frame, count, render_t_sec, pr, pg, pb, 2, true); break;
             default: render_fill(frame, count, 0, 0, 0); break;
         }
 
@@ -1218,6 +1396,6 @@ esp_err_t led_modes_start(void)
              (unsigned)custom_render_pixels(), (unsigned)period_ms, (unsigned)s_brightness);
 
     BaseType_t ok = xTaskCreatePinnedToCore(led_modes_task, "led_modes", 3072,
-                                            NULL, 4, &s_task, BG_TASK_CORE);
+                                            NULL, LED_MODES_TASK_PRIORITY, &s_task, BG_TASK_CORE);
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }

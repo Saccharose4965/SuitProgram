@@ -75,15 +75,41 @@ static esp_err_t ensure_wifi_base(void){
 }
 
 // ---- ESP-NOW ----
-static esp_err_t link_send_espnow(const uint8_t *data, size_t len){
+static bool mac_is_broadcast(const uint8_t *mac)
+{
+    static const uint8_t kBroadcast[ESP_NOW_ETH_ALEN] = {
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+    };
+    return mac && memcmp(mac, kBroadcast, sizeof(kBroadcast)) == 0;
+}
+
+static esp_err_t link_ensure_espnow_peer(const uint8_t *dest)
+{
+    if (!s_espnow_ready || !dest) return ESP_ERR_INVALID_STATE;
+    if (esp_now_is_peer_exist(dest)) return ESP_OK;
+
+    esp_now_peer_info_t peer = {0};
+    memcpy(peer.peer_addr, dest, ESP_NOW_ETH_ALEN);
+    peer.ifidx = WIFI_IF_STA;
+    peer.encrypt = false;
+    esp_err_t err = esp_now_add_peer(&peer);
+    if (err == ESP_ERR_ESPNOW_EXIST) return ESP_OK;
+    return err;
+}
+
+static esp_err_t link_send_espnow_to(const uint8_t *dest, const uint8_t *data, size_t len){
     if (!s_espnow_ready || !data || len == 0) return ESP_ERR_INVALID_STATE;
-    const uint8_t *dest = s_peer_mac;
+    if (!dest) dest = s_peer_mac;
+    esp_err_t err = link_ensure_espnow_peer(dest);
+    if (err != ESP_OK && !mac_is_broadcast(dest)) {
+        return err;
+    }
     return esp_now_send(dest, data, len);
 }
 
 static void espnow_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, int len){
-    (void)info;
     if (!data || len <= 0) return;
+    const uint8_t *src_mac = info ? info->src_addr : NULL;
 
     // Frame-aware path
     if (len >= LINK_HDR_LEN){
@@ -102,11 +128,11 @@ static void espnow_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data,
         } else if (flags & 0x40){ // ACK requested
             uint8_t ack[LINK_HDR_LEN] = { type, 0x80, 0, 0 };
             memcpy(ack + 2, &seq, 2);
-            link_send_espnow(ack, sizeof(ack));
+            link_send_espnow_to(src_mac, ack, sizeof(ack));
         }
 
         if (s_frame_cb){
-            s_frame_cb((link_msg_type_t)type, payload, plen, s_frame_ctx);
+            s_frame_cb((link_msg_type_t)type, src_mac, payload, plen, s_frame_ctx);
             return;
         }
     }
@@ -283,7 +309,7 @@ esp_err_t link_send(const uint8_t *data, size_t len){
     esp_err_t err = ESP_FAIL;
 
     if (s_active == LINK_PATH_ESPNOW){
-        err = link_send_espnow(data, len);
+        err = link_send_espnow_to(NULL, data, len);
         if (err == ESP_OK) return ESP_OK;
     }
     if (s_wifi_ready){
@@ -307,12 +333,12 @@ esp_err_t link_set_frame_rx(link_frame_cb_t cb, void *user_ctx){
     return ESP_OK;
 }
 
-static esp_err_t send_with_ack(const uint8_t *frame, size_t len){
+static esp_err_t send_with_ack_to(const uint8_t *dest, const uint8_t *frame, size_t len){
     if (!s_send_lock) return ESP_ERR_INVALID_STATE;
     if (xSemaphoreTake(s_send_lock, pdMS_TO_TICKS(200)) != pdTRUE) return ESP_ERR_TIMEOUT;
     esp_err_t err = ESP_FAIL;
     for (int attempt = 0; attempt < 3; ++attempt){
-        err = link_send_espnow(frame, len);
+        err = link_send_espnow_to(dest, frame, len);
         if (err != ESP_OK) continue;
         xEventGroupClearBits(s_ack_eg, LINK_ACK_BIT);
         EventBits_t bits = xEventGroupWaitBits(s_ack_eg, LINK_ACK_BIT, pdTRUE, pdTRUE, pdMS_TO_TICKS(60));
@@ -327,7 +353,8 @@ static esp_err_t send_with_ack(const uint8_t *frame, size_t len){
     return err;
 }
 
-esp_err_t link_send_frame(link_msg_type_t type, const uint8_t *payload, size_t len, bool require_ack){
+esp_err_t link_send_frame_to(const uint8_t *peer_mac, link_msg_type_t type,
+                             const uint8_t *payload, size_t len, bool require_ack){
     if (!payload && len > 0) return ESP_ERR_INVALID_ARG;
     if (len > LINK_MAX_PAYLOAD) return ESP_ERR_INVALID_SIZE;
     uint8_t buf[LINK_HDR_LEN + LINK_MAX_PAYLOAD];
@@ -338,7 +365,14 @@ esp_err_t link_send_frame(link_msg_type_t type, const uint8_t *payload, size_t l
     if (len) memcpy(buf + LINK_HDR_LEN, payload, len);
 
     if (s_active == LINK_PATH_ESPNOW && require_ack){
-        return send_with_ack(buf, LINK_HDR_LEN + len);
+        return send_with_ack_to(peer_mac, buf, LINK_HDR_LEN + len);
+    }
+    if (s_active == LINK_PATH_ESPNOW){
+        return link_send_espnow_to(peer_mac, buf, LINK_HDR_LEN + len);
     }
     return link_send(buf, LINK_HDR_LEN + len);
+}
+
+esp_err_t link_send_frame(link_msg_type_t type, const uint8_t *payload, size_t len, bool require_ack){
+    return link_send_frame_to(NULL, type, payload, len, require_ack);
 }

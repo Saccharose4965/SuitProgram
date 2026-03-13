@@ -49,6 +49,23 @@ static inline vec3 v3_scale(vec3 a, float s)
     return v3(a.x * s, a.y * s, a.z * s);
 }
 
+static inline float v3_dot(vec3 a, vec3 b)
+{
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+static inline float v3_len(vec3 a)
+{
+    return sqrtf(v3_dot(a, a));
+}
+
+static inline vec3 v3_norm(vec3 a)
+{
+    float n = v3_len(a);
+    if (n < 1e-6f) return v3(0.0f, -1.0f, 0.0f);
+    return v3_scale(a, 1.0f / n);
+}
+
 static inline quat q_ident(void)
 {
     return (quat){ 1.0f, 0.0f, 0.0f, 0.0f };
@@ -97,6 +114,19 @@ static inline quat apply_mount(quat q_sw, quat q_ds)
 {
     quat q_sd = q_conj(q_ds);
     return q_normed(q_mul(q_mul(q_ds, q_sw), q_sd));
+}
+
+static vec3 guess_upper_arm_dir(bool left_arm, vec3 forearm_dir)
+{
+    // The forearm IMU does not observe the shoulder joint, so infer a plausible
+    // upper-arm link by blending a relaxed hanging pose with the measured
+    // forearm direction and a small outward flare.
+    vec3 rest_dir = v3_norm(v3(left_arm ? -0.58f : 0.58f, -0.80f, 0.14f));
+    vec3 flare_dir = v3_norm(v3(left_arm ? -0.30f : 0.30f, -0.12f, 0.52f));
+    vec3 follow_dir = v3_norm(forearm_dir);
+    return v3_norm(v3_add(v3_scale(rest_dir, 0.78f),
+                          v3_add(v3_scale(follow_dir, 0.34f),
+                                 v3_scale(flare_dir, 0.20f))));
 }
 
 static inline void fb_pset(uint8_t *fb, int x, int y, int clip_x0, int clip_y0, int clip_x1, int clip_y1)
@@ -274,10 +304,15 @@ void stickman_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int 
     const vec3 active_shoulder = s_track_left_arm ? shoulder_l : shoulder_r;
     const vec3 static_shoulder = s_track_left_arm ? shoulder_r : shoulder_l;
     const float hand_sign = s_track_left_arm ? -1.0f : 1.0f;
+    const float upper_len = 14.0f;
+    const float fore_len = 16.0f;
+    const float hand_len = 3.5f;
 
-    const vec3 elbow = v3_add(active_shoulder, q_rotate(q_arm, v3(0.0f, -15.0f, 0.0f)));
-    const vec3 wrist = v3_add(elbow, q_rotate(q_arm, v3(0.0f, -15.0f, 0.0f)));
-    const vec3 hand_center = v3_add(wrist, q_rotate(q_arm, v3(0.0f, -3.5f, 0.0f)));
+    const vec3 forearm_dir = v3_norm(q_rotate(q_arm, v3(0.0f, -1.0f, 0.0f)));
+    const vec3 upper_dir = guess_upper_arm_dir(s_track_left_arm, forearm_dir);
+    const vec3 elbow = v3_add(active_shoulder, v3_scale(upper_dir, upper_len));
+    const vec3 wrist = v3_add(elbow, v3_scale(forearm_dir, fore_len));
+    const vec3 hand_center = v3_add(wrist, v3_scale(forearm_dir, hand_len));
     const vec3 hand_span = q_rotate(q_arm, v3(4.0f * hand_sign, 0.0f, 0.0f));
     const vec3 hand_a = v3_sub(hand_center, hand_span);
     const vec3 hand_b = v3_add(hand_center, hand_span);

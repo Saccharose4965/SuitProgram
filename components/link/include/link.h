@@ -17,6 +17,7 @@ typedef enum {
     LINK_MSG_INFO    = 1, // status/telemetry
     LINK_MSG_MESSAGE = 2, // user data / file header etc.
     LINK_MSG_GAME    = 3, // game control (e.g., Pong)
+    LINK_MSG_CONTROL = 4, // master/slave control + sync
 } link_msg_type_t;
 
 typedef struct {
@@ -31,7 +32,8 @@ typedef struct {
 } link_config_t;
 
 typedef void (*link_rx_cb_t)(const uint8_t *data, size_t len, void *user_ctx);
-typedef void (*link_frame_cb_t)(link_msg_type_t type, const uint8_t *payload, size_t len, void *user_ctx);
+typedef void (*link_frame_cb_t)(link_msg_type_t type, const uint8_t *src_mac,
+                                const uint8_t *payload, size_t len, void *user_ctx);
 
 // Initialize link layer. Will attempt ESP-NOW first (stub for now), fall back to Wi-Fi/UDP.
 esp_err_t link_init(const link_config_t *cfg);
@@ -49,6 +51,8 @@ esp_err_t link_set_rx(link_rx_cb_t cb, void *user_ctx);
 
 // Framed send with optional ACK on ESP-NOW. Flags: ack requested only if supported.
 esp_err_t link_send_frame(link_msg_type_t type, const uint8_t *payload, size_t len, bool require_ack);
+esp_err_t link_send_frame_to(const uint8_t *peer_mac, link_msg_type_t type,
+                             const uint8_t *payload, size_t len, bool require_ack);
 esp_err_t link_set_frame_rx(link_frame_cb_t cb, void *user_ctx);
 
 // Optional periodic info broadcast using system_state snapshot (battery, LED mode, connection, time).

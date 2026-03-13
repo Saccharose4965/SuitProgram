@@ -102,6 +102,8 @@ From `main/app_shell.c` (`s_builtin_apps`):
 - `menu`
 - `status`
 - `volume`
+- `preferences`
+- `master_control`
 - `service_restart`
 - `adc_debug`
 - `calculator`
@@ -112,6 +114,7 @@ From `main/app_shell.c` (`s_builtin_apps`):
 - `fft_sync`
 - `music`
 - `bt`
+- `message`
 - `file_rx`
 - `keyboard`
 - `fft`
@@ -151,6 +154,8 @@ Settings:
 - ADC Debug
 - Bluetooth
 - Volume
+- Preferences
+- Master Control
 - Svc Restart
 - Restart
 
@@ -213,6 +218,11 @@ Volume (`main/app_volume.c`):
 - `B`: volume -0.1
 - `D`: mute toggle
 
+Preferences (`main/app_preferences.c`):
+- `A`: choose shell direction icons
+- `B`: choose 2048 direction icons
+- `C`: toggle direction icon family
+
 LED Audio / LED Custom (`main/app_leds.c`):
 - `A`: up in list
 - `B`: down in list
@@ -262,6 +272,20 @@ Manual BPM (`main/app_manual_bpm.c`):
 - `C/D`: trigger offset back/forward
 - Progress bar shows cycle position
 - Marker shows the beat trigger offset within the cycle
+
+Master Control (`main/app_master_control.c`):
+- `A/B`: move up/down through the settings rows
+- `C/D`: change the selected row value
+- Rows:
+  - `ratio`: `match`, `1/2`, `2/1`
+  - `phase`: `0`, `offbeat`
+  - `color`: `tron`, `match`, `free`
+  - `control`: `off`, `on`
+- When `control` is `on`, the device becomes the timing master and keeps syncing in the background
+- It mirrors the real active beat source (`Manual BPM` or `FFT Sync`) instead of owning BPM or animation itself
+- `tron` forces master blue and slave orange
+- `match` sends the current beat primary/secondary colors
+- `free` leaves colors local on each device while still syncing mode/timing
 
 FFT Sync (`main/app_fft_sync.c`):
 - `A/B`: shift FFT beat trigger phase backward/forward
@@ -314,9 +338,10 @@ Arm Pose (`main/app_stickman.c`):
 - Renders a simple projected stick figure with the selected arm driven by IMU orientation
 
 Message (`main/app_message.c`):
+- `A`: start/stop mic recording
 - `B`: play/stop the current saved message
-- `C`: start/stop mic recording
 - `D`: send the current saved message
+- Recording is forced to the left mic slot
 - Records save to `/sdcard/messages/outbox`; incoming files go to `/sdcard/messages/inbox`
 
 Keyboard/Fluid/Pong/Snake/Flappy/2048/Tetris:

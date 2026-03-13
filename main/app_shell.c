@@ -76,7 +76,8 @@ static shell_app_context_t s_ctx = {0};
 
 static const uint32_t SHELL_FRAME_BUDGET_US = 16667u;
 
-static void link_frame_handler(link_msg_type_t type, const uint8_t *payload, size_t len, void *user_ctx);
+static void link_frame_handler(link_msg_type_t type, const uint8_t *src_mac,
+                               const uint8_t *payload, size_t len, void *user_ctx);
 static uint8_t s_peer_mac_cfg[6] = {0};
 
 static int hex_nib(char c){
@@ -421,10 +422,13 @@ static void shell_graceful_restart(void)
 
 // Link frame dispatch (shared across apps)
 // we may want to split this out into a separate component
-static void link_frame_handler(link_msg_type_t type, const uint8_t *payload, size_t len, void *user_ctx)
+static void link_frame_handler(link_msg_type_t type, const uint8_t *src_mac,
+                               const uint8_t *payload, size_t len, void *user_ctx)
 {
     (void)user_ctx;
-    if (type == LINK_MSG_GAME && payload && len >= 2){
+    if (type == LINK_MSG_CONTROL && payload && len >= 2) {
+        master_control_handle_link_frame(type, src_mac, payload, len);
+    } else if (type == LINK_MSG_GAME && payload && len >= 2){
         pong_handle_link_frame(type, payload, len);
     } else if (type == LINK_MSG_INFO && payload && len >= 9){
         // Versioned system_state snapshot
@@ -493,6 +497,28 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .tick   = NULL,
         .handle_input = volume_handle_input,
         .draw   = volume_draw,
+    },
+    {
+        .id     = "preferences",
+        .name   = "Preferences",
+        .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &PREFERENCES_LEGEND,
+        .init   = preferences_app_init,
+        .deinit = NULL,
+        .tick   = NULL,
+        .handle_input = preferences_app_handle_input,
+        .draw   = preferences_app_draw,
+    },
+    {
+        .id     = "master_control",
+        .name   = "Master Control",
+        .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &MASTER_CONTROL_LEGEND,
+        .init   = master_control_app_init,
+        .deinit = master_control_app_deinit,
+        .tick   = NULL,
+        .handle_input = master_control_app_handle_input,
+        .draw   = master_control_app_draw,
     },
     {
         .id     = "service_restart",
@@ -728,7 +754,7 @@ static const shell_app_desc_t s_builtin_apps[] = {
     {
         .id     = "t2048",
         .name   = "2048 (legacy)",
-        .flags  = 0,
+        .flags  = SHELL_APP_FLAG_SHOW_LEGEND,
         .legend = &T2048_LEGEND,
         .init   = t2048_app_init,
         .deinit = t2048_app_deinit,
@@ -936,7 +962,9 @@ static void shell_run_loop(void)
             continue;
         }
 
-        if (app->tick) {
+        master_control_service_tick(dt_sec);
+
+        if (app->tick && !master_control_service_blocks_app_tick(app->id)) {
             int64_t t0 = esp_timer_get_time();
             app->tick(&s_ctx, dt_sec);
             tick_us = (uint32_t)(esp_timer_get_time() - t0);

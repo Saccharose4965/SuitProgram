@@ -2,6 +2,7 @@
 
 #include "app_shell.h"
 #include "app_keyboard.h"
+#include "link.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -22,6 +23,21 @@ void volume_init(shell_app_context_t *ctx);
 void volume_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void volume_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t VOLUME_LEGEND;
+
+void preferences_app_init(shell_app_context_t *ctx);
+void preferences_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
+void preferences_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
+extern const shell_legend_t PREFERENCES_LEGEND;
+
+void master_control_app_init(shell_app_context_t *ctx);
+void master_control_app_deinit(shell_app_context_t *ctx);
+void master_control_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
+void master_control_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
+void master_control_service_tick(float dt_sec);
+bool master_control_service_blocks_app_tick(const char *app_id);
+void master_control_handle_link_frame(link_msg_type_t type, const uint8_t *src_mac,
+                                      const uint8_t *payload, size_t len);
+extern const shell_legend_t MASTER_CONTROL_LEGEND;
 
 void service_restart_app_init(shell_app_context_t *ctx);
 void service_restart_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
@@ -47,11 +63,19 @@ void led_layout_app_handle_input(shell_app_context_t *ctx, const input_event_t *
 void led_layout_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t LED_LAYOUT_LEGEND;
 
+typedef struct {
+    bool active;
+    float bpm;
+    float cycle_phase;
+    float phase_offset;
+} manual_bpm_sync_state_t;
+
 void manual_bpm_app_init(shell_app_context_t *ctx);
 void manual_bpm_app_deinit(shell_app_context_t *ctx);
 void manual_bpm_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void manual_bpm_app_tick(shell_app_context_t *ctx, float dt_sec);
 void manual_bpm_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
+bool manual_bpm_get_sync_state(manual_bpm_sync_state_t *out);
 extern const shell_legend_t MANUAL_BPM_LEGEND;
 
 void fft_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
@@ -80,7 +104,7 @@ void message_app_init(shell_app_context_t *ctx);
 void message_app_deinit(shell_app_context_t *ctx);
 void message_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void message_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
-extern const shell_legend_t MESSAGE_LEGEND;
+extern shell_legend_t MESSAGE_LEGEND;
 
 void file_rx_app_init(shell_app_context_t *ctx);
 void file_rx_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);

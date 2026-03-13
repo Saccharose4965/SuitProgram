@@ -28,7 +28,8 @@
 // Tuned down for ESP32 runtime to avoid watchdog stalls.
 #define PARTICLE_COUNT 260
 #define SIM_DT 0.12f
-#define SUBSTEPS 2
+#define FLUID_SUBSTEPS_DEFAULT 2
+#define FLUID_SUBSTEPS_MIN 1
 #define RELAX_ITERS 1
 
 #define INTERACTION_RADIUS 4.0f
@@ -466,14 +467,18 @@ static void sample_gravity_xy(float *out_gx, float *out_gy)
     *out_gy = gy;
 }
 
-static void fluid_step_once(void)
+static void fluid_step_once_with_substeps(int substeps)
 {
     float gx = 0.0f;
     float gy = 0.0f;
     sample_gravity_xy(&gx, &gy);
 
-    float hdt = SIM_DT / (float)SUBSTEPS;
-    for (int s = 0; s < SUBSTEPS; ++s) {
+    if (substeps < FLUID_SUBSTEPS_MIN) {
+        substeps = FLUID_SUBSTEPS_MIN;
+    }
+
+    float hdt = SIM_DT / (float)substeps;
+    for (int s = 0; s < substeps; ++s) {
         step_sub(hdt, gx, gy);
     }
 
@@ -481,16 +486,41 @@ static void fluid_step_once(void)
     publish_mask_snapshot();
 }
 
+static void fluid_step_once(void)
+{
+    fluid_step_once_with_substeps(FLUID_SUBSTEPS_DEFAULT);
+}
+
 static void fluid_task_fn(void *arg)
 {
     (void)arg;
-    TickType_t last_wake = xTaskGetTickCount();
     TickType_t period = pdMS_TO_TICKS(FLUID_SIM_PERIOD_MS);
+    int substeps = FLUID_SUBSTEPS_DEFAULT;
     if (period < 1) period = 1;
 
     while (!s_fluid_task_stop) {
-        fluid_step_once();
-        vTaskDelayUntil(&last_wake, period);
+        TickType_t frame_start = xTaskGetTickCount();
+        fluid_step_once_with_substeps(substeps);
+        TickType_t elapsed = xTaskGetTickCount() - frame_start;
+
+        if (elapsed >= period) {
+            if (substeps > FLUID_SUBSTEPS_MIN) {
+                substeps--;
+                ESP_LOGW(TAG, "fluid over budget (%ums), reducing substeps to %d",
+                         (unsigned)(elapsed * portTICK_PERIOD_MS), substeps);
+            }
+            // Never try to catch up forever; always yield so IDLE1 can run.
+            vTaskDelay(1);
+            continue;
+        }
+
+        if (substeps < FLUID_SUBSTEPS_DEFAULT && elapsed + 1 < period) {
+            substeps++;
+            ESP_LOGI(TAG, "fluid headroom recovered (%ums), restoring substeps to %d",
+                     (unsigned)(elapsed * portTICK_PERIOD_MS), substeps);
+        }
+
+        vTaskDelay(period - elapsed);
     }
 
     s_fluid_task = NULL;

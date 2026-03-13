@@ -27,7 +27,7 @@ static const int kBoardY0 = 0;
 
 // Framebuffer helpers
 static uint8_t g_fb[PANEL_W * PANEL_H / 8];
-static uint8_t g_bg[PANEL_W * PANEL_H / 8]; // static background (grid + arrows)
+static uint8_t g_bg[PANEL_W * PANEL_H / 8]; // static background (grid only)
 static inline void fb_clear(void){ memset(g_fb, 0, sizeof(g_fb)); }
 static inline void fb_pset(int x, int y){
     if ((unsigned)x >= PANEL_W || (unsigned)y >= PANEL_H) return;
@@ -55,19 +55,6 @@ static void blit_tile(const uint16_t *rows, int size, int x, int y){
         int yy = y + dy;
         if ((unsigned)yy >= PANEL_H) continue;
         uint16_t bits = rows[dy];
-        for (int dx = 0; dx < size; ++dx){
-            int xx = x + dx;
-            if ((unsigned)xx >= PANEL_W) continue;
-            if (bits & (1u << (size - 1 - dx))) fb_pset(xx, yy);
-        }
-    }
-}
-
-static void blit_arrow(const uint8_t *rows, int size, int x, int y){
-    for (int dy = 0; dy < size; ++dy){
-        int yy = y + dy;
-        if ((unsigned)yy >= PANEL_H) continue;
-        uint8_t bits = rows[dy];
         for (int dx = 0; dx < size; ++dx){
             int xx = x + dx;
             if ((unsigned)xx >= PANEL_W) continue;
@@ -118,16 +105,6 @@ static void build_background(void){
             int y = kBoardY0 + r * T48_STRIDE;
             draw_rect(x, y, T48_TILE, T48_TILE);
         }
-    }
-    // Arrows along the bottom with small margins (A=left, B=up, C=right, D=down)
-    const int margin = 6;
-    const int spacing = (PANEL_W - 2 * margin - (T48_ARROW_SIZE * T48_ARROW_COUNT)) / (T48_ARROW_COUNT - 1);
-    int arrow_y = PANEL_H - T48_ARROW_SIZE - 1;
-    int x = margin;
-    const int order[4] = {3, 0, 1, 2}; // indices into t48_arrows_5 (up,right,down,left)
-    for (int i = 0; i < T48_ARROW_COUNT; ++i){
-        blit_arrow(t48_arrows_5[order[i]], T48_ARROW_SIZE, x, arrow_y);
-        x += T48_ARROW_SIZE + spacing;
     }
     memcpy(g_bg, g_fb, sizeof(g_fb));
 }

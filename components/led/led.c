@@ -263,6 +263,7 @@ typedef struct {
     uint8_t r;
     uint8_t g;
     uint8_t b;
+    bool span_mode;
     bool active;
 } led_plane_sweep_t;
 
@@ -280,7 +281,8 @@ typedef struct {
 } led_geo_layout_stats_t;
 
 static led_pulse_t s_pulses[10];
-static led_comet_t s_comet;
+#define LED_COMET_SLOTS 6
+static led_comet_t s_comets[LED_COMET_SLOTS];
 static uint8_t *s_frame = NULL;        // Packed data for entire strip (RGB)
 static StaticSemaphore_t s_pulse_lock_buf;
 static SemaphoreHandle_t s_pulse_lock = NULL;
@@ -308,6 +310,7 @@ static volatile led_color_cycle_t s_beat_color_cycle = LED_COLOR_CYCLE_STATIC;
 static volatile led_color_style_t s_beat_color_style = LED_COLOR_STYLE_MONO;
 static volatile led_highlight_mode_t s_beat_highlight_mode = LED_HIGHLIGHT_OFF;
 static volatile bool s_beat_plane_background_enabled = false;
+static volatile bool s_beat_ring_background_enabled = false;
 static volatile bool s_audio_brightness_enabled = false;
 static volatile led_audio_energy_range_t s_audio_energy_range = LED_AUDIO_ENERGY_RANGE_FULL;
 static uint8_t s_beat_brightness = 96;
@@ -316,6 +319,7 @@ static float s_audio_energy_phase = 0.0f;
 static volatile float s_audio_raw_volume = 0.0f;
 static led_beat_anim_t s_beat_random_anim = LED_BEAT_ANIM_FLASH;
 static int64_t s_beat_random_next_switch_us = 0;
+static int64_t s_breathe_anchor_us = 0;
 static uint8_t s_spark_r = 255;
 static uint8_t s_spark_g = 96;
 static uint8_t s_spark_b = 0;
@@ -359,6 +363,7 @@ static const float kLedCometTailMin = 10.0f;
 static const float kLedCometTailMax = 52.0f;
 static const float kLedCometDecay = 0.993f;
 static const float kLedCometHeadLead = 1.5f;
+static const float kLedCometBackgroundScale = 0.10f;
 static const float kLedGeoRingDecay = 1.0f;
 static const float kLedGeoPlaneDecay = 0.973f;
 static const float kLedGeoRingSpeedUnitsPerSec = 30.0f; // layout units are treated as cm
@@ -368,11 +373,13 @@ static const float kLedGeoPlaneSpeedFactor = 2.0f;
 static const size_t kLedGeoRingTrainWagons = 4u;
 static const float kLedGeoRingTrainWidthScale = 0.42f;
 static const float kLedGeoPlaneBackgroundScale = 0.18f;
+static const float kLedGeoRingBackgroundScale = 0.18f;
 static int8_t s_comet_spawn_dir = 1;
 
 static void led_pulse_start_task(void);
 static bool led_beat_mode_uses_ring(led_beat_anim_t mode);
 static bool led_beat_mode_uses_plane(led_beat_anim_t mode);
+static bool led_beat_mode_uses_chase_background(led_beat_anim_t mode);
 
 static uint8_t lerp_u8(uint8_t a, uint8_t b, float t)
 {
@@ -1159,7 +1166,7 @@ static void led_spark_seed_locked(uint8_t r, uint8_t g, uint8_t b)
 
 static void led_comet_clear_locked(void)
 {
-    memset(&s_comet, 0, sizeof(s_comet));
+    memset(s_comets, 0, sizeof(s_comets));
 }
 
 static void led_geo_clear_locked(void)
@@ -1197,12 +1204,13 @@ static void led_beat_clear_effect_state_locked(void)
     led_comet_clear_locked();
     s_flash_ticks = 0;
     s_wave_amp = 0.0f;
+    s_breathe_anchor_us = 0;
 }
 
 static led_beat_anim_t led_beat_pick_random_anim_locked(led_beat_anim_t prev_mode)
 {
     const int first = LED_BEAT_ANIM_FLASH;
-    const int last = LED_BEAT_ANIM_AUDIO_ENERGY;
+    const int last = LED_BEAT_ANIM_SOFT_FLASH;
     const int count = last - first + 1;
     int picked = first + (int)(esp_random() % (uint32_t)count);
     if (count > 1 && picked == (int)prev_mode) {
@@ -1218,7 +1226,7 @@ static led_beat_anim_t led_beat_effective_mode_locked(int64_t now_us)
     }
 
     if (s_beat_random_anim < LED_BEAT_ANIM_FLASH ||
-        s_beat_random_anim > LED_BEAT_ANIM_AUDIO_ENERGY ||
+        s_beat_random_anim > LED_BEAT_ANIM_SOFT_FLASH ||
         now_us >= s_beat_random_next_switch_us) {
         led_beat_anim_t next = led_beat_pick_random_anim_locked(s_beat_random_anim);
         if (next != s_beat_random_anim) {
@@ -1257,9 +1265,58 @@ static bool led_geo_fill_plane_background_locked(size_t count, float brightness_
     }
 
     float scale = brightness_scale * kLedGeoPlaneBackgroundScale;
-    uint8_t bg_r = (uint8_t)(scale * (float)s_beat_secondary_r);
-    uint8_t bg_g = (uint8_t)(scale * (float)s_beat_secondary_g);
-    uint8_t bg_b = (uint8_t)(scale * (float)s_beat_secondary_b);
+    uint8_t pr = 0, pg = 0, pb = 0;
+    float t_sec = (float)esp_timer_get_time() / 1000000.0f;
+    led_beat_sample_primary_color(t_sec, &pr, &pg, &pb);
+    uint8_t bg_r = (uint8_t)(scale * (float)pr);
+    uint8_t bg_g = (uint8_t)(scale * (float)pg);
+    uint8_t bg_b = (uint8_t)(scale * (float)pb);
+    if (bg_r == 0 && bg_g == 0 && bg_b == 0) {
+        return false;
+    }
+
+    for (size_t led = 0; led < count; ++led) {
+        led_set_pixel_rgb(s_pulse_frame, led, bg_r, bg_g, bg_b);
+    }
+    return true;
+}
+
+static bool led_geo_fill_ring_background_locked(size_t count, float brightness_scale)
+{
+    if (!s_beat_ring_background_enabled || count == 0 || brightness_scale <= 0.0f) {
+        return false;
+    }
+
+    float scale = brightness_scale * kLedGeoRingBackgroundScale;
+    uint8_t pr = 0, pg = 0, pb = 0;
+    float t_sec = (float)esp_timer_get_time() / 1000000.0f;
+    led_beat_sample_primary_color(t_sec, &pr, &pg, &pb);
+    uint8_t bg_r = (uint8_t)(scale * (float)pr);
+    uint8_t bg_g = (uint8_t)(scale * (float)pg);
+    uint8_t bg_b = (uint8_t)(scale * (float)pb);
+    if (bg_r == 0 && bg_g == 0 && bg_b == 0) {
+        return false;
+    }
+
+    for (size_t led = 0; led < count; ++led) {
+        led_set_pixel_rgb(s_pulse_frame, led, bg_r, bg_g, bg_b);
+    }
+    return true;
+}
+
+static bool led_comet_fill_background_locked(size_t count, float brightness_scale)
+{
+    if (count == 0 || brightness_scale <= 0.0f) {
+        return false;
+    }
+
+    float scale = brightness_scale * kLedCometBackgroundScale;
+    uint8_t pr = 0, pg = 0, pb = 0;
+    float t_sec = (float)esp_timer_get_time() / 1000000.0f;
+    led_beat_sample_primary_color(t_sec, &pr, &pg, &pb);
+    uint8_t bg_r = (uint8_t)(scale * (float)pr);
+    uint8_t bg_g = (uint8_t)(scale * (float)pg);
+    uint8_t bg_b = (uint8_t)(scale * (float)pb);
     if (bg_r == 0 && bg_g == 0 && bg_b == 0) {
         return false;
     }
@@ -1422,7 +1479,7 @@ static void led_geo_plane_spawn_locked(uint8_t r, uint8_t g, uint8_t b,
 
     for (size_t i = 0; i < LED_GEO_PLANE_SLOTS; ++i) {
         led_plane_sweep_t *sweep = &s_plane_sweeps[i];
-        if (!sweep->active) continue;
+        if (!sweep->active || sweep->span_mode) continue;
         float sweep_extent = led_geo_projection_extent(&stats, sweep->nx, sweep->ny, sweep->nz);
         sweep->speed = kLedGeoPlaneSpeedFactor *
                        (2.0f * (sweep_extent + sweep->width)) / period_sec;
@@ -1453,6 +1510,60 @@ static void led_geo_plane_spawn_locked(uint8_t r, uint8_t g, uint8_t b,
     slot->offset = -extent - width;
     slot->speed = kLedGeoPlaneSpeedFactor * (2.0f * (extent + width)) / period_sec;
     slot->amp = 1.0f;
+    slot->span_mode = false;
+    slot->active = true;
+}
+
+static void led_geo_plane_span_trigger_locked(uint8_t r, uint8_t g, uint8_t b)
+{
+    size_t active = led_active_count();
+    if (active == 0) return;
+    led_layout_snapshot(&s_effect_layout);
+    if (s_effect_layout.total_leds > 0 && active > s_effect_layout.total_leds) {
+        active = s_effect_layout.total_leds;
+    }
+
+    led_geo_layout_stats_t stats;
+    led_geo_layout_stats(&s_effect_layout, active, &stats);
+
+    float angle = ((float)(esp_random() & 1023u) / 1023.0f) * kLedWaveTwoPi;
+    float tilt = ((float)((int)(esp_random() & 255u) - 128) / 128.0f) * 0.20f;
+    float nx = cosf(angle);
+    float ny = sinf(angle);
+    float nz = tilt;
+    float inv_len = 1.0f / sqrtf(nx * nx + ny * ny + nz * nz);
+    nx *= inv_len;
+    ny *= inv_len;
+    nz *= inv_len;
+
+    float width = 1.1f + 0.12f * stats.radial_max;
+
+    led_plane_sweep_t *slot = NULL;
+    float weakest = FLT_MAX;
+    for (size_t i = 0; i < LED_GEO_PLANE_SLOTS; ++i) {
+        led_plane_sweep_t *sweep = &s_plane_sweeps[i];
+        if (!sweep->active) {
+            slot = sweep;
+            break;
+        }
+        if (sweep->amp < weakest) {
+            weakest = sweep->amp;
+            slot = sweep;
+        }
+    }
+    if (!slot) return;
+
+    slot->r = r;
+    slot->g = g;
+    slot->b = b;
+    slot->nx = nx;
+    slot->ny = ny;
+    slot->nz = nz;
+    slot->width = width;
+    slot->offset = 0.0f;
+    slot->speed = 0.0f;
+    slot->amp = 1.0f;
+    slot->span_mode = true;
     slot->active = true;
 }
 
@@ -1551,19 +1662,28 @@ static bool led_geo_plane_render_locked(const led_layout_config_t *cfg, size_t c
             float proj = (p.x - cx) * sweep->nx +
                          (p.y - cy) * sweep->ny +
                          (p.z - cz) * sweep->nz;
-            float crest = led_geo_compact_wave(proj, sweep->offset, sweep->width);
+            float crest = sweep->span_mode
+                ? expf(-fabsf(proj - sweep->offset) / sweep->width)
+                : led_geo_compact_wave(proj, sweep->offset, sweep->width);
             if (crest <= 0.0f) continue;
             float trail = 0.0f;
-            float behind = sweep->offset - proj;
-            if (behind > 0.0f) {
-                trail = expf(-behind / (2.2f * sweep->width));
+            if (!sweep->span_mode) {
+                float behind = sweep->offset - proj;
+                if (behind > 0.0f) {
+                    trail = expf(-behind / (2.2f * sweep->width));
+                }
             }
             float primary = sweep->amp * brightness_scale *
-                            (background_enabled
+                            (sweep->span_mode
+                                ? (background_enabled ? (1.08f * crest)
+                                                      : (0.88f * crest))
+                                : (background_enabled
                                 ? (1.18f * crest + 0.30f * trail)
-                                : (0.92f * crest + 0.18f * trail));
+                                : (0.92f * crest + 0.18f * trail)));
             float white = sweep->amp * brightness_scale * white_scale *
-                          (background_enabled ? 0.14f : 0.08f) * crest * crest;
+                          ((sweep->span_mode
+                              ? (background_enabled ? 0.12f : 0.07f)
+                              : (background_enabled ? 0.14f : 0.08f))) * crest * crest;
             led_geo_add_rgb_locked(
                 i,
                 primary * (float)sweep->r + white * 255.0f,
@@ -1573,9 +1693,13 @@ static bool led_geo_plane_render_locked(const led_layout_config_t *cfg, size_t c
         }
 
         rendered = true;
-        sweep->offset += sweep->speed * kLedPulseDt;
+        if (!sweep->span_mode) {
+            sweep->offset += sweep->speed * kLedPulseDt;
+        }
         sweep->amp *= kLedGeoPlaneDecay;
-        if (sweep->offset > extent + sweep->width || sweep->amp < 0.04f) {
+        if ((sweep->span_mode && sweep->amp < 0.04f) ||
+            (!sweep->span_mode &&
+             (sweep->offset > extent + sweep->width || sweep->amp < 0.04f))) {
             sweep->active = false;
         }
     }
@@ -1621,7 +1745,27 @@ static bool led_audio_energy_render_locked(const led_layout_config_t *cfg, size_
     return true;
 }
 
-static void led_comet_trigger_locked(uint8_t r, uint8_t g, uint8_t b)
+static led_comet_t *led_comet_pick_slot_locked(void)
+{
+    led_comet_t *slot = NULL;
+    float weakest = FLT_MAX;
+    for (size_t i = 0; i < LED_COMET_SLOTS; ++i) {
+        led_comet_t *comet = &s_comets[i];
+        if (!comet->active) {
+            return comet;
+        }
+        if (comet->amp < weakest) {
+            weakest = comet->amp;
+            slot = comet;
+        }
+    }
+    return slot;
+}
+
+static void led_comet_spawn_locked(uint8_t r, uint8_t g, uint8_t b,
+                                   int8_t dir, float speed_scale,
+                                   float tail_scale, float phase_offset,
+                                   float amp)
 {
     size_t active = led_active_count();
     if (active == 0) return;
@@ -1629,22 +1773,60 @@ static void led_comet_trigger_locked(uint8_t r, uint8_t g, uint8_t b)
     if (period_sec < kLedPulseMinPeriodSec) period_sec = kLedPulseMinPeriodSec;
     if (period_sec > kLedPulseMaxPeriodSec) period_sec = kLedPulseMaxPeriodSec;
 
-    float tail_leds = 0.08f * (float)active;
+    float tail_leds = 0.08f * (float)active * tail_scale;
     if (tail_leds < kLedCometTailMin) tail_leds = kLedCometTailMin;
     if (tail_leds > kLedCometTailMax) tail_leds = kLedCometTailMax;
+    if (phase_offset < 0.0f) phase_offset = 0.0f;
+    if (amp < 0.12f) amp = 0.12f;
 
-    s_comet.r = r;
-    s_comet.g = g;
-    s_comet.b = b;
-    s_comet.amp = 1.0f;
-    s_comet.tail_leds = tail_leds;
-    // Match one comet traverse to roughly one beat period so it can complete
-    // the front/back loop before the next beat retriggers it.
+    led_comet_t *slot = led_comet_pick_slot_locked();
+    if (!slot) return;
+
     float travel_span = (float)active + tail_leds + kLedCometHeadLead;
-    s_comet.speed = travel_span / period_sec;
-    s_comet.dir = s_comet_spawn_dir;
-    s_comet.head = (s_comet.dir > 0) ? -kLedCometHeadLead : ((float)active + kLedCometHeadLead);
-    s_comet.active = true;
+    slot->r = r;
+    slot->g = g;
+    slot->b = b;
+    slot->amp = amp;
+    slot->tail_leds = tail_leds;
+    slot->speed = speed_scale * (travel_span / period_sec);
+    slot->dir = (dir >= 0) ? 1 : -1;
+    slot->head = (slot->dir > 0)
+        ? (-kLedCometHeadLead - phase_offset * travel_span)
+        : ((float)active + kLedCometHeadLead + phase_offset * travel_span);
+    slot->active = true;
+}
+
+static void led_comet_trigger_locked(uint8_t r, uint8_t g, uint8_t b, int profile)
+{
+    int8_t dir = s_comet_spawn_dir;
+
+    if (profile <= 0) {
+        led_comet_spawn_locked(r, g, b, dir, 1.0f, 1.00f, 0.00f, 1.00f);
+    } else if (profile == 1) {
+        static const float kPairSpeeds[] = { 1.00f, 1.42f };
+        static const float kPairTails[] = { 1.00f, 0.76f };
+        static const float kPairOffsets[] = { 0.00f, 0.38f };
+        static const float kPairAmps[] = { 1.00f, 0.82f };
+        for (size_t i = 0; i < sizeof(kPairSpeeds) / sizeof(kPairSpeeds[0]); ++i) {
+            led_comet_spawn_locked(r, g, b, dir,
+                                   kPairSpeeds[i],
+                                   kPairTails[i],
+                                   kPairOffsets[i],
+                                   kPairAmps[i]);
+        }
+    } else {
+        static const float kSwarmSpeeds[] = { 0.62f, 0.84f, 1.00f, 1.28f, 1.56f };
+        static const float kSwarmTails[] = { 1.18f, 1.00f, 0.86f, 0.74f, 0.62f };
+        static const float kSwarmOffsets[] = { 0.00f, 0.17f, 0.34f, 0.56f, 0.78f };
+        static const float kSwarmAmps[] = { 1.00f, 0.92f, 0.84f, 0.74f, 0.66f };
+        for (size_t i = 0; i < sizeof(kSwarmSpeeds) / sizeof(kSwarmSpeeds[0]); ++i) {
+            led_comet_spawn_locked(r, g, b, dir,
+                                   kSwarmSpeeds[i],
+                                   kSwarmTails[i],
+                                   kSwarmOffsets[i],
+                                   kSwarmAmps[i]);
+        }
+    }
 
     s_spark_r = r;
     s_spark_g = g;
@@ -1654,65 +1836,59 @@ static void led_comet_trigger_locked(uint8_t r, uint8_t g, uint8_t b)
 
 static bool led_comet_step_locked(float brightness_scale)
 {
-    if (!s_comet.active) return false;
     size_t active = led_active_count();
     if (active == 0) {
-        s_comet.active = false;
+        led_comet_clear_locked();
         return false;
     }
 
-    s_comet.head += (float)s_comet.dir * s_comet.speed * kLedPulseDt;
-    s_comet.amp *= kLedCometDecay;
+    bool rendered = false;
+    for (size_t comet_idx = 0; comet_idx < LED_COMET_SLOTS; ++comet_idx) {
+        led_comet_t *comet = &s_comets[comet_idx];
+        if (!comet->active) continue;
 
-    const float max_pos = (float)active + s_comet.tail_leds;
-    const float min_pos = -s_comet.tail_leds;
-    if (s_comet.head > max_pos || s_comet.head < min_pos || s_comet.amp < 0.08f){
-        s_comet.active = false;
-        return false;
-    }
+        comet->head += (float)comet->dir * comet->speed * kLedPulseDt;
+        comet->amp *= kLedCometDecay;
 
-    // Add occasional "ionized" spark fragments behind the head.
-    if ((esp_random() & 0x7u) == 0u){
-        uint32_t trail_span = (uint32_t)(0.6f * s_comet.tail_leds);
-        if (trail_span < 2u) trail_span = 2u;
-        int trail_leds = (int)(esp_random() % trail_span);
-        int spark_led = (int)lroundf(s_comet.head - (float)s_comet.dir * (float)trail_leds);
-        if (spark_led >= 0 && spark_led < (int)active){
-            uint16_t next = (uint16_t)s_spark_energy[spark_led] + 72u;
-            s_spark_energy[spark_led] = (next > 255u) ? 255u : (uint8_t)next;
+        const float max_pos = (float)active + comet->tail_leds;
+        const float min_pos = -comet->tail_leds;
+        if (comet->head > max_pos || comet->head < min_pos || comet->amp < 0.08f) {
+            comet->active = false;
+            continue;
+        }
+
+        rendered = true;
+
+        if ((esp_random() & 0x7u) == 0u) {
+            uint32_t trail_span = (uint32_t)(0.6f * comet->tail_leds);
+            if (trail_span < 2u) trail_span = 2u;
+            int trail_leds = (int)(esp_random() % trail_span);
+            int spark_led = (int)lroundf(comet->head - (float)comet->dir * (float)trail_leds);
+            if (spark_led >= 0 && spark_led < (int)active) {
+                uint16_t next = (uint16_t)s_spark_energy[spark_led] + 72u;
+                s_spark_energy[spark_led] = (next > 255u) ? 255u : (uint8_t)next;
+            }
+        }
+
+        for (size_t led = 0; led < active; ++led) {
+            float delta = (comet->dir > 0)
+                ? (comet->head - (float)led)
+                : ((float)led - comet->head);
+            if (delta < 0.0f || delta > comet->tail_leds) continue;
+
+            float tail_w = 1.0f - (delta / comet->tail_leds);
+            tail_w *= tail_w;
+            float head_w = expf(-1.6f * fabsf((float)led - comet->head));
+            float w = comet->amp * brightness_scale * (0.85f * tail_w + 0.55f * head_w);
+            if (w <= 0.0f) continue;
+
+            led_geo_add_rgb_locked(led,
+                                   w * (float)comet->r,
+                                   w * (float)comet->g,
+                                   w * (float)comet->b);
         }
     }
-
-    for (size_t led = 0; led < active; ++led){
-        float delta = (s_comet.dir > 0)
-            ? (s_comet.head - (float)led)
-            : ((float)led - s_comet.head);
-        if (delta < 0.0f || delta > s_comet.tail_leds) continue;
-
-        float tail_w = 1.0f - (delta / s_comet.tail_leds);
-        tail_w *= tail_w;
-        float head_w = expf(-1.6f * fabsf((float)led - s_comet.head));
-        float w = s_comet.amp * brightness_scale * (0.85f * tail_w + 0.55f * head_w);
-        if (w <= 0.0f) continue;
-
-        uint8_t cur_r = 0, cur_g = 0, cur_b = 0;
-        led_get_pixel_rgb(s_pulse_frame, led, &cur_r, &cur_g, &cur_b);
-        float next_r = (float)cur_r + w * (float)s_comet.r;
-        float next_g = (float)cur_g + w * (float)s_comet.g;
-        float next_b = (float)cur_b + w * (float)s_comet.b;
-        if (next_r > 255.0f) next_r = 255.0f;
-        if (next_g > 255.0f) next_g = 255.0f;
-        if (next_b > 255.0f) next_b = 255.0f;
-
-        led_set_pixel_rgb(
-            s_pulse_frame,
-            led,
-            (uint8_t)next_r,
-            (uint8_t)next_g,
-            (uint8_t)next_b
-        );
-    }
-    return true;
+    return rendered;
 }
 
 static void led_pulse_spawn(uint8_t r, uint8_t g, uint8_t b){
@@ -1726,7 +1902,8 @@ static bool led_pulse_step_locked(void){
     bool any_active = false;
     size_t active = led_active_count();
     float brightness_scale = (float)s_beat_brightness / 255.0f;
-    led_beat_anim_t effective_mode = led_beat_effective_mode_locked(esp_timer_get_time());
+    int64_t now_us = esp_timer_get_time();
+    led_beat_anim_t effective_mode = led_beat_effective_mode_locked(now_us);
     memset(s_pulse_frame, 0, LED_COUNT * 3);
     led_layout_snapshot(&s_effect_layout);
     if (s_effect_layout.total_leds > 0 && active > s_effect_layout.total_leds) {
@@ -1736,6 +1913,42 @@ static bool led_pulse_step_locked(void){
         led_beat_mode_uses_plane(effective_mode) &&
         led_geo_fill_plane_background_locked(active, brightness_scale)) {
         any_active = true;
+    }
+    if (s_beat_enabled &&
+        led_beat_mode_uses_ring(effective_mode) &&
+        led_geo_fill_ring_background_locked(active, brightness_scale)) {
+        any_active = true;
+    }
+    if (s_beat_enabled &&
+        led_beat_mode_uses_chase_background(effective_mode) &&
+        led_comet_fill_background_locked(active, brightness_scale)) {
+        any_active = true;
+    }
+    if (s_beat_enabled && effective_mode == LED_BEAT_ANIM_BREATHE && active > 0) {
+        float period_sec = s_pulse_period_sec;
+        if (period_sec < kLedPulseMinPeriodSec) period_sec = kLedPulseMinPeriodSec;
+        if (period_sec > kLedPulseMaxPeriodSec) period_sec = kLedPulseMaxPeriodSec;
+        if (s_breathe_anchor_us <= 0) {
+            s_breathe_anchor_us = now_us;
+        }
+        float elapsed_sec = (float)(now_us - s_breathe_anchor_us) / 1000000.0f;
+        float phase = elapsed_sec / period_sec;
+        phase -= floorf(phase);
+        float wave = 0.5f * (cosf(kLedWaveTwoPi * phase) + 1.0f);
+        wave = 0.15f + 0.85f * (wave * wave);
+        wave *= brightness_scale;
+        if (wave > 0.0f) {
+            float t_sec = (float)now_us / 1000000.0f;
+            uint8_t br = 0, bg = 0, bb = 0;
+            led_beat_sample_primary_color(t_sec, &br, &bg, &bb);
+            uint8_t fr = (uint8_t)(wave * (float)br);
+            uint8_t fg = (uint8_t)(wave * (float)bg);
+            uint8_t fb = (uint8_t)(wave * (float)bb);
+            for (size_t led = 0; led < active; ++led) {
+                led_set_pixel_rgb(s_pulse_frame, led, fr, fg, fb);
+            }
+            any_active = true;
+        }
     }
     for (size_t i = 0; i < sizeof(s_pulses)/sizeof(s_pulses[0]); ++i){
         led_pulse_t *p = &s_pulses[i];
@@ -1932,7 +2145,15 @@ const char *led_beat_anim_name(int idx){
         case LED_BEAT_ANIM_PLANE_SWEEP: return "plane_sweep";
         case LED_BEAT_ANIM_CROSSFIRE: return "crossfire";
         case LED_BEAT_ANIM_PLANE_FAN: return "plane_fan";
-        case LED_BEAT_ANIM_AUDIO_ENERGY: return "audio_energy";
+        case LED_BEAT_ANIM_AUDIO_ENERGY: return "energy";
+        case LED_BEAT_ANIM_BREATHE: return "breathe";
+        case LED_BEAT_ANIM_PLANE_SPAN: return "plane_span";
+        case LED_BEAT_ANIM_COMET_PAIR: return "comet_pair";
+        case LED_BEAT_ANIM_COMET_SWARM: return "comet_swarm";
+        case LED_BEAT_ANIM_COMET_BG: return "comet_bg";
+        case LED_BEAT_ANIM_COMET_PAIR_BG: return "comet_pair_bg";
+        case LED_BEAT_ANIM_COMET_SWARM_BG: return "comet_swarm_bg";
+        case LED_BEAT_ANIM_SOFT_FLASH: return "soft_flash";
         case LED_BEAT_ANIM_RANDOM: return "random";
         default: return NULL;
     }
@@ -1951,13 +2172,25 @@ void led_beat_anim_set(led_beat_anim_t mode){
         mode != LED_BEAT_ANIM_CROSSFIRE &&
         mode != LED_BEAT_ANIM_PLANE_FAN &&
         mode != LED_BEAT_ANIM_AUDIO_ENERGY &&
+        mode != LED_BEAT_ANIM_BREATHE &&
+        mode != LED_BEAT_ANIM_PLANE_SPAN &&
+        mode != LED_BEAT_ANIM_COMET_PAIR &&
+        mode != LED_BEAT_ANIM_COMET_SWARM &&
+        mode != LED_BEAT_ANIM_COMET_BG &&
+        mode != LED_BEAT_ANIM_COMET_PAIR_BG &&
+        mode != LED_BEAT_ANIM_COMET_SWARM_BG &&
+        mode != LED_BEAT_ANIM_SOFT_FLASH &&
         mode != LED_BEAT_ANIM_RANDOM){
         mode = LED_BEAT_ANIM_FLASH;
     }
     s_beat_anim = mode;
     s_beat_random_anim = LED_BEAT_ANIM_FLASH;
     s_beat_random_next_switch_us = 0;
-    if ((mode == LED_BEAT_ANIM_AUDIO_ENERGY || mode == LED_BEAT_ANIM_RANDOM) && led_pulse_lock()) {
+    if ((mode == LED_BEAT_ANIM_AUDIO_ENERGY ||
+         mode == LED_BEAT_ANIM_BREATHE ||
+         mode == LED_BEAT_ANIM_PLANE_SPAN ||
+         mode == LED_BEAT_ANIM_SOFT_FLASH ||
+         mode == LED_BEAT_ANIM_RANDOM) && led_pulse_lock()) {
         led_beat_clear_effect_state_locked();
         s_audio_energy_phase = 0.0f;
         if (mode == LED_BEAT_ANIM_AUDIO_ENERGY) {
@@ -1994,7 +2227,32 @@ static bool led_beat_mode_uses_plane(led_beat_anim_t mode)
     return mode == LED_BEAT_ANIM_PLANE_SWEEP ||
            mode == LED_BEAT_ANIM_PLANE_PAIR ||
            mode == LED_BEAT_ANIM_CROSSFIRE ||
-           mode == LED_BEAT_ANIM_PLANE_FAN;
+           mode == LED_BEAT_ANIM_PLANE_FAN ||
+           mode == LED_BEAT_ANIM_PLANE_SPAN;
+}
+
+static bool led_beat_mode_uses_chase_background(led_beat_anim_t mode)
+{
+    return mode == LED_BEAT_ANIM_COMET_BG ||
+           mode == LED_BEAT_ANIM_COMET_PAIR_BG ||
+           mode == LED_BEAT_ANIM_COMET_SWARM_BG;
+}
+
+static int led_beat_chase_profile(led_beat_anim_t mode)
+{
+    switch (mode) {
+        case LED_BEAT_ANIM_COMET:
+        case LED_BEAT_ANIM_COMET_BG:
+            return 0;
+        case LED_BEAT_ANIM_COMET_PAIR:
+        case LED_BEAT_ANIM_COMET_PAIR_BG:
+            return 1;
+        case LED_BEAT_ANIM_COMET_SWARM:
+        case LED_BEAT_ANIM_COMET_SWARM_BG:
+            return 2;
+        default:
+            return -1;
+    }
 }
 
 void led_beat_color_set(uint8_t r, uint8_t g, uint8_t b){
@@ -2055,6 +2313,14 @@ void led_beat_plane_background_enable(bool enabled){
 
 bool led_beat_plane_background_enabled(void){
     return s_beat_plane_background_enabled;
+}
+
+void led_beat_ring_background_enable(bool enabled){
+    s_beat_ring_background_enabled = enabled;
+}
+
+bool led_beat_ring_background_enabled(void){
+    return s_beat_ring_background_enabled;
 }
 
 void led_beat_color_cycle_set(led_color_cycle_t mode){
@@ -2174,7 +2440,21 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
         led_pulse_unlock();
         return;
     }
+    if (effective_mode == LED_BEAT_ANIM_PLANE_SPAN){
+        s_flash_ticks = 0;
+        s_wave_amp = 0.0f;
+        memset(s_spark_energy, 0, sizeof(s_spark_energy));
+        led_geo_plane_span_trigger_locked(r, g, b);
+        led_pulse_unlock();
+        return;
+    }
     if (effective_mode == LED_BEAT_ANIM_AUDIO_ENERGY){
+        led_pulse_unlock();
+        return;
+    }
+    if (effective_mode == LED_BEAT_ANIM_BREATHE){
+        led_beat_clear_effect_state_locked();
+        s_breathe_anchor_us = now_us;
         led_pulse_unlock();
         return;
     }
@@ -2185,11 +2465,23 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
         led_pulse_unlock();
         return;
     }
-    if (effective_mode == LED_BEAT_ANIM_COMET){
+    if (effective_mode == LED_BEAT_ANIM_SOFT_FLASH){
+        memset(s_spark_energy, 0, sizeof(s_spark_energy));
+        s_flash_ticks = 0;
+        s_wave_r = r;
+        s_wave_g = g;
+        s_wave_b = b;
+        s_wave_phase = 0.5f * kLedWavePi;
+        s_wave_amp = 1.0f;
+        led_pulse_unlock();
+        return;
+    }
+    int chase_profile = led_beat_chase_profile(effective_mode);
+    if (chase_profile >= 0){
         s_flash_ticks = 0;
         s_wave_amp = 0.0f;
         led_pulse_update_period_locked();
-        led_comet_trigger_locked(r, g, b);
+        led_comet_trigger_locked(r, g, b, chase_profile);
         led_pulse_unlock();
         return;
     }

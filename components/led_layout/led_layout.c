@@ -100,6 +100,60 @@ static const led_layout_legacy_name_t k_legacy_section_names[] = {
     { "right_belt",       "front_right_belt" },
 };
 
+static const led_point_t k_left_upper_arm_points_legacy[] = {
+    { 16.0f, -6.0f, -2.0f },
+    { 17.5f, -1.5f, -2.0f },
+    { 20.0f,  6.0f,  0.0f },
+    { 18.5f,  4.0f,  1.5f },
+    { 17.0f,  0.5f,  2.0f },
+};
+
+static const led_point_t k_left_forearm_points_legacy[] = {
+    { 20.0f,  6.0f, 0.0f },
+    { 23.0f, 15.5f, 0.0f },
+};
+
+static const led_point_t k_right_upper_arm_points_legacy[] = {
+    { -16.0f, -6.0f, -2.0f },
+    { -17.5f, -1.5f, -2.0f },
+    { -20.0f,  6.0f,  0.0f },
+    { -18.5f,  4.0f,  1.5f },
+    { -17.0f,  0.5f,  2.0f },
+};
+
+static const led_point_t k_right_forearm_points_legacy[] = {
+    { -20.0f,  6.0f, 0.0f },
+    { -23.0f, 15.5f, 0.0f },
+};
+
+static const led_point_t k_left_upper_arm_points_measured[] = {
+    { 10.5f, 48.5f, -3.0f },
+    { 15.5f, 39.5f, -2.0f },
+    { 21.5f, 16.0f,  0.0f },
+    { 19.5f, 19.5f,  2.0f },
+    { 17.0f, 23.0f,  3.0f },
+};
+
+static const led_point_t k_left_forearm_points_measured[] = {
+    { 17.0f, 23.0f, 3.0f },
+    { 20.0f,  4.0f, 2.0f },
+    { 22.0f, -15.0f, 1.0f },
+};
+
+static const led_point_t k_right_upper_arm_points_measured[] = {
+    { -10.5f, 48.5f, -3.0f },
+    { -15.5f, 39.5f, -2.0f },
+    { -21.5f, 16.0f,  0.0f },
+    { -19.5f, 19.5f,  2.0f },
+    { -17.0f, 23.0f,  3.0f },
+};
+
+static const led_point_t k_right_forearm_points_measured[] = {
+    { -17.0f, 23.0f, 3.0f },
+    { -20.0f,  4.0f, 2.0f },
+    { -22.0f, -15.0f, 1.0f },
+};
+
 static const char *k_canonical_section_order[] = {
     "front_left_top",
     "front_left_ring",
@@ -407,6 +461,29 @@ static inline led_point_t point3(float x, float y, float z)
     return p;
 }
 
+static bool points_match_exactish(const led_point_t *a, const led_point_t *b, size_t count)
+{
+    if (!a || !b) return false;
+    for (size_t i = 0; i < count; ++i) {
+        if (fabsf(a[i].x - b[i].x) > 0.05f ||
+            fabsf(a[i].y - b[i].y) > 0.05f ||
+            fabsf(a[i].z - b[i].z) > 0.05f) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool section_matches_polyline(const led_layout_section_t *sec,
+                                     const led_point_t *points,
+                                     size_t point_count)
+{
+    if (!sec || !points) return false;
+    if (sec->geom_kind != LED_LAYOUT_GEOM_POLYLINE) return false;
+    if (sec->point_count != point_count) return false;
+    return points_match_exactish(sec->points, points, point_count);
+}
+
 static bool layout_assign_measured_geometry(led_layout_section_t *sec)
 {
     if (!sec) return false;
@@ -494,22 +571,19 @@ static bool layout_assign_measured_geometry(led_layout_section_t *sec)
         return true;
     }
     if (strcmp(sec->name, "left_upper_arm") == 0) {
-        const led_point_t pts[] = {
-            { 16.0f, -6.0f, -2.0f },
-            { 17.5f, -1.5f, -2.0f },
-            { 20.0f,  6.0f,  0.0f },
-            { 18.5f,  4.0f,  1.5f },
-            { 17.0f,  0.5f,  2.0f },
-        };
-        section_set_polyline_points(sec, false, pts, 5);
+        section_set_polyline_points(sec,
+                                    false,
+                                    k_left_upper_arm_points_measured,
+                                    sizeof(k_left_upper_arm_points_measured) /
+                                        sizeof(k_left_upper_arm_points_measured[0]));
         return true;
     }
     if (strcmp(sec->name, "left_forearm") == 0) {
-        const led_point_t pts[] = {
-            { 20.0f,  6.0f, 0.0f },
-            { 23.0f, 15.5f, 0.0f },
-        };
-        section_set_polyline_points(sec, true, pts, 2);
+        section_set_polyline_points(sec,
+                                    true,
+                                    k_left_forearm_points_measured,
+                                    sizeof(k_left_forearm_points_measured) /
+                                        sizeof(k_left_forearm_points_measured[0]));
         return true;
     }
 
@@ -584,22 +658,19 @@ static bool layout_assign_measured_geometry(led_layout_section_t *sec)
         return true;
     }
     if (strcmp(sec->name, "right_upper_arm") == 0) {
-        const led_point_t pts[] = {
-            { -16.0f, -6.0f, -2.0f },
-            { -17.5f, -1.5f, -2.0f },
-            { -20.0f,  6.0f,  0.0f },
-            { -18.5f,  4.0f,  1.5f },
-            { -17.0f,  0.5f,  2.0f },
-        };
-        section_set_polyline_points(sec, false, pts, 5);
+        section_set_polyline_points(sec,
+                                    false,
+                                    k_right_upper_arm_points_measured,
+                                    sizeof(k_right_upper_arm_points_measured) /
+                                        sizeof(k_right_upper_arm_points_measured[0]));
         return true;
     }
     if (strcmp(sec->name, "right_forearm") == 0) {
-        const led_point_t pts[] = {
-            { -20.0f,  6.0f, 0.0f },
-            { -23.0f, 15.5f, 0.0f },
-        };
-        section_set_polyline_points(sec, true, pts, 2);
+        section_set_polyline_points(sec,
+                                    true,
+                                    k_right_forearm_points_measured,
+                                    sizeof(k_right_forearm_points_measured) /
+                                        sizeof(k_right_forearm_points_measured[0]));
         return true;
     }
 
@@ -694,6 +765,62 @@ static void layout_upgrade_ring_orientation(led_layout_config_t *cfg)
         if (fabsf(fabsf(sec->sweep_deg) - 360.0f) > 0.01f) continue;
         if (sec->sweep_deg > 0.0f) {
             sec->sweep_deg = -fabsf(sec->sweep_deg);
+        }
+    }
+}
+
+static void layout_upgrade_arm_geometry(led_layout_config_t *cfg)
+{
+    if (!cfg) return;
+
+    for (size_t i = 0; i < cfg->section_count; ++i) {
+        led_layout_section_t *sec = &cfg->sections[i];
+        if (strcmp(sec->name, "left_upper_arm") == 0 &&
+            section_matches_polyline(sec,
+                                     k_left_upper_arm_points_legacy,
+                                     sizeof(k_left_upper_arm_points_legacy) /
+                                         sizeof(k_left_upper_arm_points_legacy[0]))) {
+            section_set_polyline_points(sec,
+                                        false,
+                                        k_left_upper_arm_points_measured,
+                                        sizeof(k_left_upper_arm_points_measured) /
+                                            sizeof(k_left_upper_arm_points_measured[0]));
+            continue;
+        }
+        if (strcmp(sec->name, "left_forearm") == 0 &&
+            section_matches_polyline(sec,
+                                     k_left_forearm_points_legacy,
+                                     sizeof(k_left_forearm_points_legacy) /
+                                         sizeof(k_left_forearm_points_legacy[0]))) {
+            section_set_polyline_points(sec,
+                                        true,
+                                        k_left_forearm_points_measured,
+                                        sizeof(k_left_forearm_points_measured) /
+                                            sizeof(k_left_forearm_points_measured[0]));
+            continue;
+        }
+        if (strcmp(sec->name, "right_upper_arm") == 0 &&
+            section_matches_polyline(sec,
+                                     k_right_upper_arm_points_legacy,
+                                     sizeof(k_right_upper_arm_points_legacy) /
+                                         sizeof(k_right_upper_arm_points_legacy[0]))) {
+            section_set_polyline_points(sec,
+                                        false,
+                                        k_right_upper_arm_points_measured,
+                                        sizeof(k_right_upper_arm_points_measured) /
+                                            sizeof(k_right_upper_arm_points_measured[0]));
+            continue;
+        }
+        if (strcmp(sec->name, "right_forearm") == 0 &&
+            section_matches_polyline(sec,
+                                     k_right_forearm_points_legacy,
+                                     sizeof(k_right_forearm_points_legacy) /
+                                         sizeof(k_right_forearm_points_legacy[0]))) {
+            section_set_polyline_points(sec,
+                                        true,
+                                        k_right_forearm_points_measured,
+                                        sizeof(k_right_forearm_points_measured) /
+                                            sizeof(k_right_forearm_points_measured[0]));
         }
     }
 }
@@ -1052,6 +1179,7 @@ static bool layout_load_from_sd_locked(led_layout_config_t *cfg)
     layout_upgrade_legacy_names(&tmp);
     layout_upgrade_placeholder_geometry(&tmp);
     layout_upgrade_worn_handedness(&tmp);
+    layout_upgrade_arm_geometry(&tmp);
     layout_upgrade_ring_orientation(&tmp);
     layout_finalize(&tmp);
     *cfg = tmp;

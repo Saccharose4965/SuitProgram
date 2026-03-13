@@ -38,6 +38,8 @@ static const menu_entry_t g_menu_settings_entries[] = {
     { "adc_debug", "ADC Debug" },
     { "bt",        "Bluetooth" },
     { "volume",    "Volume"    },
+    { "preferences", "Preferences" },
+    { "master_control", "Master Control" },
     { "service_restart", "Svc Restart" },
     { "reboot",    "Restart"   },
 };
