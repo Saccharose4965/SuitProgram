@@ -13,9 +13,17 @@
 static const char *TAG = "fft_sync";
 static esp_err_t s_fft_sync_start_err = ESP_OK;
 
-const shell_legend_t FFT_SYNC_LEGEND = {
-    .slots = { SHELL_ICON_LEFT, SHELL_ICON_RIGHT, SHELL_ICON_LINK, SHELL_ICON_OK },
+shell_legend_t FFT_SYNC_LEGEND = {
+    .slots = { SHELL_ICON_LEFT, SHELL_ICON_RIGHT, SHELL_ICON_LOCK, SHELL_ICON_PLAY },
 };
+
+static void fft_sync_update_legend(void)
+{
+    fft_sync_state_t st = {0};
+    fft_get_sync_state(&st);
+    FFT_SYNC_LEGEND.slots[2] = SHELL_ICON_LOCK;
+    FFT_SYNC_LEGEND.slots[3] = st.beat_enabled ? SHELL_ICON_PAUSE : SHELL_ICON_PLAY;
+}
 
 static inline void fb_pset(uint8_t *fb, int x, int y)
 {
@@ -74,6 +82,7 @@ void fft_sync_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
     s_fft_sync_start_err = ESP_OK;
+    fft_sync_update_legend();
     if (!shell_audio_init_if_needed()) {
         ESP_LOGE(TAG, "audio_init failed; FFT sync unavailable");
         s_fft_sync_start_err = ESP_ERR_INVALID_STATE;
@@ -86,6 +95,7 @@ void fft_sync_app_init(shell_app_context_t *ctx)
     if (s_fft_sync_start_err != ESP_OK) {
         ESP_LOGE(TAG, "fft_visualizer_start failed: %s", esp_err_to_name(s_fft_sync_start_err));
     }
+    fft_sync_update_legend();
 }
 
 void fft_sync_app_deinit(shell_app_context_t *ctx)
@@ -116,6 +126,7 @@ void fft_sync_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev
         default:
             break;
     }
+    fft_sync_update_legend();
 }
 
 void fft_sync_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)
@@ -134,6 +145,7 @@ void fft_sync_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int 
 
     fft_sync_state_t st = {0};
     fft_get_sync_state(&st);
+    FFT_SYNC_LEGEND.slots[3] = st.beat_enabled ? SHELL_ICON_PAUSE : SHELL_ICON_PLAY;
 
     char line[32];
     oled_draw_text3x5(fb, x + 2, y + 2, "FFT SYNC");
@@ -169,7 +181,5 @@ void fft_sync_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int 
 
     if (!st.running) {
         oled_draw_text3x5(fb, x + 2, y + 43, "fft:stopped");
-    } else {
-        oled_draw_text3x5(fb, x + 2, y + 43, "AB:ofs C:lock D:on");
     }
 }

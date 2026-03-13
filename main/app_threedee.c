@@ -4,7 +4,7 @@
 #include "threedee.h"
 
 const shell_legend_t THREEDEE_LEGEND = {
-    .slots = { SHELL_ICON_BACK, SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_OK },
+    .slots = { SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_NONE },
 };
 
 void threedee_app_init_wrapper(shell_app_context_t *ctx)

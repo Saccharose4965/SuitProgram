@@ -39,7 +39,6 @@ static const menu_entry_t g_menu_settings_entries[] = {
     { "bt",        "Bluetooth" },
     { "volume",    "Volume"    },
     { "service_restart", "Svc Restart" },
-    { "keyboard",  "Keyboard"  },
     { "reboot",    "Restart"   },
 };
 static const menu_entry_t g_menu_sim_entries[] = {
@@ -75,6 +74,7 @@ static const menu_entry_t g_menu_led_entries[] = {
 };
 static const menu_entry_t g_menu_misc_entries[] = {
     { "menu_root",  "Back"       },
+    { "keyboard",   "Keyboard"   },
     { "calculator", "Calculator" },
     { "bad_apple",  "Bad Apple"  },
 };
@@ -233,5 +233,5 @@ void menu_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h
 }
 
 const shell_legend_t MENU_LEGEND = {
-    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_NONE, SHELL_ICON_CUSTOM2 },
+    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_NONE, SHELL_ICON_SELECT },
 };

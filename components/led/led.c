@@ -307,6 +307,7 @@ static uint8_t s_beat_secondary_b = 255;
 static volatile led_color_cycle_t s_beat_color_cycle = LED_COLOR_CYCLE_STATIC;
 static volatile led_color_style_t s_beat_color_style = LED_COLOR_STYLE_MONO;
 static volatile led_highlight_mode_t s_beat_highlight_mode = LED_HIGHLIGHT_OFF;
+static volatile bool s_beat_plane_background_enabled = false;
 static volatile bool s_audio_brightness_enabled = false;
 static volatile led_audio_energy_range_t s_audio_energy_range = LED_AUDIO_ENERGY_RANGE_FULL;
 static uint8_t s_beat_brightness = 96;
@@ -366,9 +367,12 @@ static const float kLedGeoRingWidthScale = 0.015f;
 static const float kLedGeoPlaneSpeedFactor = 2.0f;
 static const size_t kLedGeoRingTrainWagons = 4u;
 static const float kLedGeoRingTrainWidthScale = 0.42f;
+static const float kLedGeoPlaneBackgroundScale = 0.18f;
 static int8_t s_comet_spawn_dir = 1;
 
 static void led_pulse_start_task(void);
+static bool led_beat_mode_uses_ring(led_beat_anim_t mode);
+static bool led_beat_mode_uses_plane(led_beat_anim_t mode);
 
 static uint8_t lerp_u8(uint8_t a, uint8_t b, float t)
 {
@@ -1246,6 +1250,26 @@ static void led_geo_add_rgb_locked(size_t led, float add_r, float add_g, float a
     led_set_pixel_rgb(s_pulse_frame, led, (uint8_t)next_r, (uint8_t)next_g, (uint8_t)next_b);
 }
 
+static bool led_geo_fill_plane_background_locked(size_t count, float brightness_scale)
+{
+    if (!s_beat_plane_background_enabled || count == 0 || brightness_scale <= 0.0f) {
+        return false;
+    }
+
+    float scale = brightness_scale * kLedGeoPlaneBackgroundScale;
+    uint8_t bg_r = (uint8_t)(scale * (float)s_beat_secondary_r);
+    uint8_t bg_g = (uint8_t)(scale * (float)s_beat_secondary_g);
+    uint8_t bg_b = (uint8_t)(scale * (float)s_beat_secondary_b);
+    if (bg_r == 0 && bg_g == 0 && bg_b == 0) {
+        return false;
+    }
+
+    for (size_t led = 0; led < count; ++led) {
+        led_set_pixel_rgb(s_pulse_frame, led, bg_r, bg_g, bg_b);
+    }
+    return true;
+}
+
 static void led_geo_layout_stats(const led_layout_config_t *cfg, size_t count,
                                  led_geo_layout_stats_t *stats)
 {
@@ -1510,6 +1534,7 @@ static bool led_geo_plane_render_locked(const led_layout_config_t *cfg, size_t c
     if (!cfg || !stats || count == 0) return false;
     bool rendered = false;
     float white_scale = led_beat_highlight_scale();
+    bool background_enabled = s_beat_plane_background_enabled;
 
     float cx = 0.5f * (stats->min_x + stats->max_x);
     float cy = 0.5f * (stats->min_y + stats->max_y);
@@ -1534,8 +1559,11 @@ static bool led_geo_plane_render_locked(const led_layout_config_t *cfg, size_t c
                 trail = expf(-behind / (2.2f * sweep->width));
             }
             float primary = sweep->amp * brightness_scale *
-                            (0.92f * crest + 0.18f * trail);
-            float white = sweep->amp * brightness_scale * white_scale * 0.08f * crest * crest;
+                            (background_enabled
+                                ? (1.18f * crest + 0.30f * trail)
+                                : (0.92f * crest + 0.18f * trail));
+            float white = sweep->amp * brightness_scale * white_scale *
+                          (background_enabled ? 0.14f : 0.08f) * crest * crest;
             led_geo_add_rgb_locked(
                 i,
                 primary * (float)sweep->r + white * 255.0f,
@@ -1703,6 +1731,11 @@ static bool led_pulse_step_locked(void){
     led_layout_snapshot(&s_effect_layout);
     if (s_effect_layout.total_leds > 0 && active > s_effect_layout.total_leds) {
         active = s_effect_layout.total_leds;
+    }
+    if (s_beat_enabled &&
+        led_beat_mode_uses_plane(effective_mode) &&
+        led_geo_fill_plane_background_locked(active, brightness_scale)) {
+        any_active = true;
     }
     for (size_t i = 0; i < sizeof(s_pulses)/sizeof(s_pulses[0]); ++i){
         led_pulse_t *p = &s_pulses[i];
@@ -2014,6 +2047,14 @@ void led_beat_secondary_color_get(uint8_t *r, uint8_t *g, uint8_t *b){
     if (r) *r = s_beat_secondary_r;
     if (g) *g = s_beat_secondary_g;
     if (b) *b = s_beat_secondary_b;
+}
+
+void led_beat_plane_background_enable(bool enabled){
+    s_beat_plane_background_enabled = enabled;
+}
+
+bool led_beat_plane_background_enabled(void){
+    return s_beat_plane_background_enabled;
 }
 
 void led_beat_color_cycle_set(led_color_cycle_t mode){

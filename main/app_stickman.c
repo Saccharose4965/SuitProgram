@@ -20,12 +20,13 @@ typedef struct {
 } segment3_t;
 
 static bool s_track_left_arm = false;
+static float s_view_yaw = 0.0f;
 
 // Match the screen-alignment correction used by the 3D renderer.
 static const quat kMountDs = { 0.70710678f, 0.0f, 0.0f, 0.70710678f };
 
 const shell_legend_t STICKMAN_LEGEND = {
-    .slots = { SHELL_ICON_BACK, SHELL_ICON_NONE, SHELL_ICON_LEFT, SHELL_ICON_OK },
+    .slots = { SHELL_ICON_LEFT, SHELL_ICON_RIGHT, SHELL_ICON_SELECT, SHELL_ICON_REFRESH },
 };
 
 static inline vec3 v3(float x, float y, float z)
@@ -145,6 +146,11 @@ static vec3 rotate_x(vec3 p, float angle)
     return v3(p.x, c * p.y - s * p.z, s * p.y + c * p.z);
 }
 
+static vec3 apply_view_yaw(vec3 p)
+{
+    return rotate_y(p, s_view_yaw);
+}
+
 static vec3 camera_transform(vec3 p)
 {
     p = rotate_y(p, -0.68f);
@@ -155,7 +161,7 @@ static vec3 camera_transform(vec3 p)
 
 static bool project_point(vec3 p, int cx, int cy, float focal, int *ox, int *oy, float *depth_out)
 {
-    vec3 cam = camera_transform(p);
+    vec3 cam = camera_transform(apply_view_yaw(p));
     if (cam.z <= 8.0f) return false;
     float invz = 1.0f / cam.z;
     if (ox) *ox = (int)lroundf((float)cx + focal * cam.x * invz);
@@ -198,11 +204,11 @@ static void sort_segments_by_depth(const segment3_t *src, size_t count, size_t *
 
     for (size_t i = 1; i < count; ++i) {
         size_t idx = order[i];
-        float depth = camera_transform(v3_scale(v3_add(src[idx].a, src[idx].b), 0.5f)).z;
+        float depth = camera_transform(apply_view_yaw(v3_scale(v3_add(src[idx].a, src[idx].b), 0.5f))).z;
         size_t j = i;
         while (j > 0) {
             size_t prev = order[j - 1];
-            float prev_depth = camera_transform(v3_scale(v3_add(src[prev].a, src[prev].b), 0.5f)).z;
+            float prev_depth = camera_transform(apply_view_yaw(v3_scale(v3_add(src[prev].a, src[prev].b), 0.5f))).z;
             if (prev_depth <= depth) break;
             order[j] = order[j - 1];
             --j;
@@ -215,14 +221,20 @@ void stickman_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
     s_track_left_arm = false;
+    s_view_yaw = 0.0f;
 }
 
 void stickman_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 {
-    if (!ctx || !ev || ev->type != INPUT_EVENT_PRESS) return;
+    (void)ctx;
+    if (!ev || ev->type != INPUT_EVENT_PRESS) return;
 
     if (ev->button == INPUT_BTN_A) {
-        ctx->request_switch("menu", ctx->request_user_data);
+        s_view_yaw -= 0.20f;
+        if (s_view_yaw < -(float)M_PI) s_view_yaw += 2.0f * (float)M_PI;
+    } else if (ev->button == INPUT_BTN_B) {
+        s_view_yaw += 0.20f;
+        if (s_view_yaw > (float)M_PI) s_view_yaw -= 2.0f * (float)M_PI;
     } else if (ev->button == INPUT_BTN_C) {
         s_track_left_arm = !s_track_left_arm;
     } else if (ev->button == INPUT_BTN_D) {

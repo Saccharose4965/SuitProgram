@@ -15,7 +15,7 @@
 static TaskHandle_t s_tetris_task = NULL;
 
 const shell_legend_t TETRIS_LEGEND = {
-    .slots = { SHELL_ICON_BACK, SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_MENU },
+    .slots = { SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_NONE },
 };
 
 static void tetris_task_fn(void *arg)

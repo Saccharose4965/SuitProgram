@@ -14,7 +14,7 @@
 static const char *TAG = "app_file_rx";
 
 const shell_legend_t FILE_RX_LEGEND = {
-    .slots = { SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_OK, SHELL_ICON_MENU },
+    .slots = { SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_SELECT, SHELL_ICON_NONE },
 };
 
 typedef struct {
@@ -78,10 +78,6 @@ void file_rx_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
         } else {
             s_file_rx.last_err = file_rx_start_service();
         }
-    } else if (ev->button == INPUT_BTN_D) {
-        if (ctx->request_switch) {
-            ctx->request_switch("menu", ctx->request_user_data);
-        }
     }
 }
 
@@ -114,5 +110,4 @@ void file_rx_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w
     snprintf(line, sizeof(line), "Last: %s", esp_err_to_name(s_file_rx.last_err));
     oled_draw_text3x5(fb, x + 2, y + 34, line);
 
-    oled_draw_text3x5(fb, x + 2, y + 42, "C: start/stop");
 }

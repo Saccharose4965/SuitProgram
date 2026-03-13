@@ -62,6 +62,7 @@ static uint8_t s_primary_b = 255;
 static uint8_t s_secondary_r = 255;
 static uint8_t s_secondary_g = 64;
 static uint8_t s_secondary_b = 0;
+static volatile bool s_plane_background_enabled = false;
 static volatile led_color_cycle_t s_color_cycle = LED_COLOR_CYCLE_STATIC;
 static volatile led_color_style_t s_color_style = LED_COLOR_STYLE_MONO;
 static volatile led_highlight_mode_t s_highlight_mode = LED_HIGHLIGHT_OFF;
@@ -164,6 +165,8 @@ void led_modes_get_secondary_color(uint8_t *r, uint8_t *g, uint8_t *b) {
     if (g) *g = s_secondary_g;
     if (b) *b = s_secondary_b;
 }
+void led_modes_plane_background_enable(bool enabled) { s_plane_background_enabled = enabled; }
+bool led_modes_plane_background_enabled(void) { return s_plane_background_enabled; }
 void led_modes_color_cycle_set(led_color_cycle_t mode) {
     if (mode < LED_COLOR_CYCLE_STATIC || mode > LED_COLOR_CYCLE_BIOHAZARD) {
         mode = LED_COLOR_CYCLE_STATIC;
@@ -594,6 +597,18 @@ static void render_plane(uint8_t *buf, size_t count,
 {
     uint8_t sr = 0, sg = 0, sb = 0;
     led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
+    bool background_enabled = s_plane_background_enabled;
+    if (background_enabled) {
+        uint8_t bg_r = (uint8_t)(s_secondary_r * 0.18f);
+        uint8_t bg_g = (uint8_t)(s_secondary_g * 0.18f);
+        uint8_t bg_b = (uint8_t)(s_secondary_b * 0.18f);
+        for (size_t i = 0; i < count; ++i) {
+            led_set_pixel_rgb(buf, i, bg_r, bg_g, bg_b);
+        }
+        sr = s_secondary_r;
+        sg = s_secondary_g;
+        sb = s_secondary_b;
+    }
 
     float angle = t_sec * 0.52f;
     float nx = cosf(angle);
@@ -626,10 +641,16 @@ static void render_plane(uint8_t *buf, size_t count,
         float core = expf(-fabsf(d) / width);
         float ripple = 0.5f + 0.5f * sinf(1.4f * d - t_sec * 4.0f);
         ripple *= ripple;
+        float primary_w = core * (background_enabled ? (0.95f + 0.70f * ripple)
+                                                     : (0.55f + 0.45f * ripple));
+        float secondary_w = background_enabled
+            ? core * core * 0.04f
+            : core * core * (0.06f + 0.28f * (1.0f - ripple));
+        float white_w = core * core * (background_enabled ? 0.18f : 0.08f);
         add_mixed_color(buf, i, r, g, b, sr, sg, sb,
-                        core * (0.55f + 0.45f * ripple),
-                        core * core * (0.06f + 0.28f * (1.0f - ripple)),
-                        core * core * 0.08f);
+                        primary_w,
+                        secondary_w,
+                        white_w);
     }
 }
 

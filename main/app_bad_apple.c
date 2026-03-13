@@ -57,7 +57,7 @@ static bad_apple_app_state_t s_bad_apple_app = {
 };
 
 const shell_legend_t BAD_APPLE_LEGEND = {
-    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_OK, SHELL_ICON_BACK },
+    .slots = { SHELL_ICON_LEFT, SHELL_ICON_RIGHT, SHELL_ICON_PAUSE, SHELL_ICON_REFRESH },
 };
 
 static bool file_exists(const char *path)

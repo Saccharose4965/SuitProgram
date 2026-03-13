@@ -12,10 +12,6 @@
 static const char *TAG = "shell";
 static esp_err_t s_fft_start_err = ESP_OK;
 
-const shell_legend_t FFT_LEGEND = {
-    .slots = { SHELL_ICON_LEFT, SHELL_ICON_RIGHT, SHELL_ICON_NONE, SHELL_ICON_LINK },
-};
-
 static fft_view_t g_fft_view = FFT_VIEW_BPM_TEXT;
 
 void fft_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev)

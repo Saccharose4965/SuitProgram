@@ -31,6 +31,7 @@ static volatile bool s_rec = false;
 static size_t s_bytes_data = 0;
 static char   s_last_path[128] = {0};
 static int    s_rate = MIC_REC_RATE_HZ;
+static TaskHandle_t s_rec_task = NULL;
 
 /* WAV helpers */
 static void write_wav_header(FILE *f, int fs, int bits, int ch, uint32_t data_bytes){
@@ -72,6 +73,7 @@ static esp_err_t make_autopath(char out[128]){
 
 /* Task: pull 32-bit samples from RX, scale to s16, write to SD */
 static void recorder_task(void *arg){
+    (void)arg;
     const size_t frames    = 256;                               // per DMA frame
     const size_t in_bytes  = frames * sizeof(int32_t) * 2;      // 32-bit L+R
     const size_t out_bytes = frames * sizeof(int16_t);          // mono s16
@@ -81,6 +83,14 @@ static void recorder_task(void *arg){
     if (!rx32 || !pcm16) {
         ESP_LOGE(TAG, "OOM");
         s_rec = false;
+        free(rx32);
+        free(pcm16);
+        if (s_wav) {
+            fclose(s_wav);
+            s_wav = NULL;
+        }
+        s_rec_task = NULL;
+        vTaskDelete(NULL);
     }
 
     int  slot_index = 0;     // 0=LEFT, 1=RIGHT
@@ -142,6 +152,7 @@ static void recorder_task(void *arg){
 
     free(rx32);
     free(pcm16);
+    s_rec_task = NULL;
     vTaskDelete(NULL);
 }
 
@@ -188,7 +199,14 @@ esp_err_t mic_rec_start(const char *path){
     }
 
     s_rec = true;
-    xTaskCreatePinnedToCore(recorder_task, "mic_rec", 4096, NULL, 5, NULL, BG_TASK_CORE);
+    BaseType_t ok = xTaskCreatePinnedToCore(recorder_task, "mic_rec", 4096, NULL, 5, &s_rec_task, BG_TASK_CORE);
+    if (ok != pdPASS) {
+        s_rec = false;
+        fclose(s_wav);
+        s_wav = NULL;
+        s_rec_task = NULL;
+        return ESP_ERR_NO_MEM;
+    }
     ESP_LOGI(TAG, "Recording -> %s", path);
     return ESP_OK;
 }
@@ -196,8 +214,10 @@ esp_err_t mic_rec_start(const char *path){
 esp_err_t mic_rec_stop(void){
     if (!s_rec) return ESP_OK;
     s_rec = false;
-    /* recorder task will finalize/close */
     if (s_rx) i2s_channel_disable(s_rx);
+    for (int i = 0; i < 100 && s_rec_task; ++i) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
     return ESP_OK;
 }
 

@@ -7,6 +7,7 @@
 
 #include "threedee.h"
 #include "hw.h"
+#include "oled.h"
 #include "orientation.h"
 
 #ifndef M_PI
@@ -127,20 +128,24 @@ static inline vec3 mat3_mul_vec(const float m[9], vec3 v) {
  *  OLED framebuffer helpers
  * ========================= */
 
-static inline void fb_pset_local(uint8_t *fb, int x, int y)
+static inline void fb_pset_local(uint8_t *fb, int x, int y,
+                                 int clip_x0, int clip_y0, int clip_x1, int clip_y1)
 {
+    // The shell owns the content viewport; PANEL_W/H are only the backing framebuffer stride.
+    if (x < clip_x0 || y < clip_y0 || x >= clip_x1 || y >= clip_y1) return;
     if ((unsigned)x >= PANEL_W || (unsigned)y >= PANEL_H) return;
     int idx = y * PANEL_W + x;
     fb[idx >> 3] |= (uint8_t)(1u << (7 - (idx & 7)));
 }
 
-static void draw_line(uint8_t *fb, int x0, int y0, int x1, int y1)
+static void draw_line(uint8_t *fb, int x0, int y0, int x1, int y1,
+                      int clip_x0, int clip_y0, int clip_x1, int clip_y1)
 {
     int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
     int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
     int err = dx + dy;
     while (1) {
-        fb_pset_local(fb, x0, y0);
+        fb_pset_local(fb, x0, y0, clip_x0, clip_y0, clip_x1, clip_y1);
         if (x0 == x1 && y0 == y1) break;
         int e2 = 2 * err;
         if (e2 >= dy) { err += dy; x0 += sx; }
@@ -316,6 +321,8 @@ void threedee_app_draw(uint8_t *fb, int x, int y, int w, int h)
 {
     const int cx = x + w/2;
     const int cy = y + h/2;
+    const int clip_x1 = x + w;
+    const int clip_y1 = y + h;
 
     // Focal length tuned for tiny OLED; adjust if you want more/less FOV.
     const float focal = 100.0f;
@@ -352,7 +359,7 @@ void threedee_app_draw(uint8_t *fb, int x, int y, int w, int h)
             uint8_t a = shape->edges[e][0];
             uint8_t b = shape->edges[e][1];
             if (!okv[a] || !okv[b]) continue;
-            draw_line(fb, pxv[a], pyv[a], pxv[b], pyv[b]);
+            draw_line(fb, pxv[a], pyv[a], pxv[b], pyv[b], x, y, clip_x1, clip_y1);
         }
     }
 }

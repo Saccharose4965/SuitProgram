@@ -36,6 +36,8 @@ void led_modes_set_primary_color(uint8_t r, uint8_t g, uint8_t b);
 void led_modes_get_primary_color(uint8_t *r, uint8_t *g, uint8_t *b);
 void led_modes_set_secondary_color(uint8_t r, uint8_t g, uint8_t b);
 void led_modes_get_secondary_color(uint8_t *r, uint8_t *g, uint8_t *b);
+void led_modes_plane_background_enable(bool enabled);
+bool led_modes_plane_background_enabled(void);
 void led_modes_color_cycle_set(led_color_cycle_t mode);
 led_color_cycle_t led_modes_color_cycle_get(void);
 void led_modes_color_style_set(led_color_style_t style);

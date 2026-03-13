@@ -15,7 +15,7 @@
 static TaskHandle_t s_flappy_task = NULL;
 
 const shell_legend_t FLAPPY_LEGEND = {
-    .slots = { SHELL_ICON_BACK, SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_MENU },
+    .slots = { SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_NONE },
 };
 
 static void flappy_task_fn(void *arg)

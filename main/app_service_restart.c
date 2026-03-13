@@ -54,11 +54,11 @@ static const restart_entry_t s_entries[] = {
 static restart_state_t s_restart = {
     .selected = 0,
     .last_err = ESP_OK,
-    .status = "C: run, * needs API",
+    .status = "",
 };
 
 const shell_legend_t SERVICE_RESTART_LEGEND = {
-    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_OK, SHELL_ICON_MENU },
+    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_SELECT, SHELL_ICON_NONE },
 };
 
 static void restart_set_status(const char *msg, esp_err_t err)
@@ -157,7 +157,7 @@ void service_restart_app_init(shell_app_context_t *ctx)
     (void)ctx;
     s_restart.selected = 0;
     s_restart.last_err = ESP_OK;
-    restart_set_status("C: run, * needs API", ESP_OK);
+    restart_set_status("", ESP_OK);
 }
 
 void service_restart_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
@@ -173,10 +173,6 @@ void service_restart_app_handle_input(shell_app_context_t *ctx, const input_even
         if (s_restart.selected + 1 < count) s_restart.selected++;
     } else if (ev->button == INPUT_BTN_C) {
         restart_do_action(ctx, s_entries[s_restart.selected].id);
-    } else if (ev->button == INPUT_BTN_D) {
-        if (ctx->request_switch) {
-            ctx->request_switch("menu", ctx->request_user_data);
-        }
     }
 }
 

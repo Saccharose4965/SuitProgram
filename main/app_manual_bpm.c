@@ -212,5 +212,4 @@ void manual_bpm_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, in
         fb_rect_fill(fb, x + w - 8, y + 2, 5, 5);
     }
 
-    oled_draw_text3x5(fb, x + 2, y + 43, "AB:bpm CD:ofs");
 }

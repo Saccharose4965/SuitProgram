@@ -58,7 +58,6 @@ void fft_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void fft_app_init(shell_app_context_t *ctx);
 void fft_app_deinit(shell_app_context_t *ctx);
 void fft_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
-extern const shell_legend_t FFT_LEGEND;
 
 void fft_sync_app_init(shell_app_context_t *ctx);
 void fft_sync_app_deinit(shell_app_context_t *ctx);
@@ -76,6 +75,12 @@ void bt_app_init_wrapper(shell_app_context_t *ctx);
 void bt_handle_input_wrapper(shell_app_context_t *ctx, const input_event_t *ev);
 void bt_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t BT_AUDIO_LEGEND;
+
+void message_app_init(shell_app_context_t *ctx);
+void message_app_deinit(shell_app_context_t *ctx);
+void message_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
+void message_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
+extern const shell_legend_t MESSAGE_LEGEND;
 
 void file_rx_app_init(shell_app_context_t *ctx);
 void file_rx_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);

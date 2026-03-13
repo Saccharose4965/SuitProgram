@@ -3,7 +3,7 @@
 #include "fluid.h"
 
 const shell_legend_t FLUID_LEGEND = {
-    .slots = { SHELL_ICON_BACK, SHELL_ICON_UP, SHELL_ICON_RIGHT, SHELL_ICON_DOWN },
+    .slots = { SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_NONE },
 };
 
 void fluid_app_init_wrapper(shell_app_context_t *ctx)

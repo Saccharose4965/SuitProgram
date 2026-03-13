@@ -8,7 +8,7 @@
 #include "oled.h"
 
 const shell_legend_t VOLUME_LEGEND = {
-    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_OK, SHELL_ICON_MUTE },
+    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_SELECT, SHELL_ICON_MUTE },
 };
 
 typedef struct {

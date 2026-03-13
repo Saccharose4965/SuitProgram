@@ -7,7 +7,7 @@
 #include "shell_ui.h"
 
 const shell_legend_t KEYBOARD_LEGEND = {
-    .slots = { SHELL_ICON_LEFT, SHELL_ICON_DOWN, SHELL_ICON_RIGHT, SHELL_ICON_OK },
+    .slots = { SHELL_ICON_LEFT, SHELL_ICON_DOWN, SHELL_ICON_RIGHT, SHELL_ICON_SELECT },
 };
 
 typedef struct {
@@ -117,7 +117,5 @@ void keyboard_app_draw(struct shell_app_context *ctx, uint8_t *fb, int x, int y,
     if (text) {
         oled_draw_text3x5(fb, 0, 0, text);
     }
-    oled_draw_text3x5(fb, 0, 8, "A< Bv C> D=sel");
-    oled_draw_text3x5(fb, 0, 14, "B+C long=del");
     keyboard_draw(&s_keyboard_app.kb, fb);
 }

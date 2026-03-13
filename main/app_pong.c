@@ -3,7 +3,7 @@
 #include "pong.h"
 
 const shell_legend_t PONG_LEGEND = {
-    .slots = { SHELL_ICON_BACK, SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_OK },
+    .slots = { SHELL_ICON_PAUSE, SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_REFRESH },
 };
 
 void pong_app_init_wrapper(shell_app_context_t *ctx)

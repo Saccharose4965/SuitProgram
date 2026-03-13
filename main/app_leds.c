@@ -11,7 +11,7 @@
 #include "shell_audio.h"
 
 const shell_legend_t LEDS_LEGEND = {
-    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_LEFT, SHELL_ICON_CUSTOM2 },
+    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_LEFT, SHELL_ICON_SELECT },
 };
 
 enum {
@@ -51,11 +51,13 @@ typedef struct {
     int value;
 } leds_menu_meta_t;
 
+#define LEDS_VARIANT_MAX 6
+
 typedef struct {
     const char *label;
-    const char *variant_labels[3];
-    const char *audio_names[3];
-    const char *custom_names[3];
+    const char *variant_labels[LEDS_VARIANT_MAX];
+    const char *audio_names[LEDS_VARIANT_MAX];
+    const char *custom_names[LEDS_VARIANT_MAX];
     uint8_t variant_count;
 } leds_animation_choice_t;
 
@@ -99,8 +101,9 @@ static const leds_animation_choice_t s_animation_choices[] = {
     { "chase",        { NULL,      NULL,      NULL      }, { "comet",       NULL,          NULL      }, { "chase",   NULL,      NULL      }, 1 },
     { "twinkle",      { NULL,      NULL,      NULL      }, { "spark",       NULL,          NULL      }, { "twinkle", NULL,      NULL      }, 1 },
     { "glitch",       { NULL,      NULL,      NULL      }, { "shock",       NULL,          NULL      }, { "glitch",  NULL,      NULL      }, 1 },
-    { "plane",        { "sweep",   "pair",    "fan"     }, { "plane_sweep", "plane_pair",  "plane_fan" },
-                                                                 { "plane",   "mirror",      "prism"   }, 3 },
+    { "plane",        { "sweep",   "pair",    "fan",       "sweep+bg",   "pair+bg",   "fan+bg"   },
+                       { "plane_sweep", "plane_pair", "plane_fan", "plane_sweep", "plane_pair", "plane_fan" },
+                       { "plane",  "mirror",  "prism",     "plane",      "mirror",    "prism"    }, 6 },
     { "ring",         { "pulse",   "train",   NULL      }, { "ring_pulse",  "ring_train",  NULL      },
                                                                  { "ring",    "contour",     NULL      }, 2 },
     { "orbit",        { NULL,      NULL,      NULL      }, { "ring_train",  NULL,          NULL      }, { "orbit",   NULL,      NULL      }, 1 },
@@ -213,6 +216,45 @@ static int animation_variant_index_for_page(int page, int choice_idx)
     int idx = variants[choice_idx];
     if (idx >= count) idx = 0;
     return idx;
+}
+
+static bool animation_choice_is_plane(int choice_idx)
+{
+    choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
+    return strcmp(s_animation_choices[choice_idx].label, "plane") == 0;
+}
+
+static int animation_variant_base_index(int choice_idx, int variant_idx)
+{
+    choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
+    variant_idx = clamp_int(variant_idx, 0, animation_variant_count(choice_idx) - 1);
+    if (animation_choice_is_plane(choice_idx) && variant_idx >= 3) {
+        return variant_idx - 3;
+    }
+    return variant_idx;
+}
+
+static bool animation_variant_has_plane_background(int choice_idx, int variant_idx)
+{
+    choice_idx = clamp_int(choice_idx, 0, kAnimationChoiceCount - 1);
+    variant_idx = clamp_int(variant_idx, 0, animation_variant_count(choice_idx) - 1);
+    return animation_choice_is_plane(choice_idx) && variant_idx >= 3;
+}
+
+static int animation_variant_with_plane_background(int choice_idx, int variant_idx, bool enabled)
+{
+    int base_idx = animation_variant_base_index(choice_idx, variant_idx);
+    if (!animation_choice_is_plane(choice_idx)) {
+        return base_idx;
+    }
+    return enabled ? (base_idx + 3) : base_idx;
+}
+
+static bool plane_background_enabled_for_page(int page)
+{
+    int choice_idx = (page == LEDS_PAGE_AUDIO) ? s_leds.audio_choice : s_leds.custom_choice;
+    int variant_idx = animation_variant_index_for_page(page, choice_idx);
+    return animation_variant_has_plane_background(choice_idx, variant_idx);
 }
 
 static const char *animation_choice_variant_label(int choice_idx, int variant_idx)
@@ -451,8 +493,10 @@ static void leds_apply_color(void)
     led_beat_brightness_set(s_leds.brightness);
     led_audio_brightness_enable(s_leds.audio_brightness_enabled);
     led_audio_energy_range_set(s_leds.audio_energy_range);
+    led_beat_plane_background_enable(plane_background_enabled_for_page(LEDS_PAGE_AUDIO));
     led_modes_set_primary_color(s_leds.color_r, s_leds.color_g, s_leds.color_b);
     led_modes_set_secondary_color(s_leds.color2_r, s_leds.color2_g, s_leds.color2_b);
+    led_modes_plane_background_enable(plane_background_enabled_for_page(LEDS_PAGE_CUSTOM));
     led_modes_color_cycle_set(s_leds.color_cycle);
     led_modes_color_style_set(s_leds.color_style);
     led_modes_highlight_mode_set(s_leds.highlight_mode);
@@ -651,6 +695,7 @@ static void leds_apply_audio(void)
     led_modes_enable(false);
     s_leds.audio_choice = clamp_int(s_leds.audio_choice, 0, kAnimationChoiceCount - 1);
     int variant_idx = animation_variant_index_for_page(LEDS_PAGE_AUDIO, s_leds.audio_choice);
+    led_beat_plane_background_enable(plane_background_enabled_for_page(LEDS_PAGE_AUDIO));
     animation_choice_format_label(LEDS_PAGE_AUDIO, s_leds.audio_choice, label, sizeof(label));
     int mode_idx = animation_choice_mode_index(LEDS_MODE_SOURCE_AUDIO, s_leds.audio_choice, variant_idx);
     if (mode_idx < 0) {
@@ -672,6 +717,7 @@ static void leds_apply_custom(void)
     led_beat_enable(false);
     s_leds.custom_choice = clamp_int(s_leds.custom_choice, 0, kAnimationChoiceCount - 1);
     int variant_idx = animation_variant_index_for_page(LEDS_PAGE_CUSTOM, s_leds.custom_choice);
+    led_modes_plane_background_enable(plane_background_enabled_for_page(LEDS_PAGE_CUSTOM));
     animation_choice_format_label(LEDS_PAGE_CUSTOM, s_leds.custom_choice, label, sizeof(label));
     int mode_idx = animation_choice_mode_index(LEDS_MODE_SOURCE_CUSTOM, s_leds.custom_choice, variant_idx);
     if (mode_idx < 0) {
@@ -836,6 +882,9 @@ static void leds_init_page(shell_app_context_t *ctx, int page)
                                               &choice_idx,
                                               &variant_idx)) {
         s_leds.audio_choice = choice_idx;
+        variant_idx = animation_variant_with_plane_background(choice_idx,
+                                                              variant_idx,
+                                                              led_beat_plane_background_enabled());
         s_audio_choice_variants[choice_idx] = (uint8_t)variant_idx;
     }
     if (animation_choice_find_for_source_mode(LEDS_MODE_SOURCE_CUSTOM,
@@ -843,6 +892,9 @@ static void leds_init_page(shell_app_context_t *ctx, int page)
                                               &choice_idx,
                                               &variant_idx)) {
         s_leds.custom_choice = choice_idx;
+        variant_idx = animation_variant_with_plane_background(choice_idx,
+                                                              variant_idx,
+                                                              led_modes_plane_background_enabled());
         s_custom_choice_variants[choice_idx] = (uint8_t)variant_idx;
     }
     s_leds.audio_sel = animation_selection_index(s_leds.audio_choice);

@@ -38,5 +38,5 @@ void status_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int
 }
 
 const shell_legend_t STATUS_LEGEND = {
-    .slots = { SHELL_ICON_BACK, SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_MENU },
+    .slots = { SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_NONE },
 };

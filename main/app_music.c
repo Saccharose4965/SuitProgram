@@ -33,7 +33,7 @@ static music_state_t s_music = {0};
 static const char *TAG = "app_music";
 
 shell_legend_t MUSIC_LEGEND = {
-    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_OK, SHELL_ICON_CUSTOM2 },
+    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_SELECT, SHELL_ICON_SELECT },
 };
 
 static void music_update_legend(void)

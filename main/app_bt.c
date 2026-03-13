@@ -2,7 +2,7 @@
 #include "bt_audio_app.h"
 
 const shell_legend_t BT_AUDIO_LEGEND = {
-    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_CUSTOM1, SHELL_ICON_CUSTOM2 },
+    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_REFRESH, SHELL_ICON_SELECT },
 };
 
 void bt_app_init_wrapper(shell_app_context_t *ctx)

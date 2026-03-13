@@ -125,6 +125,8 @@ void led_beat_color_set(uint8_t r, uint8_t g, uint8_t b);
 void led_beat_color_get(uint8_t *r, uint8_t *g, uint8_t *b);
 void led_beat_secondary_color_set(uint8_t r, uint8_t g, uint8_t b);
 void led_beat_secondary_color_get(uint8_t *r, uint8_t *g, uint8_t *b);
+void led_beat_plane_background_enable(bool enabled);
+bool led_beat_plane_background_enabled(void);
 void led_beat_color_cycle_set(led_color_cycle_t mode);
 led_color_cycle_t led_beat_color_cycle_get(void);
 void led_beat_color_style_set(led_color_style_t style);

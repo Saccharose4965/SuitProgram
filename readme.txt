@@ -152,7 +152,6 @@ Settings:
 - Bluetooth
 - Volume
 - Svc Restart
-- Keyboard
 - Restart
 
 Simulations:
@@ -188,12 +187,12 @@ LED:
 
 Misc:
 - Back
+- Keyboard
 - Calculator
 - Bad Apple
 
 Current menu stubs (not registered as apps):
 - `gps`
-- `message`
 - `call`
 
 Selecting these logs an unknown app warning and remains in menu.
@@ -224,8 +223,9 @@ LED Audio / LED Custom (`main/app_leds.c`):
 - LED Audio and LED Custom use smooth menu scrolling for selection changes
 - Both pages expose the same animation catalog; the Audio page runs the beat/audio-reactive mapping and the Custom page runs the continuous renderer mapping
 - `plane` variants:
-  - Audio: `plane:sweep`, `plane:pair`, `plane:fan`
-  - Custom: `plane:sweep`, `plane:mirror`, `plane:prism`
+  - Audio: `plane:sweep`, `plane:pair`, `plane:fan`, `plane:sweep+bg`, `plane:pair+bg`, `plane:fan+bg`
+  - Custom: `plane:sweep`, `plane:mirror`, `plane:prism`, `plane:sweep+bg`, `plane:pair+bg`, `plane:fan+bg`
+  - `+bg` uses the secondary color as a dim static background and renders the plane brighter on top
 - `ring` variants:
   - Audio: `ring:pulse`, `ring:train`
   - Custom: `ring:pulse`, `ring:contour`
@@ -296,7 +296,6 @@ Bluetooth (`components/bt_audio/bt_audio_app.c`):
 
 File RX (`main/app_file_rx.c`):
 - `C`: start/stop `audio_rx`
-- `D`: return to `menu`
 - On start, mounts SD if needed, then calls `audio_rx_start(AUDIO_RX_DEFAULT_PORT)`
 
 FFT (`main/app_fft.c`):
@@ -309,10 +308,16 @@ FFT (`main/app_fft.c`):
 - If IMU orientation is not ready yet, it still renders the neutral scene instead of showing a text prompt
 
 Arm Pose (`main/app_stickman.c`):
-- `A`: return to `menu`
+- `A/B`: rotate the figure view left/right
 - `C`: toggle tracked arm left/right
 - `D`: recenter orientation
 - Renders a simple projected stick figure with the selected arm driven by IMU orientation
+
+Message (`main/app_message.c`):
+- `B`: play/stop the current saved message
+- `C`: start/stop mic recording
+- `D`: send the current saved message
+- Records save to `/sdcard/messages/outbox`; incoming files go to `/sdcard/messages/inbox`
 
 Keyboard/Fluid/Pong/Snake/Flappy/2048/Tetris:
 - Shell forwards input/tick/draw to their app/component handlers.
