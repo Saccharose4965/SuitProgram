@@ -8,6 +8,10 @@
 static system_state_t g_state = {
     .current_led_mode = 0,
     .led_mode_name = "idle",
+    .fft_running = false,
+    .fft_bpm_centi = 0,
+    .master_ctrl = SYS_MASTER_CTRL_OFF,
+    .sync_link_active = false,
     .battery_pct = {0, 0, 0},
     .connection = SYS_CONN_DISCONNECTED,
     .time_valid = false,
@@ -78,6 +82,22 @@ void system_state_set_connection(system_connection_t state)
 {
     lock();
     g_state.connection = state;
+    unlock();
+}
+
+void system_state_set_fft_status(bool running, uint16_t bpm_centi)
+{
+    lock();
+    g_state.fft_running = running;
+    g_state.fft_bpm_centi = bpm_centi;
+    unlock();
+}
+
+void system_state_set_master_control(system_master_ctrl_t state, bool link_active)
+{
+    lock();
+    g_state.master_ctrl = state;
+    g_state.sync_link_active = link_active;
     unlock();
 }
 

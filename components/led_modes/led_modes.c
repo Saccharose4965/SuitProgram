@@ -40,7 +40,7 @@ static const led_mode_desc_t s_modes[] = {
     { "plane"   },
     { "prism"   },
     { "ring"    },
-    { "contour" },
+    { "ring_short" },
     { "orbit"   },
     { "aurora"  },
     { "vortex"  },
@@ -806,25 +806,39 @@ static void render_contour(uint8_t *buf, size_t count,
                            float t_sec, uint8_t r, uint8_t g, uint8_t b)
 {
     (void)cfg;
-    uint8_t sr = 0, sg = 0, sb = 0;
-    led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
+    bool background_enabled = s_ring_background_enabled;
+    if (background_enabled) {
+        uint8_t bg_r = (uint8_t)(r * 0.16f);
+        uint8_t bg_g = (uint8_t)(g * 0.16f);
+        uint8_t bg_b = (uint8_t)(b * 0.16f);
+        for (size_t i = 0; i < count; ++i) {
+            led_set_pixel_rgb(buf, i, bg_r, bg_g, bg_b);
+        }
+    }
+
+    float cycle = stats->ring_wave_max + 2.2f;
+    if (cycle < 1.0f) cycle = 1.0f;
+    float front0 = fmodf(t_sec * 22.0f, cycle);
+    float front1 = fmodf(front0 + 0.34f * cycle, cycle);
+    float width = 0.34f + 0.020f * stats->ring_wave_max;
+    if (width < 0.32f) width = 0.32f;
+    float origin_width = 0.24f + 0.04f * stats->ring_radius;
+    if (origin_width < 0.24f) origin_width = 0.24f;
 
     for (size_t i = 0; i < count; ++i) {
         if (!s_spatial_point_valid[i]) continue;
-        const led_point_t *p = &s_spatial_points[i];
-        float radial = s_spatial_radial[i];
-        float iso = 0.22f * p->y + 0.14f * fabsf(p->x) + 0.18f * radial;
-        float bands = 0.5f + 0.5f * sinf(iso - t_sec * 3.1f);
-        float valley = 0.5f + 0.5f * sinf(0.13f * p->x + t_sec * 1.2f);
-        float shimmer = 0.5f + 0.5f * sinf(0.31f * p->y - t_sec * 5.0f + 0.18f * p->x);
-        bands *= bands;
-        bands *= bands;
-        shimmer *= shimmer;
-        shimmer *= shimmer;
-        add_mixed_color(buf, i, r, g, b, sr, sg, sb,
-                        bands * (0.35f + 0.65f * valley),
-                        (1.0f - bands) * 0.10f + shimmer * 0.35f,
-                        shimmer * 0.10f);
+        float ring_d = s_spatial_ring_distance[i];
+        float origin = expf(-ring_d / origin_width);
+        float pulse0 = expf(-fabsf(ring_d - front0) / width);
+        float pulse1 = expf(-fabsf(ring_d - front1) / (1.18f * width));
+        float primary = background_enabled
+            ? (0.08f * origin + 1.08f * pulse0 + 0.92f * pulse1)
+            : (0.14f * origin + 0.98f * pulse0 + 0.78f * pulse1);
+        float white = (background_enabled ? 0.14f : 0.09f) * (pulse0 * pulse0 + 0.8f * pulse1 * pulse1);
+        add_rgb(buf, i,
+                primary * (float)r + white * 255.0f,
+                primary * (float)g + white * 255.0f,
+                primary * (float)b + white * 255.0f);
     }
 }
 
@@ -1007,12 +1021,14 @@ static void render_chase(uint8_t *buf, size_t count, float t_sec,
                          uint8_t r, uint8_t g, uint8_t b)
 {
     if (count == 0) return;
-    float pos_f = fmodf(t_sec * 20.0f, (float)count);
+    float pos_f = fmodf(t_sec * 13.0f, (float)count);
     if (pos_f < 0.0f) pos_f += (float)count;
     size_t pos = (size_t)pos_f;
-    for (int t = 0; t < 10; ++t) {
+    float pulse = 0.5f + 0.5f * sinf(t_sec * 6.8f);
+    pulse = 0.45f + 0.55f * (pulse * pulse);
+    for (int t = 0; t < 18; ++t) {
         size_t idx = (size_t)(((int)pos - t + (int)count) % (int)count);
-        float w = expf(-(float)t / 3.0f);
+        float w = pulse * expf(-(float)t / 6.2f);
         led_set_pixel_rgb(buf, idx,
                           (uint8_t)((float)r * w),
                           (uint8_t)((float)g * w),
@@ -1130,17 +1146,17 @@ static void render_chase_config(uint8_t *buf, size_t count, float t_sec,
         }
     }
 
-    static const float kSoloSpeeds[] = { 18.0f };
+    static const float kSoloSpeeds[] = { 11.0f };
     static const float kSoloOffsets[] = { 0.0f };
-    static const float kSoloTails[] = { 11.0f };
+    static const float kSoloTails[] = { 19.0f };
 
-    static const float kPairSpeeds[] = { 18.0f, 12.0f };
-    static const float kPairOffsets[] = { 0.00f, 0.44f };
-    static const float kPairTails[] = { 11.0f, 8.5f };
+    static const float kPairSpeeds[] = { 10.5f, 7.5f };
+    static const float kPairOffsets[] = { 0.00f, 0.46f };
+    static const float kPairTails[] = { 19.0f, 16.0f };
 
-    static const float kSwarmSpeeds[] = { 10.0f, 14.0f, 18.0f, 23.0f, 29.0f };
-    static const float kSwarmOffsets[] = { 0.00f, 0.19f, 0.41f, 0.67f, 0.83f };
-    static const float kSwarmTails[] = { 13.0f, 11.0f, 9.0f, 8.0f, 6.5f };
+    static const float kSwarmSpeeds[] = { 6.4f, 8.8f, 11.4f, 14.2f, 17.6f };
+    static const float kSwarmOffsets[] = { 0.00f, 0.16f, 0.34f, 0.55f, 0.78f };
+    static const float kSwarmTails[] = { 20.0f, 17.0f, 15.0f, 13.0f, 11.0f };
 
     const float *speeds = kSoloSpeeds;
     const float *offsets = kSoloOffsets;
@@ -1173,9 +1189,11 @@ static void render_chase_config(uint8_t *buf, size_t count, float t_sec,
             if (delta > tail) continue;
 
             float trail = 1.0f - (delta / tail);
-            trail *= trail;
+            float trail_soft = trail * (0.55f + 0.45f * trail);
             float head_glow = expf(-1.9f * fabsf((float)i - head));
-            float level = 0.58f * trail + head_core * head_glow;
+            float pulse = 0.5f + 0.5f * sinf(t_sec * (4.4f + 0.35f * (float)head_idx) - offsets[head_idx] * 6.0f);
+            pulse = 0.40f + 0.60f * (pulse * pulse);
+            float level = pulse * (0.82f * trail_soft + head_core * head_glow);
             if (level < 0.01f) continue;
 
             float white = (s_highlight_mode == LED_HIGHLIGHT_PEAKS) ? (0.08f * head_glow) : 0.0f;

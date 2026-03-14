@@ -24,11 +24,11 @@ typedef struct {
 static menu_state_t g_menu_state = { .selected = 0, .page = MENU_ROOT };
 
 static const menu_entry_t g_menu_root_entries[] = {
+    { "menu_led",      "LEDs"        },
     { "menu_settings", "Settings"    },
     { "menu_games",    "Games"       },
     { "menu_sim",      "Simulations" },
     { "menu_comm",     "Comm"        },
-    { "menu_led",      "LEDs"        },
     { "music",         "Music"       },
     { "menu_misc",     "Misc"        },
 };
@@ -69,9 +69,10 @@ static const menu_entry_t g_menu_comm_entries[] = {
 static const menu_entry_t g_menu_led_entries[] = {
     { "menu_root",   "Back"           },
     { "leds_audio",  "Audio Reactive" },
+    { "leds_custom", "Custom"         },
+    { "leds_color",  "Color"          },
     { "manual_bpm",  "Manual BPM"     },
     { "fft_sync",    "FFT Sync"       },
-    { "leds_custom", "Custom"         },
     { "leds_layout", "Layout Edit"    },
 };
 static const menu_entry_t g_menu_misc_entries[] = {
@@ -160,11 +161,11 @@ void menu_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
     if (!entries || count == 0) return;
 
     if (ev->type == INPUT_EVENT_PRESS) {
-        if (ev->button == INPUT_BTN_A) { // up
+        if (ev->button == INPUT_BTN_A) {
             if (g_menu_state.selected > 0) g_menu_state.selected--;
-        } else if (ev->button == INPUT_BTN_B) { // down
+        } else if (ev->button == INPUT_BTN_B) {
             if (g_menu_state.selected + 1 < count) g_menu_state.selected++;
-        } else if (ev->button == INPUT_BTN_D) { // select
+        } else if (ev->button == INPUT_BTN_D) {
             const char *id = entries[g_menu_state.selected].id;
             if (strcmp(id, "menu_root") == 0) {
                 g_menu_state.page = MENU_ROOT;

@@ -35,6 +35,8 @@ void master_control_app_handle_input(shell_app_context_t *ctx, const input_event
 void master_control_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 void master_control_service_tick(float dt_sec);
 bool master_control_service_blocks_app_tick(const char *app_id);
+system_master_ctrl_t master_control_hud_state(void);
+bool master_control_hud_link_active(void);
 void master_control_handle_link_frame(link_msg_type_t type, const uint8_t *src_mac,
                                       const uint8_t *payload, size_t len);
 extern const shell_legend_t MASTER_CONTROL_LEGEND;
@@ -51,10 +53,18 @@ void adc_debug_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int
 
 void leds_audio_app_init(shell_app_context_t *ctx);
 void leds_custom_app_init(shell_app_context_t *ctx);
+void leds_app_deinit(shell_app_context_t *ctx);
 void leds_app_tick(shell_app_context_t *ctx, float dt_sec);
 void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void leds_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t LEDS_LEGEND;
+
+void led_color_app_init(shell_app_context_t *ctx);
+void led_color_app_deinit(shell_app_context_t *ctx);
+void led_color_app_tick(shell_app_context_t *ctx, float dt_sec);
+void led_color_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
+void led_color_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
+extern const shell_legend_t LED_COLOR_LEGEND;
 
 void led_layout_app_init(shell_app_context_t *ctx);
 void led_layout_app_deinit(shell_app_context_t *ctx);

@@ -559,7 +559,7 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
         .legend = &LEDS_LEGEND,
         .init   = leds_audio_app_init,
-        .deinit = NULL,
+        .deinit = leds_app_deinit,
         .tick   = leds_app_tick,
         .handle_input = leds_app_handle_input,
         .draw   = leds_app_draw,
@@ -570,10 +570,21 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
         .legend = &LEDS_LEGEND,
         .init   = leds_custom_app_init,
-        .deinit = NULL,
+        .deinit = leds_app_deinit,
         .tick   = leds_app_tick,
         .handle_input = leds_app_handle_input,
         .draw   = leds_app_draw,
+    },
+    {
+        .id     = "leds_color",
+        .name   = "LED Color",
+        .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &LED_COLOR_LEGEND,
+        .init   = led_color_app_init,
+        .deinit = led_color_app_deinit,
+        .tick   = led_color_app_tick,
+        .handle_input = led_color_app_handle_input,
+        .draw   = led_color_app_draw,
     },
     {
         .id     = "leds_layout",
@@ -969,6 +980,16 @@ static void shell_run_loop(void)
             app->tick(&s_ctx, dt_sec);
             tick_us = (uint32_t)(esp_timer_get_time() - t0);
         }
+
+        fft_sync_state_t fft_state = {0};
+        fft_get_sync_state(&fft_state);
+        uint16_t fft_bpm_centi =
+            (fft_state.running && fft_state.bpm > 0.5f)
+                ? (uint16_t)(fft_state.bpm * 100.0f + 0.5f)
+                : 0u;
+        system_state_set_fft_status(fft_state.running, fft_bpm_centi);
+        system_state_set_master_control(master_control_hud_state(),
+                                        master_control_hud_link_active());
 
         system_state_t state_snapshot = system_state_get();
         s_ctx.state = &state_snapshot;

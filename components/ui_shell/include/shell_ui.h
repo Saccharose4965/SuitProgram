@@ -53,7 +53,7 @@ typedef struct {
     const char *title;
 } shell_menu_view_t;
 
-// Draw the HUD band (time, batteries, connection) with a left-aligned label.
+// Draw the HUD band with a left-aligned label and right-aligned runtime status.
 void shell_ui_draw_hud(uint8_t *fb, const system_state_t *state, const char *left_label);
 
 // Draw the bottom legend row of 5x5 icons.

@@ -118,62 +118,12 @@ shell_direction_icon_style_t shell_ui_get_direction_icon_style(void)
     return s_direction_icon_style;
 }
 
-static void draw_battery_icon(uint8_t *fb, int x, int y, uint8_t pct)
+static const char *master_ctrl_hud_name(system_master_ctrl_t state)
 {
-    // 8x5 body with 1x3 terminal; fits in HUD 5px height band
-    const int w = 8;
-    const int h = 5;
-    fb_rect_fill(fb, x, y, w - 2, 1);          // top
-    fb_rect_fill(fb, x, y + h - 1, w - 2, 1);  // bottom
-    fb_rect_fill(fb, x, y, 1, h);              // left
-    fb_rect_fill(fb, x + w - 2, y, 1, h);      // right
-    fb_rect_fill(fb, x + w - 1, y + 1, 1, h - 2); // terminal
-
-    int fill_w = ((w - 3) * pct) / 100;
-    if (fill_w > 0) {
-        fb_rect_fill(fb, x + 1, y + 1, fill_w, h - 2);
-    }
-}
-
-static void draw_connection_icon(uint8_t *fb, int x, int y, system_connection_t conn)
-{
-    // simple wifi-ish bars (5x5) that fit in the HUD band
-    const uint8_t rows_disconnected[5] = {
-        0b00000,
-        0b00100,
-        0b00000,
-        0b00100,
-        0b00000,
-    };
-    const uint8_t rows_connecting[5] = {
-        0b00100,
-        0b01010,
-        0b00000,
-        0b00100,
-        0b00000,
-    };
-    const uint8_t rows_connected[5] = {
-        0b00100,
-        0b01010,
-        0b10001,
-        0b00000,
-        0b00100,
-    };
-
-    const uint8_t *rows = rows_disconnected;
-    switch (conn) {
-        case SYS_CONN_CONNECTING: rows = rows_connecting; break;
-        case SYS_CONN_CONNECTED:  rows = rows_connected;  break;
-        default: break;
-    }
-
-    for (int r = 0; r < 5; ++r) {
-        uint8_t row = rows[r];
-        for (int c = 0; c < 5; ++c) {
-            if (row & (1u << (4 - c))) {
-                fb_pset(fb, x + c, y + r);
-            }
-        }
+    switch (state) {
+        case SYS_MASTER_CTRL_MASTER: return "mst";
+        case SYS_MASTER_CTRL_SLAVE:  return "slv";
+        default:                     return "off";
     }
 }
 
@@ -181,40 +131,37 @@ void shell_ui_draw_hud(uint8_t *fb, const system_state_t *state, const char *lef
 {
     if (!fb || !state) return;
 
-    // Clear the band to avoid clipping from content underneath
     fb_rect_clear(fb, 0, 0, PANEL_W, SHELL_UI_HUD_HEIGHT);
 
-    char time_buf[8];
-    if (state->time_valid) {
-        unsigned h = state->hours % 100;
-        unsigned m = state->minutes % 100;
-        snprintf(time_buf, sizeof(time_buf), "%02u:%02u", h, m);
-    } else {
-        strncpy(time_buf, "--:--", sizeof(time_buf));
-        time_buf[sizeof(time_buf) - 1] = '\0';
-    }
-
-    // Layout from the right edge leftwards: time, connection icon, batteries
     const int margin = 2;
-    const int time_w = 19; // "HH:MM" in 3x5 font → 5*4 - 1
-    int time_x = PANEL_W - margin - time_w;
-    oled_draw_text3x5(fb, time_x, 1, time_buf);
-
-    int conn_x = time_x - 7; // 5px icon + 2px gap
-    draw_connection_icon(fb, conn_x, 1, state->connection);
-
-    const int battery_w = 8;
-    const int battery_gap = 1;
-    const int battery_total = 3 * battery_w + 2 * battery_gap;
-    int bx = conn_x - battery_total - 3;
-    for (int i = 0; i < 3; ++i) {
-        draw_battery_icon(fb, bx + i * (battery_w + battery_gap), 1, state->battery_pct[i]);
+    char status_buf[32];
+    if (state->fft_running) {
+        unsigned bpm = (unsigned)((state->fft_bpm_centi + 50u) / 100u);
+        if (bpm > 0u) {
+            snprintf(status_buf, sizeof(status_buf), "fft:%u mc:%s%s",
+                     bpm,
+                     master_ctrl_hud_name(state->master_ctrl),
+                     state->sync_link_active ? "*" : "");
+        } else {
+            snprintf(status_buf, sizeof(status_buf), "fft:on mc:%s%s",
+                     master_ctrl_hud_name(state->master_ctrl),
+                     state->sync_link_active ? "*" : "");
+        }
+    } else {
+        snprintf(status_buf, sizeof(status_buf), "fft:off mc:%s%s",
+                 master_ctrl_hud_name(state->master_ctrl),
+                 state->sync_link_active ? "*" : "");
     }
 
-    // Left label (truncated to avoid colliding with the batteries/time block)
+    int status_w = (int)strlen(status_buf) * 4 - 1;
+    if (status_w < 0) status_w = 0;
+    int status_x = PANEL_W - margin - status_w;
+    if (status_x < margin) status_x = margin;
+    oled_draw_text3x5(fb, status_x, 1, status_buf);
+
     const char *label = left_label ? left_label : state->led_mode_name;
     if (label && *label) {
-        int max_chars = (bx - margin) / 4; // 3px glyph + 1px spacing
+        int max_chars = (status_x - margin - 2) / 4;
         if (max_chars < 0) max_chars = 0;
         if ((int)strlen(label) > max_chars) {
             static char scratch[32];
@@ -228,7 +175,6 @@ void shell_ui_draw_hud(uint8_t *fb, const system_state_t *state, const char *lef
         }
     }
 
-    // Underline HUD band
     for (int x = 0; x < PANEL_W; ++x) {
         fb_pset(fb, x, SHELL_UI_HUD_HEIGHT - 1);
     }

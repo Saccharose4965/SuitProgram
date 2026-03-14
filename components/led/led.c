@@ -1801,12 +1801,12 @@ static void led_comet_trigger_locked(uint8_t r, uint8_t g, uint8_t b, int profil
     int8_t dir = s_comet_spawn_dir;
 
     if (profile <= 0) {
-        led_comet_spawn_locked(r, g, b, dir, 1.0f, 1.00f, 0.00f, 1.00f);
+        led_comet_spawn_locked(r, g, b, dir, 0.82f, 1.70f, 0.00f, 1.00f);
     } else if (profile == 1) {
-        static const float kPairSpeeds[] = { 1.00f, 1.42f };
-        static const float kPairTails[] = { 1.00f, 0.76f };
-        static const float kPairOffsets[] = { 0.00f, 0.38f };
-        static const float kPairAmps[] = { 1.00f, 0.82f };
+        static const float kPairSpeeds[] = { 0.84f, 1.10f };
+        static const float kPairTails[] = { 1.65f, 1.35f };
+        static const float kPairOffsets[] = { 0.00f, 0.30f };
+        static const float kPairAmps[] = { 1.00f, 0.86f };
         for (size_t i = 0; i < sizeof(kPairSpeeds) / sizeof(kPairSpeeds[0]); ++i) {
             led_comet_spawn_locked(r, g, b, dir,
                                    kPairSpeeds[i],
@@ -1815,9 +1815,9 @@ static void led_comet_trigger_locked(uint8_t r, uint8_t g, uint8_t b, int profil
                                    kPairAmps[i]);
         }
     } else {
-        static const float kSwarmSpeeds[] = { 0.62f, 0.84f, 1.00f, 1.28f, 1.56f };
-        static const float kSwarmTails[] = { 1.18f, 1.00f, 0.86f, 0.74f, 0.62f };
-        static const float kSwarmOffsets[] = { 0.00f, 0.17f, 0.34f, 0.56f, 0.78f };
+        static const float kSwarmSpeeds[] = { 0.56f, 0.74f, 0.90f, 1.08f, 1.30f };
+        static const float kSwarmTails[] = { 1.70f, 1.45f, 1.22f, 1.00f, 0.82f };
+        static const float kSwarmOffsets[] = { 0.00f, 0.12f, 0.28f, 0.50f, 0.72f };
         static const float kSwarmAmps[] = { 1.00f, 0.92f, 0.84f, 0.74f, 0.66f };
         for (size_t i = 0; i < sizeof(kSwarmSpeeds) / sizeof(kSwarmSpeeds[0]); ++i) {
             led_comet_spawn_locked(r, g, b, dir,
@@ -1877,9 +1877,9 @@ static bool led_comet_step_locked(float brightness_scale)
             if (delta < 0.0f || delta > comet->tail_leds) continue;
 
             float tail_w = 1.0f - (delta / comet->tail_leds);
-            tail_w *= tail_w;
+            tail_w = tail_w * (0.55f + 0.45f * tail_w);
             float head_w = expf(-1.6f * fabsf((float)led - comet->head));
-            float w = comet->amp * brightness_scale * (0.85f * tail_w + 0.55f * head_w);
+            float w = comet->amp * brightness_scale * (0.98f * tail_w + 0.52f * head_w);
             if (w <= 0.0f) continue;
 
             led_geo_add_rgb_locked(led,
