@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "show_layout_ids.c"
+        "show_package.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        storage_sd
+)

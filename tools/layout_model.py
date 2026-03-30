@@ -84,7 +84,7 @@ class SuitProfile:
 # Exterior front view coordinates: +x is viewer-right, which is left when worn.
 RIGHT_FRONT_GROUPS_2D: dict[str, tuple[tuple[float, float], ...]] = {
     "upper": ((11.5, -13.0), (10.5, -6.0), (6.5, -3.5)),
-    "outer": ((6.0, 9.0), (13.0, 15.0), (24.0, 17.5)),
+    "outer": ((6.0, 9.0), (13.0, 15.0), (24.0, 16.0)),
     "inner": ((8.5, 16.5), (6.5, 18.0), (5.0, 29.0)),
     "belt": ((8.5, 33.5), (25.0, 30.0)),
 }
@@ -94,7 +94,7 @@ RIGHT_FRONT_GROUPS_2D: dict[str, tuple[tuple[float, float], ...]] = {
 RIGHT_BACK_GROUPS_2D: dict[str, tuple[tuple[float, float], ...]] = {
     "back_1": ((21.0, 0.0), (7.5, 0.0)),
     "back_2": ((12.0, 5.5), (7.0, 9.0), (7.0, 15.0)),
-    "back_3": ((27.0, 18.0), (16.0, 23.0), (12.0, 23.0)),
+    "back_3": ((21.5, 17.5), (16.0, 23.0), (12.0, 23.0)),
     "back_4": ((7.0, 34.0), (7.0, 43.0), (10.0, 48.5)),
 }
 

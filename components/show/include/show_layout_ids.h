@@ -1,0 +1,65 @@
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum {
+    SHOW_SECTION_INVALID = 0,
+    SHOW_SECTION_FRONT_LEFT_TOP = 1,
+    SHOW_SECTION_FRONT_LEFT_RING = 2,
+    SHOW_SECTION_FRONT_LEFT_RIB = 3,
+    SHOW_SECTION_FRONT_LEFT_ABS = 4,
+    SHOW_SECTION_FRONT_LEFT_BELT = 5,
+    SHOW_SECTION_BACK_LEFT_BELT = 6,
+    SHOW_SECTION_BACK_LEFT_VERTEBRA = 7,
+    SHOW_SECTION_BACK_LEFT_RIB = 8,
+    SHOW_SECTION_BACK_LEFT_TOP = 9,
+    SHOW_SECTION_LEFT_UPPER_ARM = 10,
+    SHOW_SECTION_LEFT_FOREARM = 11,
+    SHOW_SECTION_FRONT_RIGHT_TOP = 12,
+    SHOW_SECTION_FRONT_RIGHT_RIB = 13,
+    SHOW_SECTION_FRONT_RIGHT_ABS = 14,
+    SHOW_SECTION_FRONT_RIGHT_BELT = 15,
+    SHOW_SECTION_BACK_RIGHT_BELT = 16,
+    SHOW_SECTION_BACK_RIGHT_VERTEBRA = 17,
+    SHOW_SECTION_BACK_RIGHT_RIB = 18,
+    SHOW_SECTION_BACK_RIGHT_TOP = 19,
+    SHOW_SECTION_RIGHT_UPPER_ARM = 20,
+    SHOW_SECTION_RIGHT_FOREARM = 21,
+    SHOW_SECTION_LEFT_UPPER_LEG = 22,
+    SHOW_SECTION_LEFT_LOWER_LEG = 23,
+    SHOW_SECTION_RIGHT_UPPER_LEG = 24,
+    SHOW_SECTION_RIGHT_LOWER_LEG = 25,
+} show_section_id_t;
+
+typedef enum {
+    SHOW_GROUP_INVALID = 0,
+    SHOW_GROUP_ALL = 1,
+    SHOW_GROUP_FRONT_ALL = 2,
+    SHOW_GROUP_BACK_ALL = 3,
+    SHOW_GROUP_LEFT_ALL = 4,
+    SHOW_GROUP_RIGHT_ALL = 5,
+    SHOW_GROUP_TORSO_ALL = 6,
+    SHOW_GROUP_ARMS_ALL = 7,
+    SHOW_GROUP_LEFT_ARM_ALL = 8,
+    SHOW_GROUP_RIGHT_ARM_ALL = 9,
+    SHOW_GROUP_RING = 10,
+    SHOW_GROUP_BELT_ALL = 11,
+    SHOW_GROUP_SPINE = 12,
+    SHOW_GROUP_LEGS_ALL = 13,
+    SHOW_GROUP_LEFT_LEG_ALL = 14,
+    SHOW_GROUP_RIGHT_LEG_ALL = 15,
+} show_group_id_t;
+
+const char *show_section_name(show_section_id_t id);
+const char *show_group_name(show_group_id_t id);
+bool show_section_id_from_name(const char *name, show_section_id_t *out);
+bool show_group_id_from_name(const char *name, show_group_id_t *out);
+
+#ifdef __cplusplus
+}
+#endif

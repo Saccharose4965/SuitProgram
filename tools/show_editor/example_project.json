@@ -1,0 +1,27 @@
+{
+  "meta": {
+    "slug": "demo_show",
+    "title": "Demo Show",
+    "duration_ms": 12000,
+    "tempo_bpm": 98.0,
+    "beat_offset_ms": 160,
+    "fps_hint": 30,
+    "bucket_ms": 1000
+  },
+  "audio": {
+    "source": "music.wav"
+  },
+  "global_clips": [],
+  "roles": {
+    "A": {
+      "clips": []
+    },
+    "B": {
+      "clips": []
+    },
+    "C": {
+      "clips": []
+    }
+  },
+  "palettes": {}
+}

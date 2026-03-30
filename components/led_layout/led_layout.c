@@ -513,7 +513,7 @@ static bool layout_assign_measured_geometry(led_layout_section_t *sec)
         const led_point_t pts[] = {
             {  6.0f,  9.0f, front_z },
             { 13.0f, 15.0f, front_z },
-            { 24.0f, 17.5f, front_z },
+            { 24.0f, 16.0f, front_z },
         };
         section_set_polyline_points(sec, false, pts, 3);
         return true;
@@ -554,7 +554,7 @@ static bool layout_assign_measured_geometry(led_layout_section_t *sec)
     }
     if (strcmp(sec->name, "back_left_rib") == 0) {
         const led_point_t pts[] = {
-            { 27.0f, 18.0f, back_z },
+            { 21.5f, 17.5f, back_z },
             { 16.0f, 23.0f, back_z },
             { 12.0f, 23.0f, back_z },
         };
@@ -600,7 +600,7 @@ static bool layout_assign_measured_geometry(led_layout_section_t *sec)
         const led_point_t pts[] = {
             {  -6.0f,  9.0f, front_z },
             { -13.0f, 15.0f, front_z },
-            { -24.0f, 17.5f, front_z },
+            { -24.0f, 16.0f, front_z },
         };
         section_set_polyline_points(sec, false, pts, 3);
         return true;
@@ -641,7 +641,7 @@ static bool layout_assign_measured_geometry(led_layout_section_t *sec)
     }
     if (strcmp(sec->name, "back_right_rib") == 0) {
         const led_point_t pts[] = {
-            { -27.0f, 18.0f, back_z },
+            { -21.5f, 17.5f, back_z },
             { -16.0f, 23.0f, back_z },
             { -12.0f, 23.0f, back_z },
         };
