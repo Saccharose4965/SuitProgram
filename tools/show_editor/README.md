@@ -23,7 +23,7 @@ Current limitations:
 
 ```sh
 python3 -m tools.show_editor.export_cli \
-  tools/show_editor/example_project.json \
+  shows/hometown.json \
   /tmp/demo_show
 ```
 
@@ -43,8 +43,7 @@ python3 -m pip install -r tools/show_editor/requirements.txt
 ```
 
 By default this resumes the last autosaved editor session. If no prior
-session exists, it falls back to the bundled example project and loads
-`[music.wav](/home/anotherone/Documents/suit/SuitProgram/tools/show_editor/music.wav)` automatically.
+session exists, it falls back to the first project found in `shows/`.
 
 To override session resume and open a specific project:
 
@@ -99,14 +98,14 @@ Session behavior:
 - opening a project with `--project` or from the File menu replaces the resumed session
 
 Timing notes:
-- `Frequency Hz` is the free-running rate for effects like blink, pulse, and strobe.
+- `Frequency Hz` is the free-running rate for effects like blink and pulse.
 - With `Use Project BPM` enabled, that same frequency field becomes `Cycles / Beat`, and new edits are stored that way.
 
 ## Render One Preview Frame
 
 ```sh
 python3 -m tools.show_editor.render_frame_cli \
-  tools/show_editor/example_project.json \
+  shows/hometown.json \
   /tmp/demo_show/frame_flat.svg \
   --layout ../jonas/led_layout.txt \
   --role B \
@@ -117,7 +116,7 @@ For an isometric preview:
 
 ```sh
 python3 -m tools.show_editor.render_frame_cli \
-  tools/show_editor/example_project.json \
+  shows/hometown.json \
   /tmp/demo_show/frame_iso.svg \
   --layout ../jonas/led_layout.txt \
   --role B \

@@ -19,6 +19,9 @@ class AudioWaveform:
     duration_ms: int
     peaks: tuple[float, ...]
     mono_samples: array
+    envelope_min_levels: tuple[tuple[float, ...], ...]
+    envelope_max_levels: tuple[tuple[float, ...], ...]
+    envelope_stride_frames: tuple[int, ...]
 
 
 def _sample_max_abs(sample_width: int) -> float:
@@ -44,6 +47,45 @@ def _decode_sample(raw: bytes, offset: int, sample_width: int) -> int:
             value -= 1 << 24
         return value
     raise ValueError(f"unsupported WAV sample width: {sample_width}")
+
+
+def _build_envelope_levels(
+    mins: list[float],
+    maxes: list[float],
+    stride_frames: int,
+) -> tuple[tuple[tuple[float, ...], ...], tuple[tuple[float, ...], ...], tuple[int, ...]]:
+    min_levels: list[tuple[float, ...]] = []
+    max_levels: list[tuple[float, ...]] = []
+    stride_levels: list[int] = []
+
+    current_mins = tuple(mins) if mins else (0.0,)
+    current_maxes = tuple(maxes) if maxes else (0.0,)
+    current_stride = max(1, int(stride_frames))
+
+    while True:
+        min_levels.append(current_mins)
+        max_levels.append(current_maxes)
+        stride_levels.append(current_stride)
+        if len(current_mins) <= 1:
+            break
+        next_mins: list[float] = []
+        next_maxes: list[float] = []
+        for index in range(0, len(current_mins), 2):
+            left_min = current_mins[index]
+            left_max = current_maxes[index]
+            if index + 1 < len(current_mins):
+                right_min = current_mins[index + 1]
+                right_max = current_maxes[index + 1]
+                next_mins.append(min(left_min, right_min))
+                next_maxes.append(max(left_max, right_max))
+            else:
+                next_mins.append(left_min)
+                next_maxes.append(left_max)
+        current_mins = tuple(next_mins)
+        current_maxes = tuple(next_maxes)
+        current_stride *= 2
+
+    return (tuple(min_levels), tuple(max_levels), tuple(stride_levels))
 
 
 def load_audio_waveform(path: str | Path, peak_count: int = DEFAULT_WAVEFORM_PEAK_COUNT) -> AudioWaveform:
@@ -72,6 +114,9 @@ def load_audio_waveform(path: str | Path, peak_count: int = DEFAULT_WAVEFORM_PEA
                 duration_ms=duration_ms,
                 peaks=(0.0,),
                 mono_samples=array("f"),
+                envelope_min_levels=((0.0,),),
+                envelope_max_levels=((0.0,),),
+                envelope_stride_frames=(1,),
             )
 
         bucket_count = max(1, min(int(peak_count), frame_count))
@@ -79,6 +124,8 @@ def load_audio_waveform(path: str | Path, peak_count: int = DEFAULT_WAVEFORM_PEA
         frame_stride = channel_count * sample_width
         max_abs = _sample_max_abs(sample_width)
         peaks = [0.0] * bucket_count
+        bucket_mins = [1.0] * bucket_count
+        bucket_maxes = [-1.0] * bucket_count
         mono_samples = array("f")
         frame_index = 0
 
@@ -97,11 +144,27 @@ def load_audio_waveform(path: str | Path, peak_count: int = DEFAULT_WAVEFORM_PEA
                     amplitude_sum += abs(normalized)
                     sample_sum += normalized
                 amplitude = min(1.0, amplitude_sum / channel_count)
-                mono_samples.append(max(-1.0, min(1.0, sample_sum / channel_count)))
+                mono_value = max(-1.0, min(1.0, sample_sum / channel_count))
+                mono_samples.append(mono_value)
                 bucket_index = min(bucket_count - 1, (frame_index + local_index) // bucket_size)
                 if amplitude > peaks[bucket_index]:
                     peaks[bucket_index] = amplitude
+                if mono_value < bucket_mins[bucket_index]:
+                    bucket_mins[bucket_index] = mono_value
+                if mono_value > bucket_maxes[bucket_index]:
+                    bucket_maxes[bucket_index] = mono_value
             frame_index += available_frames
+
+    for index in range(bucket_count):
+        if bucket_mins[index] > bucket_maxes[index]:
+            bucket_mins[index] = 0.0
+            bucket_maxes[index] = 0.0
+
+    envelope_min_levels, envelope_max_levels, envelope_stride_frames = _build_envelope_levels(
+        bucket_mins,
+        bucket_maxes,
+        bucket_size,
+    )
 
     return AudioWaveform(
         path=audio_path,
@@ -112,4 +175,7 @@ def load_audio_waveform(path: str | Path, peak_count: int = DEFAULT_WAVEFORM_PEA
         duration_ms=duration_ms,
         peaks=tuple(peaks),
         mono_samples=mono_samples,
+        envelope_min_levels=envelope_min_levels,
+        envelope_max_levels=envelope_max_levels,
+        envelope_stride_frames=envelope_stride_frames,
     )

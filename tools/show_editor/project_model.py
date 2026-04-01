@@ -138,6 +138,16 @@ def resolve_audio_path(project: ShowProject) -> Path | None:
     if audio_path.is_absolute():
         return audio_path
     if project.source_path is not None:
+        project_relative = project.source_path.parent / audio_path
+        if project_relative.exists():
+            return project_relative
+    # Legacy fallback: older projects lived in tools/show_editor, so moving the
+    # JSON into shows/ can otherwise break relative audio paths.
+    legacy_project_dir = Path(__file__).resolve().parent
+    legacy_relative = legacy_project_dir / audio_path
+    if legacy_relative.exists():
+        return legacy_relative
+    if project.source_path is not None:
         return project.source_path.parent / audio_path
     return audio_path
 

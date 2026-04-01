@@ -165,13 +165,11 @@ as:
 
 - blink
 - hold / section on
-- fade in / fade out
-- strobe
 - pulse
 - section light-up
 - sweep
 - chase
-- gradient / palette-driven fills
+- color transitions / palette-driven fills
 - color changes
 - brightness envelopes
 - interlaced role patterns

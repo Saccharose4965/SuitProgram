@@ -11,6 +11,11 @@ from .qt_compat import IMPORT_ERROR, PYSIDE_AVAILABLE, QtCore, QtWidgets
 
 
 def default_project_path() -> Path:
+    repo_root = Path(__file__).resolve().parents[2]
+    shows_dir = repo_root / "shows"
+    if shows_dir.exists():
+        for candidate in sorted(shows_dir.glob("*.json")):
+            return candidate
     return Path(__file__).resolve().parent / "example_project.json"
 
 

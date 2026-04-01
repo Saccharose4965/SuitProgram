@@ -2,19 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-import hashlib
 import math
+import zlib
 
 from tools.layout_model import LayoutSection, sample_section_points
 from tools.spatial_display import display_point_3d
 
 from .color_palettes import BUILTIN_COLOR_PALETTES, parse_palette_text_even, resolve_palette_text
-from .canonical_layout import ROLE_NAMES, group_sections
+from .canonical_layout import GROUP_SECTIONS, ROLE_NAMES, group_sections
 from .layout_io import LoadedLayout
 from .project_model import ShowClip, ShowProject
 
 
 Color = tuple[float, float, float, float]
+ROLE_INDEX = {role: index for index, role in enumerate(ROLE_NAMES)}
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,17 @@ class _LayoutRuntime:
     axis_z: tuple[float, ...]
     axis_radial: tuple[float, ...]
     section_indices: dict[str, tuple[int, ...]]
+    group_indices: dict[str, tuple[int, ...]]
     all_indices: tuple[int, ...]
+    world_x_by_role: tuple[tuple[float, ...], ...]
+    world_y: tuple[float, ...]
+    world_z: tuple[float, ...]
+    global_x_bounds: tuple[float, float]
+    global_y_bounds: tuple[float, float]
+    global_z_bounds: tuple[float, float]
+    global_center: tuple[float, float, float]
+    global_radius_extent: float
+    center_suit_ring_center: tuple[float, float, float]
 
 
 def _clamp01(value: float) -> float:
@@ -224,16 +235,88 @@ def _layout_runtime(sections: tuple[LayoutSection, ...]) -> _LayoutRuntime:
                 )
             )
 
+    axis_x_tuple = tuple(axis_x)
+    axis_y_tuple = tuple(axis_y)
+    axis_z_tuple = tuple(axis_z)
+    section_us_tuple = tuple(section_us)
+    if axis_x_tuple:
+        span_x = max(axis_x_tuple) - min(axis_x_tuple)
+        spacing_x = max(1.0, span_x * 1.5)
+        center_index = (len(ROLE_NAMES) - 1) * 0.5
+        world_x_by_role = tuple(
+            tuple(value + (role_index - center_index) * spacing_x for value in axis_x_tuple)
+            for role_index, _role in enumerate(ROLE_NAMES)
+        )
+        global_x_bounds = (
+            min(min(values) for values in world_x_by_role),
+            max(max(values) for values in world_x_by_role),
+        )
+        global_y_bounds = (min(axis_y_tuple), max(axis_y_tuple))
+        global_z_bounds = (min(axis_z_tuple), max(axis_z_tuple))
+        global_center = (
+            (global_x_bounds[0] + global_x_bounds[1]) * 0.5,
+            (global_y_bounds[0] + global_y_bounds[1]) * 0.5,
+            (global_z_bounds[0] + global_z_bounds[1]) * 0.5,
+        )
+        global_radius_extent = 1.0
+        for role_index, _role in enumerate(ROLE_NAMES):
+            world_x = world_x_by_role[role_index]
+            for px, py, pz in zip(world_x, axis_y_tuple, axis_z_tuple):
+                global_radius_extent = max(
+                    global_radius_extent,
+                    math.sqrt(
+                        (px - global_center[0]) ** 2 +
+                        (py - global_center[1]) ** 2 +
+                        (pz - global_center[2]) ** 2
+                    ),
+                )
+    else:
+        world_x_by_role = tuple(() for _ in ROLE_NAMES)
+        global_x_bounds = (0.0, 1.0)
+        global_y_bounds = (0.0, 1.0)
+        global_z_bounds = (0.0, 1.0)
+        global_center = (0.0, 0.0, 0.0)
+        global_radius_extent = 1.0
+
+    group_indices: dict[str, tuple[int, ...]] = {}
+    for group_name, section_names_in_group in GROUP_SECTIONS.items():
+        indices: list[int] = []
+        for section_name in section_names_in_group:
+            indices.extend(section_indices.get(section_name, ()))
+        group_indices[group_name] = tuple(indices)
+
+    ring_indices = group_indices.get("ring", ())
+    if ring_indices and world_x_by_role and ROLE_INDEX.get("B", 0) < len(world_x_by_role):
+        world_x = world_x_by_role[ROLE_INDEX["B"]]
+        ring_count = float(len(ring_indices))
+        center_suit_ring_center = (
+            sum(world_x[index] for index in ring_indices) / ring_count,
+            sum(axis_y_tuple[index] for index in ring_indices) / ring_count,
+            sum(axis_z_tuple[index] for index in ring_indices) / ring_count,
+        )
+    else:
+        center_suit_ring_center = global_center
+
     return _LayoutRuntime(
         section_names=tuple(section_names),
         points=tuple(points),
-        section_us=tuple(section_us),
-        axis_x=tuple(axis_x),
-        axis_y=tuple(axis_y),
-        axis_z=tuple(axis_z),
+        section_us=section_us_tuple,
+        axis_x=axis_x_tuple,
+        axis_y=axis_y_tuple,
+        axis_z=axis_z_tuple,
         axis_radial=tuple(axis_radial),
         section_indices=section_indices,
+        group_indices=group_indices,
         all_indices=tuple(range(len(points))),
+        world_x_by_role=world_x_by_role,
+        world_y=axis_y_tuple,
+        world_z=axis_z_tuple,
+        global_x_bounds=global_x_bounds,
+        global_y_bounds=global_y_bounds,
+        global_z_bounds=global_z_bounds,
+        global_center=global_center,
+        global_radius_extent=global_radius_extent,
+        center_suit_ring_center=center_suit_ring_center,
     )
 
 
@@ -311,18 +394,37 @@ def _effect_phase(project: ShowProject, clip: ShowClip, time_ms: int, frequency_
 def _axis_random_angle(clip: ShowClip | None, cycle_index: int = 0) -> float:
     if clip is None:
         return 0.0
+    seed = _clip_seed(clip)
+    value = _hash_u32_fast(seed, 0, 0, max(0, int(cycle_index)), 0x41C6CE57)
+    return (value / 4294967295.0) * (math.pi * 2.0)
+
+
+def _clip_seed(clip: ShowClip) -> int:
     payload = (
         f"{clip.effect}|{clip.target_kind}|{clip.target}|"
-        f"{clip.layer}|{clip.start_ms}|{clip.end_ms}|{max(0, int(cycle_index))}"
+        f"{clip.layer}|{clip.start_ms}|{clip.end_ms}"
     ).encode("utf-8")
-    digest = hashlib.blake2b(payload, digest_size=2).digest()
-    return (int.from_bytes(digest, "little") / 65535.0) * (math.pi * 2.0)
+    return zlib.crc32(payload) & 0xFFFFFFFF
 
 
-def _hash_unit(*parts: object) -> float:
-    payload = "|".join(str(part) for part in parts).encode("utf-8")
-    digest = hashlib.blake2b(payload, digest_size=2).digest()
-    return int.from_bytes(digest, "little") / 65535.0
+def _hash_u32_fast(seed: int, role_index: int, led_index: int, cycle_index: int, salt: int) -> int:
+    value = (
+        seed ^
+        ((role_index + 1) * 0x9E3779B9) ^
+        ((led_index + 1) * 0x85EBCA6B) ^
+        ((cycle_index + 1) * 0xC2B2AE35) ^
+        salt
+    ) & 0xFFFFFFFF
+    value ^= value >> 16
+    value = (value * 0x7FEB352D) & 0xFFFFFFFF
+    value ^= value >> 15
+    value = (value * 0x846CA68B) & 0xFFFFFFFF
+    value ^= value >> 16
+    return value
+
+
+def _hash_unit_fast(seed: int, role_index: int, led_index: int, cycle_index: int, salt: int) -> float:
+    return _hash_u32_fast(seed, role_index, led_index, cycle_index, salt) / 4294967295.0
 
 
 def _axis_values(
@@ -377,19 +479,11 @@ def _axis_bounds(
     return (lo, hi)
 
 
-def _role_world_offset_x(runtime: _LayoutRuntime, role: str) -> float:
-    if role not in ROLE_NAMES or not runtime.axis_x:
-        return 0.0
-    span_x = max(runtime.axis_x) - min(runtime.axis_x)
-    spacing_x = max(1.0, span_x * 1.5)
-    center_index = (len(ROLE_NAMES) - 1) * 0.5
-    return (ROLE_NAMES.index(role) - center_index) * spacing_x
-
-
 def _world_xyz(runtime: _LayoutRuntime, role: str) -> tuple[tuple[float, ...], tuple[float, ...], tuple[float, ...]]:
-    offset_x = _role_world_offset_x(runtime, role)
-    world_x = tuple(value + offset_x for value in runtime.axis_x)
-    return (world_x, runtime.axis_y, runtime.axis_z)
+    role_index = ROLE_INDEX.get(role)
+    if role_index is None or role_index >= len(runtime.world_x_by_role):
+        return ((), (), ())
+    return (runtime.world_x_by_role[role_index], runtime.world_y, runtime.world_z)
 
 
 def _world_axis_values(
@@ -422,12 +516,70 @@ def _world_axis_values(
     return world_y
 
 
+def _random_xy_components(clip: ShowClip | None, cycle_index: int = 0) -> tuple[float, float]:
+    angle = _axis_random_angle(clip, cycle_index)
+    return (math.cos(angle), math.sin(angle))
+
+
+def _axis_bounds_random_xy(
+    axis_x: tuple[float, ...],
+    axis_y: tuple[float, ...],
+    indices: tuple[int, ...],
+    axis_cos: float,
+    axis_sin: float,
+) -> tuple[float, float]:
+    if not indices:
+        return (0.0, 1.0)
+    first_index = indices[0]
+    lo = axis_x[first_index] * axis_cos + axis_y[first_index] * axis_sin
+    hi = lo
+    for index in indices[1:]:
+        value = axis_x[index] * axis_cos + axis_y[index] * axis_sin
+        if value < lo:
+            lo = value
+        elif value > hi:
+            hi = value
+    return (lo, hi)
+
+
+def _global_bounds_random_xy(
+    runtime: _LayoutRuntime,
+    axis_cos: float,
+    axis_sin: float,
+) -> tuple[float, float]:
+    if not runtime.world_x_by_role or not runtime.world_y:
+        return (0.0, 1.0)
+    first = True
+    lo = 0.0
+    hi = 0.0
+    for world_x in runtime.world_x_by_role:
+        for px, py in zip(world_x, runtime.world_y):
+            value = px * axis_cos + py * axis_sin
+            if first:
+                lo = value
+                hi = value
+                first = False
+            elif value < lo:
+                lo = value
+            elif value > hi:
+                hi = value
+    if first:
+        return (0.0, 1.0)
+    return (lo, hi)
+
+
 def _global_axis_bounds(
     runtime: _LayoutRuntime,
     axis: str,
     clip: ShowClip | None = None,
     cycle_index: int = 0,
 ) -> tuple[float, float]:
+    if axis == "x":
+        return runtime.global_x_bounds
+    if axis == "y":
+        return runtime.global_y_bounds
+    if axis == "z":
+        return runtime.global_z_bounds
     first = True
     lo = 0.0
     hi = 0.0
@@ -450,50 +602,25 @@ def _global_axis_bounds(
 
 
 def _global_center(runtime: _LayoutRuntime) -> tuple[float, float, float]:
-    if not runtime.axis_x:
-        return (0.0, 0.0, 0.0)
-    xs: list[float] = []
-    ys: list[float] = []
-    zs: list[float] = []
-    for role in ROLE_NAMES:
-        world_x, world_y, world_z = _world_xyz(runtime, role)
-        xs.extend(world_x)
-        ys.extend(world_y)
-        zs.extend(world_z)
-    return (
-        (min(xs) + max(xs)) * 0.5,
-        (min(ys) + max(ys)) * 0.5,
-        (min(zs) + max(zs)) * 0.5,
-    )
+    return runtime.global_center
+
+
+def _traveling_orb_cross_x(runtime: _LayoutRuntime, clip: ShowClip, cycle_index: int) -> float:
+    lo, hi = runtime.global_x_bounds
+    if abs(hi - lo) < 1e-6:
+        return (lo + hi) * 0.5
+    seed = _clip_seed(clip)
+    unit = _hash_unit_fast(seed, 0, 0, cycle_index, 0x54A9D93B)
+    return _lerp(lo, hi, unit)
 
 
 def _global_radius_extent(runtime: _LayoutRuntime, center: tuple[float, float, float]) -> float:
-    max_distance = 1.0
-    cx, cy, cz = center
-    for role in ROLE_NAMES:
-        world_x, world_y, world_z = _world_xyz(runtime, role)
-        for px, py, pz in zip(world_x, world_y, world_z):
-            max_distance = max(
-                max_distance,
-                math.sqrt((px - cx) ** 2 + (py - cy) ** 2 + (pz - cz) ** 2),
-            )
-    return max_distance
+    del center
+    return runtime.global_radius_extent
 
 
 def _center_suit_ring_center(runtime: _LayoutRuntime) -> tuple[float, float, float]:
-    ring_section_names = group_sections("ring")
-    world_x, world_y, world_z = _world_xyz(runtime, "B")
-    ring_indices: list[int] = []
-    for section_name in ring_section_names:
-        ring_indices.extend(runtime.section_indices.get(section_name, ()))
-    if not ring_indices:
-        return _global_center(runtime)
-    count = float(len(ring_indices))
-    return (
-        sum(world_x[index] for index in ring_indices) / count,
-        sum(world_y[index] for index in ring_indices) / count,
-        sum(world_z[index] for index in ring_indices) / count,
-    )
+    return runtime.center_suit_ring_center
 
 
 def _curve_value(clip: ShowClip, key: str, clip_t: float) -> float | None:
@@ -554,6 +681,10 @@ def _color_rate(clip: ShowClip) -> float:
         return 1.0
 
 
+def _color_fit_to_clip_enabled(clip: ShowClip) -> bool:
+    return bool(clip.params.get("color_fit_to_clip", False))
+
+
 def _color_tempo_sync_enabled(clip: ShowClip) -> bool:
     if "color_tempo_sync" in clip.params:
         return bool(clip.params.get("color_tempo_sync", True))
@@ -573,6 +704,8 @@ def _smoothstep01(value: float) -> float:
 
 def _color_cycle_t(project: ShowProject, clip: ShowClip, time_ms: int, clip_t: float) -> float:
     rate = _color_rate(clip)
+    if _color_fit_to_clip_enabled(clip):
+        return (_clamp01(clip_t) * max(0.0625, rate)) % 1.0
     if _color_tempo_sync_enabled(clip):
         if project.tempo_bpm <= 0.0:
             return clip_t
@@ -653,14 +786,62 @@ def _target_indices(runtime: _LayoutRuntime, clip: ShowClip) -> tuple[int, ...]:
             for name in str(clip.target).split(",")
             if name.strip()
         ):
-            try:
-                sections = group_sections(group_name)
-            except KeyError:
-                continue
-            for section_name in sections:
-                indices.extend(runtime.section_indices.get(section_name, ()))
+            indices.extend(runtime.group_indices.get(group_name, ()))
         return tuple(indices)
     return ()
+
+
+def _blend_uniform(
+    mode: str,
+    target_indices: tuple[int, ...],
+    src_r: float,
+    src_g: float,
+    src_b: float,
+    src_a: float,
+    dst_r: list[float],
+    dst_g: list[float],
+    dst_b: list[float],
+    dst_a: list[float],
+) -> None:
+    src_r = _clamp01(src_r)
+    src_g = _clamp01(src_g)
+    src_b = _clamp01(src_b)
+    src_a = _clamp01(src_a)
+    if not target_indices or src_a <= 0.0:
+        return
+    if mode == "replace":
+        for index in target_indices:
+            dst_r[index] = src_r
+            dst_g[index] = src_g
+            dst_b[index] = src_b
+            dst_a[index] = src_a
+        return
+    if mode == "add":
+        premul_r = src_r * src_a
+        premul_g = src_g * src_a
+        premul_b = src_b * src_a
+        for index in target_indices:
+            dst_r[index] = _clamp01(dst_r[index] + premul_r)
+            dst_g[index] = _clamp01(dst_g[index] + premul_g)
+            dst_b[index] = _clamp01(dst_b[index] + premul_b)
+            dst_a[index] = _clamp01(max(dst_a[index], src_a))
+        return
+    if mode == "max":
+        premul_r = src_r * src_a
+        premul_g = src_g * src_a
+        premul_b = src_b * src_a
+        for index in target_indices:
+            dst_r[index] = max(dst_r[index], premul_r)
+            dst_g[index] = max(dst_g[index], premul_g)
+            dst_b[index] = max(dst_b[index], premul_b)
+            dst_a[index] = max(dst_a[index], src_a)
+        return
+    inv = 1.0 - src_a
+    for index in target_indices:
+        dst_r[index] = _clamp01(src_r * src_a + dst_r[index] * inv)
+        dst_g[index] = _clamp01(src_g * src_a + dst_g[index] * inv)
+        dst_b[index] = _clamp01(src_b * src_a + dst_b[index] * inv)
+        dst_a[index] = _clamp01(src_a + dst_a[index] * inv)
 
 
 def _blend_into(
@@ -712,13 +893,30 @@ def _role_clips(project: ShowProject, role: str) -> list[ShowClip]:
     return clips
 
 
+def _sorted_role_clip_map(project: ShowProject) -> dict[str, tuple[ShowClip, ...]]:
+    def clip_key(clip: ShowClip) -> tuple[int, int, int]:
+        return (clip.layer, clip.start_ms, clip.end_ms)
+
+    global_clips = tuple(sorted(project.global_clips, key=clip_key))
+    role_map: dict[str, tuple[ShowClip, ...]] = {}
+    for role in ROLE_NAMES:
+        role_clips = tuple(sorted(project.role_clips.get(role, ()), key=clip_key))
+        clips = list(global_clips)
+        clips.extend(role_clips)
+        clips.sort(key=clip_key)
+        role_map[role] = tuple(clips)
+    return role_map
+
+
 def _build_preview_frame(
     project: ShowProject,
     role: str,
     time_ms: int,
     runtime: _LayoutRuntime,
+    role_clips: tuple[ShowClip, ...] | None = None,
 ) -> PreviewFrame:
-    clips = [clip for clip in _role_clips(project, role) if _clip_active(clip, time_ms)]
+    clip_source = _role_clips(project, role) if role_clips is None else role_clips
+    clips = [clip for clip in clip_source if _clip_active(clip, time_ms)]
     led_count = len(runtime.points)
     color_r = [0.0] * led_count
     color_g = [0.0] * led_count
@@ -736,18 +934,24 @@ def _build_preview_frame(
         intensity = _param_float(clip, "intensity", 1.0, clip_t)
         effect = clip.effect
 
-        if effect in {"blink", "strobe"}:
-            frequency_hz = _param_float(clip, "frequency_hz", 2.0 if effect == "blink" else 8.0, clip_t)
+        if effect == "blink":
+            frequency_hz = _param_float(clip, "frequency_hz", 2.0, clip_t)
             duty_cycle = _clamp01(_param_float(clip, "duty_cycle", 0.5, clip_t))
             phase = _param_float(clip, "phase", 0.0, clip_t)
             on = 1.0 if _effect_phase(project, clip, time_ms, frequency_hz, phase) < duty_cycle else 0.0
             scale = intensity * on
-            src_r = _clamp01(base_r * scale)
-            src_g = _clamp01(base_g * scale)
-            src_b = _clamp01(base_b * scale)
-            src_a = _clamp01(base_a * scale)
-            for index in target_indices:
-                _blend_into(blend_mode, index, src_r, src_g, src_b, src_a, color_r, color_g, color_b, color_a)
+            _blend_uniform(
+                blend_mode,
+                target_indices,
+                base_r * scale,
+                base_g * scale,
+                base_b * scale,
+                base_a * scale,
+                color_r,
+                color_g,
+                color_b,
+                color_a,
+            )
             continue
 
         if effect == "pulse":
@@ -758,83 +962,18 @@ def _build_preview_frame(
             wave = 0.5 - 0.5 * math.cos(2.0 * math.pi * _effect_phase(project, clip, time_ms, frequency_hz, phase))
             amount = _lerp(min_intensity, max_intensity, wave)
             scale = intensity * amount
-            src_r = _clamp01(base_r * scale)
-            src_g = _clamp01(base_g * scale)
-            src_b = _clamp01(base_b * scale)
-            src_a = _clamp01(base_a * scale)
-            for index in target_indices:
-                _blend_into(blend_mode, index, src_r, src_g, src_b, src_a, color_r, color_g, color_b, color_a)
-            continue
-
-        if effect == "fade":
-            target_r, target_g, target_b, target_a = _rgba_from_params(
-                clip.params,
-                key="to_color",
-                default=(0, 0, 0, 255),
+            _blend_uniform(
+                blend_mode,
+                target_indices,
+                base_r * scale,
+                base_g * scale,
+                base_b * scale,
+                base_a * scale,
+                color_r,
+                color_g,
+                color_b,
+                color_a,
             )
-            src_r = _clamp01(_lerp(base_r, target_r, clip_t) * intensity)
-            src_g = _clamp01(_lerp(base_g, target_g, clip_t) * intensity)
-            src_b = _clamp01(_lerp(base_b, target_b, clip_t) * intensity)
-            src_a = _clamp01(_lerp(base_a, target_a, clip_t) * intensity)
-            for index in target_indices:
-                _blend_into(blend_mode, index, src_r, src_g, src_b, src_a, color_r, color_g, color_b, color_a)
-            continue
-
-        if effect == "gradient":
-            target_r, target_g, target_b, target_a = _rgba_from_params(
-                clip.params,
-                key="to_color",
-                default=(255, 255, 255, 255),
-            )
-            axis = str(clip.params.get("axis", "y"))
-            axis_values = _axis_values(runtime, axis, clip, cycle_index=0)
-            lo, hi = _axis_bounds(runtime, target_indices, axis, clip, cycle_index=0)
-            inv_range = 0.0 if axis == "section_u" or abs(hi - lo) < 1e-6 else 1.0 / (hi - lo)
-            for index in target_indices:
-                if axis == "section_u":
-                    u = runtime.section_us[index]
-                elif inv_range == 0.0:
-                    u = 0.5
-                else:
-                    u = (axis_values[index] - lo) * inv_range
-                _blend_into(
-                    blend_mode,
-                    index,
-                    _clamp01(_lerp(base_r, target_r, u) * intensity),
-                    _clamp01(_lerp(base_g, target_g, u) * intensity),
-                    _clamp01(_lerp(base_b, target_b, u) * intensity),
-                    _clamp01(_lerp(base_a, target_a, u) * intensity),
-                    color_r,
-                    color_g,
-                    color_b,
-                    color_a,
-                )
-            continue
-
-        if effect == "palette_cycle":
-            frequency_hz = _param_float(clip, "frequency_hz", 1.0, clip_t)
-            phase = _param_float(clip, "phase", 0.0, clip_t)
-            cycle_t = _effect_phase(project, clip, time_ms, frequency_hz, phase)
-            target_r, target_g, target_b, target_a = _rgba_from_params(
-                clip.params,
-                key="to_color",
-                default=(255, 255, 255, 255),
-            )
-            palette_text = str(clip.params.get("palette_text", "")).strip()
-            palette_color = _sample_palette(_parse_palette_text(palette_text), cycle_t) if palette_text else None
-            if palette_color is not None:
-                src_r, src_g, src_b, src_a = palette_color
-            else:
-                src_r = _lerp(base_r, target_r, cycle_t)
-                src_g = _lerp(base_g, target_g, cycle_t)
-                src_b = _lerp(base_b, target_b, cycle_t)
-                src_a = _lerp(base_a, target_a, cycle_t)
-            src_r = _clamp01(src_r * intensity)
-            src_g = _clamp01(src_g * intensity)
-            src_b = _clamp01(src_b * intensity)
-            src_a = _clamp01(src_a * intensity)
-            for index in target_indices:
-                _blend_into(blend_mode, index, src_r, src_g, src_b, src_a, color_r, color_g, color_b, color_a)
             continue
 
         if effect in {"sweep", "mirror_sweep"}:
@@ -854,13 +993,49 @@ def _build_preview_frame(
                 cycle_index = 0
             if reverse:
                 travel_t = 1.0 - travel_t
-            axis_values = _axis_values(runtime, axis, clip, cycle_index=cycle_index)
-            lo, hi = _axis_bounds(runtime, target_indices, axis, clip, cycle_index=cycle_index)
+            axis_cos = 0.0
+            axis_sin = 0.0
+            if axis == "random_xy":
+                axis_cos, axis_sin = _random_xy_components(clip, cycle_index)
+                lo, hi = _axis_bounds_random_xy(runtime.axis_x, runtime.axis_y, target_indices, axis_cos, axis_sin)
+                axis_values = ()
+            else:
+                axis_values = _axis_values(runtime, axis, clip, cycle_index=cycle_index)
+                lo, hi = _axis_bounds(runtime, target_indices, axis, clip, cycle_index=cycle_index)
             inv_range = 0.0 if axis == "section_u" or abs(hi - lo) < 1e-6 else 1.0 / (hi - lo)
             head = _lerp(-travel_margin, 1.0 + travel_margin, travel_t)
+            if blend_mode == "max":
+                for index in target_indices:
+                    if axis == "section_u":
+                        pos = runtime.section_us[index]
+                    elif axis == "random_xy":
+                        pos = 0.5 if inv_range == 0.0 else ((runtime.axis_x[index] * axis_cos + runtime.axis_y[index] * axis_sin) - lo) * inv_range
+                    elif inv_range == 0.0:
+                        pos = 0.5
+                    else:
+                        pos = (axis_values[index] - lo) * inv_range
+                    if effect == "mirror_sweep":
+                        distance = min(abs(pos - head), abs((1.0 - pos) - head))
+                    else:
+                        distance = abs(pos - head)
+                    if distance <= core_half_width:
+                        falloff = 1.0
+                    else:
+                        falloff = _clamp01(1.0 - (distance - core_half_width) / softness)
+                    src_r = _clamp01(base_r * intensity * falloff)
+                    src_g = _clamp01(base_g * intensity * falloff)
+                    src_b = _clamp01(base_b * intensity * falloff)
+                    src_a = _clamp01(base_a * intensity * falloff)
+                    color_r[index] = max(color_r[index], src_r)
+                    color_g[index] = max(color_g[index], src_g)
+                    color_b[index] = max(color_b[index], src_b)
+                    color_a[index] = max(color_a[index], src_a)
+                continue
             for index in target_indices:
                 if axis == "section_u":
                     pos = runtime.section_us[index]
+                elif axis == "random_xy":
+                    pos = 0.5 if inv_range == 0.0 else ((runtime.axis_x[index] * axis_cos + runtime.axis_y[index] * axis_sin) - lo) * inv_range
                 elif inv_range == 0.0:
                     pos = 0.5
                 else:
@@ -904,6 +1079,23 @@ def _build_preview_frame(
             core_half_width = width * 0.5
             travel_margin = _travel_margin(core_half_width, softness)
             head = _lerp(-travel_margin, 1.0 + travel_margin, travel_t)
+            if blend_mode == "max":
+                for index in target_indices:
+                    pos = abs(runtime.section_us[index] - 0.5) * 2.0
+                    distance = abs(pos - head)
+                    if distance <= core_half_width:
+                        falloff = 1.0
+                    else:
+                        falloff = _clamp01(1.0 - (distance - core_half_width) / softness)
+                    src_r = _clamp01(base_r * intensity * falloff)
+                    src_g = _clamp01(base_g * intensity * falloff)
+                    src_b = _clamp01(base_b * intensity * falloff)
+                    src_a = _clamp01(base_a * intensity * falloff)
+                    color_r[index] = max(color_r[index], src_r)
+                    color_g[index] = max(color_g[index], src_g)
+                    color_b[index] = max(color_b[index], src_b)
+                    color_a[index] = max(color_a[index], src_a)
+                continue
             for index in target_indices:
                 pos = abs(runtime.section_us[index] - 0.5) * 2.0
                 distance = abs(pos - head)
@@ -940,12 +1132,43 @@ def _build_preview_frame(
                 cycle_position = _time_cycle_position(clip, time_ms, frequency_hz, phase)
                 travel_t = cycle_position % 1.0 if frequency_hz > 0.0 else clip_t
                 cycle_index = int(math.floor(cycle_position)) if frequency_hz > 0.0 else 0
-            axis_values = _axis_values(runtime, axis, clip, cycle_index=cycle_index)
-            lo, hi = _axis_bounds(runtime, target_indices, axis, clip, cycle_index=cycle_index)
+            axis_cos = 0.0
+            axis_sin = 0.0
+            if axis == "random_xy":
+                axis_cos, axis_sin = _random_xy_components(clip, cycle_index)
+                lo, hi = _axis_bounds_random_xy(runtime.axis_x, runtime.axis_y, target_indices, axis_cos, axis_sin)
+                axis_values = ()
+            else:
+                axis_values = _axis_values(runtime, axis, clip, cycle_index=cycle_index)
+                lo, hi = _axis_bounds(runtime, target_indices, axis, clip, cycle_index=cycle_index)
             inv_range = 0.0 if axis == "section_u" or abs(hi - lo) < 1e-6 else 1.0 / (hi - lo)
+            if blend_mode == "max":
+                for index in target_indices:
+                    if axis == "section_u":
+                        pos = runtime.section_us[index]
+                    elif axis == "random_xy":
+                        pos = 0.5 if inv_range == 0.0 else ((runtime.axis_x[index] * axis_cos + runtime.axis_y[index] * axis_sin) - lo) * inv_range
+                    elif inv_range == 0.0:
+                        pos = 0.5
+                    else:
+                        pos = (axis_values[index] - lo) * inv_range
+                    local = (pos * repeats + travel_t * repeats) % 1.0
+                    distance = min(local, 1.0 - local)
+                    falloff = _clamp01(1.0 - distance / width)
+                    src_r = _clamp01(base_r * intensity * falloff)
+                    src_g = _clamp01(base_g * intensity * falloff)
+                    src_b = _clamp01(base_b * intensity * falloff)
+                    src_a = _clamp01(base_a * intensity * falloff)
+                    color_r[index] = max(color_r[index], src_r)
+                    color_g[index] = max(color_g[index], src_g)
+                    color_b[index] = max(color_b[index], src_b)
+                    color_a[index] = max(color_a[index], src_a)
+                continue
             for index in target_indices:
                 if axis == "section_u":
                     pos = runtime.section_us[index]
+                elif axis == "random_xy":
+                    pos = 0.5 if inv_range == 0.0 else ((runtime.axis_x[index] * axis_cos + runtime.axis_y[index] * axis_sin) - lo) * inv_range
                 elif inv_range == 0.0:
                     pos = 0.5
                 else:
@@ -979,9 +1202,29 @@ def _build_preview_frame(
                 cycle_position = _time_cycle_position(clip, time_ms, frequency_hz, phase)
                 sparkle_t = cycle_position % 1.0 if frequency_hz > 0.0 else clip_t
                 cycle_index = int(math.floor(cycle_position)) if frequency_hz > 0.0 else 0
+            role_index = ROLE_INDEX.get(role, 0)
+            clip_seed = _clip_seed(clip)
+            if blend_mode == "max":
+                for index in target_indices:
+                    hash_value = _hash_u32_fast(clip_seed, role_index, index, cycle_index, 0x5A17)
+                    phase_offset = (hash_value & 0xFFFF) / 65535.0
+                    amplitude = 0.35 + 0.65 * ((((hash_value >> 16) ^ hash_value) & 0xFFFF) / 65535.0)
+                    local_t = (sparkle_t + phase_offset) % 1.0
+                    sparkle = max(0.0, 1.0 - abs(local_t * 2.0 - 1.0))
+                    sparkle = sparkle * sparkle * amplitude
+                    src_r = _clamp01(base_r * intensity * sparkle)
+                    src_g = _clamp01(base_g * intensity * sparkle)
+                    src_b = _clamp01(base_b * intensity * sparkle)
+                    src_a = _clamp01(base_a * intensity * sparkle)
+                    color_r[index] = max(color_r[index], src_r)
+                    color_g[index] = max(color_g[index], src_g)
+                    color_b[index] = max(color_b[index], src_b)
+                    color_a[index] = max(color_a[index], src_a)
+                continue
             for index in target_indices:
-                phase_offset = _hash_unit("sparkle_phase", clip.effect, role, index, cycle_index)
-                amplitude = 0.35 + 0.65 * _hash_unit("sparkle_amp", clip.effect, role, index, cycle_index)
+                hash_value = _hash_u32_fast(clip_seed, role_index, index, cycle_index, 0x5A17)
+                phase_offset = (hash_value & 0xFFFF) / 65535.0
+                amplitude = 0.35 + 0.65 * ((((hash_value >> 16) ^ hash_value) & 0xFFFF) / 65535.0)
                 local_t = (sparkle_t + phase_offset) % 1.0
                 sparkle = max(0.0, 1.0 - abs(local_t * 2.0 - 1.0))
                 sparkle = sparkle * sparkle * amplitude
@@ -1000,7 +1243,7 @@ def _build_preview_frame(
                 )
             continue
 
-        if effect == "global_plane_sweep":
+        if effect == "global_sweep":
             axis = str(clip.params.get("axis", "x"))
             width = max(0.02, _param_float(clip, "width", 0.22, clip_t))
             softness = max(0.001, _param_float(clip, "softness", width * 0.75, clip_t))
@@ -1015,14 +1258,45 @@ def _build_preview_frame(
                 cycle_index = 0
             if reverse:
                 travel_t = 1.0 - travel_t
-            axis_values = _world_axis_values(runtime, role, axis, clip, cycle_index)
-            lo, hi = _global_axis_bounds(runtime, axis, clip, cycle_index)
+            world_x, world_y, _ = _world_xyz(runtime, role)
+            axis_cos = 0.0
+            axis_sin = 0.0
+            if axis == "random_xy":
+                axis_cos, axis_sin = _random_xy_components(clip, cycle_index)
+                lo, hi = _global_bounds_random_xy(runtime, axis_cos, axis_sin)
+                axis_values = ()
+            else:
+                axis_values = _world_axis_values(runtime, role, axis, clip, cycle_index)
+                lo, hi = _global_axis_bounds(runtime, axis, clip, cycle_index)
             inv_range = 0.0 if abs(hi - lo) < 1e-6 else 1.0 / (hi - lo)
             core_half_width = width * 0.5
             travel_margin = _travel_margin(core_half_width, softness)
             head = _lerp(-travel_margin, 1.0 + travel_margin, travel_t)
+            if blend_mode == "max":
+                for index in target_indices:
+                    if axis == "random_xy":
+                        pos = 0.5 if inv_range == 0.0 else ((world_x[index] * axis_cos + world_y[index] * axis_sin) - lo) * inv_range
+                    else:
+                        pos = 0.5 if inv_range == 0.0 else (axis_values[index] - lo) * inv_range
+                    distance = abs(pos - head)
+                    if distance <= core_half_width:
+                        falloff = 1.0
+                    else:
+                        falloff = _clamp01(1.0 - (distance - core_half_width) / softness)
+                    src_r = _clamp01(base_r * intensity * falloff)
+                    src_g = _clamp01(base_g * intensity * falloff)
+                    src_b = _clamp01(base_b * intensity * falloff)
+                    src_a = _clamp01(base_a * intensity * falloff)
+                    color_r[index] = max(color_r[index], src_r)
+                    color_g[index] = max(color_g[index], src_g)
+                    color_b[index] = max(color_b[index], src_b)
+                    color_a[index] = max(color_a[index], src_a)
+                continue
             for index in target_indices:
-                pos = 0.5 if inv_range == 0.0 else (axis_values[index] - lo) * inv_range
+                if axis == "random_xy":
+                    pos = 0.5 if inv_range == 0.0 else ((world_x[index] * axis_cos + world_y[index] * axis_sin) - lo) * inv_range
+                else:
+                    pos = 0.5 if inv_range == 0.0 else (axis_values[index] - lo) * inv_range
                 distance = abs(pos - head)
                 if distance <= core_half_width:
                     falloff = 1.0
@@ -1059,6 +1333,25 @@ def _build_preview_frame(
             center = _center_suit_ring_center(runtime)
             core_half_width = width * 0.5
             world_x, world_y, _ = _world_xyz(runtime, role)
+            if blend_mode == "max":
+                for index in target_indices:
+                    dx = world_x[index] - center[0]
+                    dy = world_y[index] - center[1]
+                    angle = (math.atan2(dx, -dy) / (math.pi * 2.0)) % 1.0
+                    distance = abs(((angle - travel_t + 0.5) % 1.0) - 0.5)
+                    if distance <= core_half_width:
+                        falloff = 1.0
+                    else:
+                        falloff = _clamp01(1.0 - (distance - core_half_width) / softness)
+                    src_r = _clamp01(base_r * intensity * falloff)
+                    src_g = _clamp01(base_g * intensity * falloff)
+                    src_b = _clamp01(base_b * intensity * falloff)
+                    src_a = _clamp01(base_a * intensity * falloff)
+                    color_r[index] = max(color_r[index], src_r)
+                    color_g[index] = max(color_g[index], src_g)
+                    color_b[index] = max(color_b[index], src_b)
+                    color_a[index] = max(color_a[index], src_a)
+                continue
             for index in target_indices:
                 dx = world_x[index] - center[0]
                 dy = world_y[index] - center[1]
@@ -1088,6 +1381,7 @@ def _build_preview_frame(
             width = max(0.02, _param_float(clip, "width", 0.20, clip_t))
             softness = max(0.001, _param_float(clip, "softness", width * 0.75, clip_t))
             reverse = bool(clip.params.get("reverse", False))
+            random_cross_x = bool(clip.params.get("random_cross_x", False))
             phase = _param_float(clip, "phase", 0.0, clip_t)
             if _tempo_sync_enabled(clip):
                 cycle_position = _beat_cycle_position(project, clip, time_ms, _cycles_per_beat(clip), phase)
@@ -1098,15 +1392,18 @@ def _build_preview_frame(
                 cycle_index = 0
             if reverse:
                 travel_t = 1.0 - travel_t
-            lo, hi = _global_axis_bounds(runtime, axis, clip, cycle_index)
+            if axis == "random_xy":
+                axis_cos, axis_sin = _random_xy_components(clip, cycle_index)
+                lo, hi = _global_bounds_random_xy(runtime, axis_cos, axis_sin)
+            else:
+                lo, hi = _global_axis_bounds(runtime, axis, clip, cycle_index)
             span = max(1.0, hi - lo)
             radius = span * width * 0.5
             softness_world = span * softness * 0.5
             travel_margin = radius + softness_world * 0.5
             head = _lerp(lo - travel_margin, hi + travel_margin, travel_t)
             if axis == "random_xy":
-                angle = _axis_random_angle(clip, cycle_index)
-                direction = (math.cos(angle), math.sin(angle), 0.0)
+                direction = (axis_cos, axis_sin, 0.0)
             elif axis == "y":
                 direction = (0.0, 1.0, 0.0)
             elif axis == "z":
@@ -1114,67 +1411,57 @@ def _build_preview_frame(
             else:
                 direction = (1.0, 0.0, 0.0)
             center = _global_center(runtime)
-            center_proj = center[0] * direction[0] + center[1] * direction[1] + center[2] * direction[2]
+            anchor = center
+            if random_cross_x:
+                anchor = (
+                    _traveling_orb_cross_x(runtime, clip, cycle_index),
+                    center[1],
+                    center[2],
+                )
+            center_proj = anchor[0] * direction[0] + anchor[1] * direction[1] + anchor[2] * direction[2]
             orb_center = (
-                center[0] + direction[0] * (head - center_proj),
-                center[1] + direction[1] * (head - center_proj),
-                center[2] + direction[2] * (head - center_proj),
+                anchor[0] + direction[0] * (head - center_proj),
+                anchor[1] + direction[1] * (head - center_proj),
+                anchor[2] + direction[2] * (head - center_proj),
             )
             world_x, world_y, world_z = _world_xyz(runtime, role)
+            radius_sq = radius * radius
+            outer_radius = radius + max(0.0, softness_world)
+            outer_radius_sq = outer_radius * outer_radius
+            if blend_mode == "max":
+                for index in target_indices:
+                    dx = world_x[index] - orb_center[0]
+                    dy = world_y[index] - orb_center[1]
+                    dz = world_z[index] - orb_center[2]
+                    distance_sq = dx * dx + dy * dy + dz * dz
+                    if distance_sq <= radius_sq:
+                        falloff = 1.0
+                    elif distance_sq >= outer_radius_sq:
+                        continue
+                    else:
+                        distance = math.sqrt(distance_sq)
+                        falloff = _clamp01(1.0 - (distance - radius) / max(1e-6, softness_world))
+                    src_r = _clamp01(base_r * intensity * falloff)
+                    src_g = _clamp01(base_g * intensity * falloff)
+                    src_b = _clamp01(base_b * intensity * falloff)
+                    src_a = _clamp01(base_a * intensity * falloff)
+                    color_r[index] = max(color_r[index], src_r)
+                    color_g[index] = max(color_g[index], src_g)
+                    color_b[index] = max(color_b[index], src_b)
+                    color_a[index] = max(color_a[index], src_a)
+                continue
             for index in target_indices:
-                distance = math.sqrt(
-                    (world_x[index] - orb_center[0]) ** 2 +
-                    (world_y[index] - orb_center[1]) ** 2 +
-                    (world_z[index] - orb_center[2]) ** 2
-                )
-                if distance <= radius:
+                dx = world_x[index] - orb_center[0]
+                dy = world_y[index] - orb_center[1]
+                dz = world_z[index] - orb_center[2]
+                distance_sq = dx * dx + dy * dy + dz * dz
+                if distance_sq <= radius_sq:
                     falloff = 1.0
+                elif distance_sq >= outer_radius_sq:
+                    falloff = 0.0
                 else:
+                    distance = math.sqrt(distance_sq)
                     falloff = _clamp01(1.0 - (distance - radius) / max(1e-6, softness_world))
-                scale = intensity * falloff
-                _blend_into(
-                    blend_mode,
-                    index,
-                    _clamp01(base_r * scale),
-                    _clamp01(base_g * scale),
-                    _clamp01(base_b * scale),
-                    _clamp01(base_a * scale),
-                    color_r,
-                    color_g,
-                    color_b,
-                    color_a,
-                )
-            continue
-
-        if effect == "ring_burst":
-            width = max(0.02, _param_float(clip, "width", 0.16, clip_t))
-            softness = max(0.001, _param_float(clip, "softness", width * 0.75, clip_t))
-            reverse = bool(clip.params.get("reverse", False))
-            phase = _param_float(clip, "phase", 0.0, clip_t)
-            if _tempo_sync_enabled(clip):
-                cycle_position = _beat_cycle_position(project, clip, time_ms, _cycles_per_beat(clip), phase)
-                travel_t = cycle_position % 1.0
-            else:
-                travel_t = clip_t
-            if reverse:
-                travel_t = 1.0 - travel_t
-            center = _global_center(runtime)
-            max_radius = _global_radius_extent(runtime, center)
-            shell_radius = _lerp(0.0, max_radius + width * max_radius, travel_t)
-            shell_half_width = max_radius * width * 0.5
-            shell_softness = max_radius * softness * 0.5
-            world_x, world_y, world_z = _world_xyz(runtime, role)
-            for index in target_indices:
-                distance = math.sqrt(
-                    (world_x[index] - center[0]) ** 2 +
-                    (world_y[index] - center[1]) ** 2 +
-                    (world_z[index] - center[2]) ** 2
-                )
-                delta = abs(distance - shell_radius)
-                if delta <= shell_half_width:
-                    falloff = 1.0
-                else:
-                    falloff = _clamp01(1.0 - (delta - shell_half_width) / max(1e-6, shell_softness))
                 scale = intensity * falloff
                 _blend_into(
                     blend_mode,
@@ -1205,6 +1492,21 @@ def _build_preview_frame(
             edge_softness = max(1e-6, (global_y_hi - global_y_lo) * softness)
             level = _lerp(global_y_hi + edge_softness, global_y_lo, travel_t)
             _, world_y, _ = _world_xyz(runtime, role)
+            if blend_mode == "max":
+                for index in target_indices:
+                    if world_y[index] >= level:
+                        falloff = 1.0
+                    else:
+                        falloff = _clamp01(1.0 - (level - world_y[index]) / edge_softness)
+                    src_r = _clamp01(base_r * intensity * falloff)
+                    src_g = _clamp01(base_g * intensity * falloff)
+                    src_b = _clamp01(base_b * intensity * falloff)
+                    src_a = _clamp01(base_a * intensity * falloff)
+                    color_r[index] = max(color_r[index], src_r)
+                    color_g[index] = max(color_g[index], src_g)
+                    color_b[index] = max(color_b[index], src_b)
+                    color_a[index] = max(color_a[index], src_a)
+                continue
             for index in target_indices:
                 if world_y[index] >= level:
                     falloff = 1.0
@@ -1225,12 +1527,18 @@ def _build_preview_frame(
                 )
             continue
 
-        src_r = _clamp01(base_r * intensity)
-        src_g = _clamp01(base_g * intensity)
-        src_b = _clamp01(base_b * intensity)
-        src_a = _clamp01(base_a * intensity)
-        for index in target_indices:
-            _blend_into(blend_mode, index, src_r, src_g, src_b, src_a, color_r, color_g, color_b, color_a)
+        _blend_uniform(
+            blend_mode,
+            target_indices,
+            base_r * intensity,
+            base_g * intensity,
+            base_b * intensity,
+            base_a * intensity,
+            color_r,
+            color_g,
+            color_b,
+            color_a,
+        )
 
     return PreviewFrame(
         role=role,
@@ -1257,7 +1565,8 @@ def build_preview_frames(
     time_ms: int,
 ) -> dict[str, PreviewFrame]:
     runtime = _layout_runtime(tuple(layout.sections))
+    role_clip_map = _sorted_role_clip_map(project)
     return {
-        role: _build_preview_frame(project, role, time_ms, runtime)
+        role: _build_preview_frame(project, role, time_ms, runtime, role_clip_map.get(role))
         for role in roles
     }

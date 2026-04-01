@@ -1,0 +1,2799 @@
+{
+  "meta": {
+    "slug": "hometown",
+    "title": "hometown",
+    "duration_ms": 202945,
+    "tempo_bpm": 118.0,
+    "beat_offset_ms": 230,
+    "fps_hint": 30,
+    "bucket_ms": 1000
+  },
+  "audio": {
+    "source": "../../../../Music/hometown.wav"
+  },
+  "global_clips": [
+    {
+      "start_ms": 1247,
+      "end_ms": 1501,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "color_mode": "linear",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false
+      }
+    },
+    {
+      "start_ms": 993,
+      "end_ms": 1247,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "color_mode": "linear",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false
+      }
+    },
+    {
+      "start_ms": 2010,
+      "end_ms": 2264,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "color_mode": "linear",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false
+      }
+    },
+    {
+      "start_ms": 2264,
+      "end_ms": 2518,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "color_mode": "linear",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false
+      }
+    },
+    {
+      "start_ms": 3027,
+      "end_ms": 3281,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "color_mode": "linear",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false
+      }
+    },
+    {
+      "start_ms": 3281,
+      "end_ms": 3535,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "color_mode": "linear",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false
+      }
+    },
+    {
+      "start_ms": 4107,
+      "end_ms": 4361,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "color_mode": "linear",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false
+      }
+    },
+    {
+      "start_ms": 4361,
+      "end_ms": 4615,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "color_mode": "linear",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false
+      }
+    },
+    {
+      "start_ms": 33789,
+      "end_ms": 37853,
+      "layer": 0,
+      "effect": "ground_energy",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "softness": 0.14,
+        "tempo_sync": false,
+        "frequency_hz": 1.0,
+        "color_from": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": true,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 37857,
+      "end_ms": 41925,
+      "layer": 1,
+      "effect": "ground_energy",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          170,
+          0,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "softness": 0.14,
+        "tempo_sync": false,
+        "frequency_hz": 1.0,
+        "color_from": [
+          170,
+          0,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 41925,
+      "end_ms": 45993,
+      "layer": 0,
+      "effect": "ground_energy",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          170,
+          0,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "softness": 0.14,
+        "tempo_sync": false,
+        "frequency_hz": 1.0,
+        "color_from": [
+          170,
+          0,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": true,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 45993,
+      "end_ms": 50061,
+      "layer": 1,
+      "effect": "ground_energy",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "softness": 0.14,
+        "tempo_sync": false,
+        "frequency_hz": 1.0,
+        "color_from": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 53620,
+      "end_ms": 53747,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_top,front_left_ring,front_left_rib,back_left_rib,back_left_top,left_upper_arm",
+      "palette": null,
+      "params": {
+        "color": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "bluetored",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "palette_text": "0:#0000ff; 1:#ff0000"
+      }
+    },
+    {
+      "start_ms": 53747,
+      "end_ms": 53874,
+      "layer": 1,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_ring,front_right_top,front_right_rib,back_right_rib,back_right_top,right_upper_arm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "bluetored",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 53874,
+      "end_ms": 54001,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_rib,front_left_abs,front_left_belt,back_left_belt,back_left_vertebra,back_left_rib,left_forearm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "bluetored",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 54001,
+      "end_ms": 54128,
+      "layer": 1,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_right_rib,front_right_abs,front_right_belt,back_right_belt,back_right_vertebra,back_right_rib,right_forearm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "bluetored",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 29722,
+      "end_ms": 33281,
+      "layer": 1,
+      "effect": "ground_energy",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          128,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "softness": 0.14,
+        "tempo_sync": false,
+        "frequency_hz": 1.0,
+        "color_from": [
+          255,
+          128,
+          0,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 143111,
+      "end_ms": 143238,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_top,front_left_ring,front_left_rib,back_left_rib,back_left_top,left_upper_arm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "redtoblue",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "palette_text": "0:#ff0000; 1:#0000ff"
+      }
+    },
+    {
+      "start_ms": 143238,
+      "end_ms": 143365,
+      "layer": 1,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_ring,front_right_top,front_right_rib,back_right_rib,back_right_top,right_upper_arm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "redtoblue",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 143366,
+      "end_ms": 143493,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_rib,front_left_abs,front_left_belt,back_left_belt,back_left_vertebra,back_left_rib,left_forearm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "redtoblue",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 143493,
+      "end_ms": 143620,
+      "layer": 1,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_right_rib,front_right_abs,front_right_belt,back_right_belt,back_right_vertebra,back_right_rib,right_forearm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "redtoblue",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 167518,
+      "end_ms": 167645,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_top,front_left_ring,front_left_rib,back_left_rib,back_left_top,left_upper_arm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 167645,
+      "end_ms": 167772,
+      "layer": 1,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_ring,front_right_top,front_right_rib,back_right_rib,back_right_top,right_upper_arm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 167772,
+      "end_ms": 167899,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_rib,front_left_abs,front_left_belt,back_left_belt,back_left_vertebra,back_left_rib,left_forearm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 167899,
+      "end_ms": 168026,
+      "layer": 1,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_right_rib,front_right_abs,front_right_belt,back_right_belt,back_right_vertebra,back_right_rib,right_forearm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 78027,
+      "end_ms": 78154,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_top,front_left_ring,front_left_rib,back_left_rib,back_left_top,left_upper_arm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 78154,
+      "end_ms": 78281,
+      "layer": 1,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_ring,front_right_top,front_right_rib,back_right_rib,back_right_top,right_upper_arm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 78281,
+      "end_ms": 78408,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_rib,front_left_abs,front_left_belt,back_left_belt,back_left_vertebra,back_left_rib,left_forearm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 78408,
+      "end_ms": 78535,
+      "layer": 1,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_right_rib,front_right_abs,front_right_belt,back_right_belt,back_right_vertebra,back_right_rib,right_forearm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 78535,
+      "end_ms": 102942,
+      "layer": 0,
+      "effect": "traveling_orb",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "random_xy",
+        "width": 0.2,
+        "softness": 0.16,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 102942,
+      "end_ms": 119213,
+      "layer": 0,
+      "effect": "blink",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "frequency_hz": 1.0,
+        "tempo_sync": true,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow"
+      }
+    },
+    {
+      "start_ms": 143620,
+      "end_ms": 167518,
+      "layer": 0,
+      "effect": "pulse",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "intensity": 0.8,
+        "frequency_hz": 0.5,
+        "tempo_sync": true,
+        "cycles_per_beat": 0.5,
+        "color_from": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_tempo_sync": true,
+        "color_rate": 0.59,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 119213,
+      "end_ms": 135484,
+      "layer": 0,
+      "effect": "sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "section_u",
+        "width": 0.25,
+        "softness": 0.18,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 4933,
+      "end_ms": 5060,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_top,front_left_ring,front_left_rib,back_left_rib,back_left_top,left_upper_arm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "redtoblue",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "palette_text": "0:#ff0000; 1:#0000ff"
+      }
+    },
+    {
+      "start_ms": 4933,
+      "end_ms": 5060,
+      "layer": 1,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_ring,front_right_top,front_right_rib,back_right_rib,back_right_top,right_upper_arm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "redtoblue",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 5061,
+      "end_ms": 5188,
+      "layer": 0,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_left_rib,front_left_abs,front_left_belt,back_left_belt,back_left_vertebra,back_left_rib,left_forearm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "redtoblue",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 5188,
+      "end_ms": 5315,
+      "layer": 1,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "section",
+      "target": "front_right_rib,front_right_abs,front_right_belt,back_right_belt,back_right_vertebra,back_right_rib,right_forearm",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "redtoblue",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 5315,
+      "end_ms": 21586,
+      "layer": 0,
+      "effect": "sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "y",
+        "width": 0.25,
+        "softness": 0.18,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          128,
+          0,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_fit_to_clip": true,
+        "color_tempo_sync": false,
+        "color_rate": 1.0,
+        "color_palette_preset": "bluetoorange",
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": true,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "palette_text": "0:#0000ff; 0.5:#aa00ff; 1:#ff8000"
+      }
+    },
+    {
+      "start_ms": 21586,
+      "end_ms": 25654,
+      "layer": 0,
+      "effect": "sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          128,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "radial",
+        "width": 0.25,
+        "softness": 0.18,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          128,
+          0,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": true,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 25654,
+      "end_ms": 29722,
+      "layer": 0,
+      "effect": "sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          128,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "radial",
+        "width": 0.25,
+        "softness": 0.18,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          128,
+          0,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 33281,
+      "end_ms": 33789,
+      "layer": 1,
+      "effect": "solid",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          128,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "color_from": [
+          255,
+          128,
+          0,
+          255
+        ],
+        "color_to": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "color_mode": "linear",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 143620,
+      "end_ms": 167518,
+      "layer": 1,
+      "effect": "fanout",
+      "blend": "add",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          170,
+          0,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "width": 0.24,
+        "softness": 0.18,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          170,
+          0,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 70399,
+      "end_ms": 78027,
+      "layer": 0,
+      "effect": "global_plane_sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "z",
+        "width": 0.22,
+        "softness": 0.18,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 0.025,
+        "color_palette_preset": "redtoblue",
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 58196,
+      "end_ms": 62294,
+      "layer": 0,
+      "effect": "sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "radial",
+        "width": 0.25,
+        "softness": 0.18,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 66332,
+      "end_ms": 70400,
+      "layer": 0,
+      "effect": "sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "random_xy",
+        "width": 0.25,
+        "softness": 0.18,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 78535,
+      "end_ms": 102942,
+      "layer": 2,
+      "effect": "traveling_orb",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "random_xy",
+        "width": 0.2,
+        "softness": 0.16,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "phase": 0.5,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 78535,
+      "end_ms": 102942,
+      "layer": 1,
+      "effect": "traveling_orb",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "random_xy",
+        "width": 0.2,
+        "softness": 0.16,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "phase": 0.25,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 78535,
+      "end_ms": 102942,
+      "layer": 3,
+      "effect": "traveling_orb",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "random_xy",
+        "width": 0.2,
+        "softness": 0.16,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "phase": 0.75,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 135484,
+      "end_ms": 143111,
+      "layer": 0,
+      "effect": "sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "section_u",
+        "width": 0.25,
+        "softness": 0.18,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "color_mode": "linear",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 135484,
+      "end_ms": 143111,
+      "layer": 1,
+      "effect": "sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "section_u",
+        "width": 0.25,
+        "softness": 0.18,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_to": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "color_mode": "cycle",
+        "color_fit_to_clip": false,
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 50061,
+      "end_ms": 53620,
+      "layer": 0,
+      "effect": "ground_energy",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "softness": 0.14,
+        "tempo_sync": false,
+        "frequency_hz": 1.0,
+        "color_from": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "axis": "y",
+        "width": 0.22,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": true,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 54128,
+      "end_ms": 58196,
+      "layer": 0,
+      "effect": "global_sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "radial",
+        "width": 0.22,
+        "softness": 0.18,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_fit_to_clip": false,
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 62264,
+      "end_ms": 66332,
+      "layer": 0,
+      "effect": "global_sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "random_xy",
+        "width": 0.22,
+        "softness": 0.18,
+        "tempo_sync": true,
+        "frequency_hz": 1.0,
+        "cycles_per_beat": 1.0,
+        "color_from": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "color_to": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "color_mode": "hold",
+        "color_fit_to_clip": false,
+        "color_tempo_sync": true,
+        "color_rate": 1.0,
+        "color_palette_preset": "Rainbow",
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    }
+  ],
+  "roles": {
+    "A": {
+      "clips": []
+    },
+    "B": {
+      "clips": []
+    },
+    "C": {
+      "clips": []
+    }
+  },
+  "palettes": {
+    "redtoblue": "0:#ff0000; 1:#0000ff",
+    "bluetored": "0:#0000ff; 1:#ff0000",
+    "bluetoorange": "0:#0000ff; 0.5:#aa00ff; 1:#ff8000"
+  }
+}

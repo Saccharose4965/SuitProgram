@@ -1,0 +1,196 @@
+{
+  "meta": {
+    "slug": "let-me-hit-it-drop-it-mix-high-quality",
+    "title": "Let Me Hit It (Drop It mix)   High Quality",
+    "duration_ms": 107009,
+    "tempo_bpm": 128.0,
+    "beat_offset_ms": 120,
+    "fps_hint": 30,
+    "bucket_ms": 1000
+  },
+  "audio": {
+    "source": "../../../musics/Let Me Hit It (Drop It mix) - High Quality.wav"
+  },
+  "global_clips": [
+    {
+      "start_ms": 589,
+      "end_ms": 104238,
+      "layer": 0,
+      "effect": "traveling_orb",
+      "blend": "add",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          64,
+          196,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "x",
+        "width": 0.2,
+        "softness": 0.16,
+        "frequency_hz": 1.0,
+        "tempo_sync": true,
+        "cycles_per_beat": 1.0,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 589,
+      "end_ms": 104238,
+      "layer": 1,
+      "effect": "traveling_orb",
+      "blend": "add",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          92,
+          92,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "x",
+        "width": 0.2,
+        "softness": 0.16,
+        "frequency_hz": 1.0,
+        "tempo_sync": true,
+        "cycles_per_beat": 1.0,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": true,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 589,
+      "end_ms": 104238,
+      "layer": 2,
+      "effect": "sweep",
+      "blend": "add",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          164,
+          64,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "random_xy",
+        "width": 0.25,
+        "softness": 0.18,
+        "frequency_hz": 1.0,
+        "tempo_sync": true,
+        "cycles_per_beat": 1.0,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 589,
+      "end_ms": 104238,
+      "layer": 3,
+      "effect": "blink",
+      "blend": "add",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          120,
+          128,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "frequency_hz": 1.0,
+        "axis": "y",
+        "width": 0.22,
+        "softness": 0.16,
+        "tempo_sync": true,
+        "cycles_per_beat": 1.0,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 7155,
+      "end_ms": 8155,
+      "layer": 1,
+      "effect": "blink",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "frequency_hz": 2.0
+      }
+    }
+  ],
+  "roles": {
+    "A": {
+      "clips": []
+    },
+    "B": {
+      "clips": []
+    },
+    "C": {
+      "clips": []
+    }
+  },
+  "palettes": {}
+}

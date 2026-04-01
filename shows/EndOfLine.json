@@ -1,0 +1,1070 @@
+{
+  "meta": {
+    "slug": "demo_show",
+    "title": "Demo Show",
+    "duration_ms": 156479,
+    "tempo_bpm": 98.0,
+    "beat_offset_ms": 140,
+    "fps_hint": 30,
+    "bucket_ms": 1000
+  },
+  "audio": {
+    "source": "../tools/show_editor/music.wav"
+  },
+  "global_clips": [
+    {
+      "start_ms": 10548,
+      "end_ms": 15444,
+      "layer": 0,
+      "effect": "sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "y",
+        "width": 0.25,
+        "softness": 0.18,
+        "frequency_hz": 1.0,
+        "tempo_sync": true,
+        "cycles_per_beat": 1.0,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 15446,
+      "end_ms": 20342,
+      "layer": 0,
+      "effect": "sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          64,
+          196,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "y",
+        "width": 0.25,
+        "softness": 0.18,
+        "axis_random_mix": 0.600794232089723,
+        "frequency_hz": 1.0,
+        "tempo_sync": true,
+        "cycles_per_beat": 1.0,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": true,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 20344,
+      "end_ms": 25240,
+      "layer": 0,
+      "effect": "sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "radial",
+        "width": 0.25,
+        "softness": 0.18,
+        "axis_random_mix": 0.600794232089723,
+        "frequency_hz": 1.0,
+        "tempo_sync": true,
+        "cycles_per_beat": 1.0,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": true,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 30140,
+      "end_ms": 49724,
+      "layer": 0,
+      "effect": "sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          64,
+          196,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "random_xy",
+        "width": 0.25,
+        "softness": 0.18,
+        "axis_random_mix": 0.600794232089723,
+        "frequency_hz": 1.0,
+        "tempo_sync": true,
+        "cycles_per_beat": 1.0,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": true,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 25242,
+      "end_ms": 30138,
+      "layer": 0,
+      "effect": "sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "radial",
+        "width": 0.25,
+        "softness": 0.18,
+        "frequency_hz": 1.0,
+        "tempo_sync": true,
+        "cycles_per_beat": 1.0,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 49732,
+      "end_ms": 69316,
+      "layer": 0,
+      "effect": "sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          64,
+          196,
+          255,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "section_u",
+        "width": 0.25,
+        "softness": 0.18,
+        "frequency_hz": 1.0,
+        "tempo_sync": true,
+        "cycles_per_beat": 1.0,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": true,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 69936,
+      "end_ms": 90744,
+      "layer": 1,
+      "effect": "global_sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "width": 0.16,
+        "softness": 0.12,
+        "axis": "radial",
+        "frequency_hz": 0.5,
+        "tempo_sync": true,
+        "cycles_per_beat": 0.5,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 69324,
+      "end_ms": 90132,
+      "layer": 0,
+      "effect": "global_sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "width": 0.16,
+        "softness": 0.12,
+        "axis": "radial",
+        "frequency_hz": 0.5,
+        "tempo_sync": true,
+        "cycles_per_beat": 0.5,
+        "phase": 0.5,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 95650,
+      "end_ms": 100546,
+      "layer": 0,
+      "effect": "traveling_orb",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "x",
+        "width": 0.2,
+        "softness": 0.16,
+        "frequency_hz": 1.0,
+        "tempo_sync": true,
+        "cycles_per_beat": 1.0,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 102997,
+      "end_ms": 104997,
+      "layer": 0,
+      "effect": "global_sweep",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 1.0,
+        "axis": "x",
+        "width": 0.22,
+        "softness": 0.18,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "beats_per_cycle": 1.0,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    },
+    {
+      "start_ms": 108507,
+      "end_ms": 110307,
+      "layer": 0,
+      "effect": "ground_energy",
+      "blend": "max",
+      "target_kind": "group",
+      "target": "all",
+      "palette": null,
+      "params": {
+        "color": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "intensity": 0.7499999999999998,
+        "softness": 0.14,
+        "axis": "z",
+        "width": 0.22,
+        "frequency_hz": 2.0,
+        "tempo_sync": false,
+        "beats_per_cycle": 1.0,
+        "phase": 0.0,
+        "repeats": 4,
+        "duty_cycle": 0.5,
+        "min_intensity": 0.15,
+        "max_intensity": 1.0,
+        "reverse": false,
+        "to_color": [
+          0,
+          0,
+          0,
+          255
+        ]
+      }
+    }
+  ],
+  "roles": {
+    "A": {
+      "clips": [
+        {
+          "start_ms": 752,
+          "end_ms": 1752,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 1.0,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 1.0,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        {
+          "start_ms": 5650,
+          "end_ms": 6650,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 1.0,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 1.0,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        {
+          "start_ms": 8405,
+          "end_ms": 8711,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 2.0,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 2.0,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        {
+          "start_ms": 9630,
+          "end_ms": 9936,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 2.0,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 2.0,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        {
+          "start_ms": 9324,
+          "end_ms": 9630,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 2.0,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 2.0,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        {
+          "start_ms": 9936,
+          "end_ms": 10548,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 1.0,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 1.0,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        }
+      ]
+    },
+    "B": {
+      "clips": [
+        {
+          "start_ms": 1977,
+          "end_ms": 2977,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 0.9999999999999992,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 0.9999999999999992,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        {
+          "start_ms": 4426,
+          "end_ms": 5426,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 0.9999999999999992,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 0.9999999999999992,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        {
+          "start_ms": 6875,
+          "end_ms": 7875,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 0.9999999999999992,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 0.9999999999999992,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        {
+          "start_ms": 8711,
+          "end_ms": 9017,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 2.0,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 2.0,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        {
+          "start_ms": 9324,
+          "end_ms": 9630,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 2.0,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 2.0,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        {
+          "start_ms": 9936,
+          "end_ms": 10548,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 0.9999999999999992,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 0.9999999999999992,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        }
+      ]
+    },
+    "C": {
+      "clips": [
+        {
+          "start_ms": 3201,
+          "end_ms": 4201,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 0.9999999999999992,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 0.9999999999999992,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        {
+          "start_ms": 8099,
+          "end_ms": 8405,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 2.0,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 2.0,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        {
+          "start_ms": 9018,
+          "end_ms": 9324,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 2.0,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 2.0,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        {
+          "start_ms": 9630,
+          "end_ms": 9936,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 2.0,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 2.0,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        },
+        {
+          "start_ms": 9936,
+          "end_ms": 10548,
+          "layer": 0,
+          "effect": "blink",
+          "blend": "max",
+          "target_kind": "group",
+          "target": "all",
+          "palette": null,
+          "params": {
+            "color": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "intensity": 1.0,
+            "frequency_hz": 0.9999999999999992,
+            "axis": "y",
+            "width": 0.22,
+            "softness": 0.16,
+            "tempo_sync": true,
+            "cycles_per_beat": 0.9999999999999992,
+            "phase": 0.0,
+            "repeats": 4,
+            "duty_cycle": 0.5,
+            "min_intensity": 0.15,
+            "max_intensity": 1.0,
+            "reverse": false,
+            "to_color": [
+              0,
+              0,
+              0,
+              255
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "palettes": {}
+}

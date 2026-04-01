@@ -4,7 +4,6 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
-from typing import Any
 
 from .project_model import ShowProject, project_from_obj, project_to_obj
 
@@ -22,7 +21,7 @@ class EditorSessionState:
     camera_preset: str = "iso"
     layout_kind: str = "generated"
     layout_path: str = ""
-    presets: tuple[dict[str, Any], ...] = ()
+    custom_colors: tuple[tuple[int, int, int, int], ...] = ()
 
 
 def _state_root() -> Path:
@@ -54,7 +53,7 @@ def save_editor_session(state: EditorSessionState) -> Path:
             "camera_preset": state.camera_preset,
             "layout_kind": state.layout_kind,
             "layout_path": state.layout_path,
-            "presets": [dict(entry) for entry in state.presets],
+            "custom_colors": [list(entry) for entry in state.custom_colors],
         },
     }
     output_path = session_file_path()
@@ -84,9 +83,9 @@ def load_editor_session() -> EditorSessionState | None:
         camera_preset=str(ui.get("camera_preset", "iso")),
         layout_kind=str(ui.get("layout_kind", "generated")),
         layout_path=str(ui.get("layout_path", "")),
-        presets=tuple(
-            dict(entry)
-            for entry in ui.get("presets", [])
-            if isinstance(entry, dict)
+        custom_colors=tuple(
+            tuple(int(channel) for channel in entry[:4])
+            for entry in ui.get("custom_colors", [])
+            if isinstance(entry, (list, tuple)) and len(entry) >= 4
         ),
     )

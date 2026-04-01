@@ -349,15 +349,15 @@ The effect system should be extensible, but the first supported set should be:
 - `solid`
 - `blink`
 - `pulse`
-- `strobe`
-- `fade`
 - `sweep`
 - `mirror_sweep`
 - `chase`
-- `gradient`
 - `sparkle`
 - `fanout`
-- `palette_cycle`
+- `global_sweep`
+- `traveling_orb`
+- `radialray`
+- `ground_energy`
 
 These cover the major use cases already discussed:
 
@@ -391,12 +391,6 @@ The editor should define effect-specific parameter blocks such as:
 - envelope curve
 - amplitude
 
-#### `strobe`
-
-- flash color
-- flash period
-- duty cycle
-
 #### `sweep`
 
 - color or palette reference
@@ -413,13 +407,6 @@ The editor should define effect-specific parameter blocks such as:
 - speed
 - spacing
 - repeat mode
-
-#### `gradient`
-
-- palette reference
-- axis mode
-- offset
-- scale
 
 #### `fanout`
 
@@ -582,9 +569,8 @@ For each active clip:
 
 1. resolve target pixels from section/group ID
 2. compute clip-local normalized time
-3. apply fade-in/out envelope
-4. evaluate effect for each targeted LED
-5. blend into the framebuffer using the clip blend mode
+3. evaluate effect for each targeted LED
+4. blend into the framebuffer using the clip blend mode
 
 ### Audio ownership
 

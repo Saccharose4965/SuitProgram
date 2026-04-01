@@ -358,14 +358,14 @@ Recommended first-class effect entries:
 
 - `Solid`
 - `Blink`
-- `Fade`
 - `Pulse`
-- `Strobe`
 - `Sweep`
 - `Mirror Sweep`
 - `Chase`
-- `Gradient`
-- `Palette Cycle`
+- `Global Sweep`
+- `Traveling Orb`
+- `Radial Ray`
+- `Ground Energy`
 
 Each effect should have a small, predictable parameter set.
 
@@ -437,4 +437,3 @@ The next coding step should assume:
 - the 3D view becomes navigable, not a static tab
 - audio playback is a first-class transport feature
 - clip editing is the next real authoring feature after transport
-

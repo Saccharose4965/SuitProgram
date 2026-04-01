@@ -40,18 +40,18 @@ typedef enum {
     SHOW_EFFECT_SOLID = 1,
     SHOW_EFFECT_BLINK = 2,
     SHOW_EFFECT_PULSE = 3,
-    SHOW_EFFECT_STROBE = 4,
-    SHOW_EFFECT_FADE = 5,
+    SHOW_EFFECT_STROBE = 4,  // legacy reserved slot; strobe authoring support removed
+    SHOW_EFFECT_FADE = 5,  // legacy reserved slot; fade authoring support removed
     SHOW_EFFECT_SWEEP = 6,
     SHOW_EFFECT_MIRROR_SWEEP = 7,
     SHOW_EFFECT_CHASE = 8,
-    SHOW_EFFECT_GRADIENT = 9,
+    SHOW_EFFECT_GRADIENT = 9,  // legacy reserved slot; gradient authoring support removed
     SHOW_EFFECT_SPARKLE = 10,
     SHOW_EFFECT_FANOUT = 11,
-    SHOW_EFFECT_PALETTE_CYCLE = 12,
-    SHOW_EFFECT_GLOBAL_PLANE_SWEEP = 13,
+    SHOW_EFFECT_PALETTE_CYCLE = 12,  // legacy reserved slot; palette-cycle authoring support removed
+    SHOW_EFFECT_GLOBAL_SWEEP = 13,
     SHOW_EFFECT_TRAVELING_ORB = 14,
-    SHOW_EFFECT_RING_BURST = 15,
+    SHOW_EFFECT_RING_BURST = 15,  // legacy reserved slot; ring-burst authoring support removed
     SHOW_EFFECT_GROUND_ENERGY = 16,
     SHOW_EFFECT_RADIAL_RAY = 17,
 } show_effect_kind_t;

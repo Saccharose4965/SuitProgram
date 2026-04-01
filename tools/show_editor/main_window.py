@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from array import array
 from collections import deque
 import json
 import math
@@ -8,8 +9,6 @@ import time
 
 from .audio_waveform import AudioWaveform, load_audio_waveform
 from .automation_editors import (
-    CurveEditorDialog,
-    CurveParameterSpec,
     PaletteEditorDialog,
     PaletteStripWidget,
     encode_palette_text,
@@ -34,10 +33,14 @@ from .session_state import EditorSessionState, save_editor_session
 from .qt_compat import (
     IMPORT_ERROR,
     MULTIMEDIA_IMPORT_ERROR,
+    OPENGL_IMPORT_ERROR,
     PYSIDE_AVAILABLE,
+    QT_OPENGL_AVAILABLE,
     QT_MULTIMEDIA_AVAILABLE,
     QtCore,
     QtGui,
+    QtOpenGL,
+    QtOpenGLWidgets,
     QtMultimedia,
     QtWidgets,
 )
@@ -48,28 +51,37 @@ from tools.spatial_display import FRONT_BELT_Y, display_point as spatial_display
 
 
 if PYSIDE_AVAILABLE:
+    PREVIEW_VIEW_BASE = QtOpenGLWidgets.QOpenGLWidget if QT_OPENGL_AVAILABLE and QtOpenGLWidgets is not None else QtWidgets.QWidget
+    GL_COLOR_BUFFER_BIT = 0x00004000
+    GL_BLEND = 0x0BE2
+    GL_SRC_ALPHA = 0x0302
+    GL_ONE_MINUS_SRC_ALPHA = 0x0303
+    GL_PROGRAM_POINT_SIZE = 0x8642
+    GL_FLOAT = 0x1406
+    GL_POINTS = 0x0000
+
+    def _ema_ms(previous: float, sample_ms: float, alpha: float = 0.2) -> float:
+        sample_ms = max(0.0, float(sample_ms))
+        if previous <= 0.0:
+            return sample_ms
+        return previous + (sample_ms - previous) * max(0.01, min(1.0, alpha))
 
     EFFECT_LIBRARY = (
         ("Solid", "solid", "group", "all", "max", 1000, {"color": [255, 255, 255, 255], "intensity": 1.0}, ("Suit Effects", "Basic")),
         ("Blink", "blink", "group", "all", "max", 1000, {"color": [255, 255, 255, 255], "intensity": 1.0, "frequency_hz": 2.0}, ("Suit Effects", "Basic")),
-        ("Fade", "fade", "group", "all", "max", 1400, {"color": [255, 255, 255, 255], "to_color": [0, 0, 0, 255], "intensity": 1.0}, ("Suit Effects", "Basic")),
         ("Pulse", "pulse", "group", "all", "max", 1200, {"color": [255, 255, 255, 255], "intensity": 0.8, "frequency_hz": 1.5}, ("Suit Effects", "Basic")),
-        ("Strobe", "strobe", "group", "all", "max", 800, {"color": [255, 255, 255, 255], "intensity": 1.0, "frequency_hz": 8.0}, ("Suit Effects", "Basic")),
         ("Sweep", "sweep", "group", "all", "max", 1600, {"color": [255, 255, 255, 255], "intensity": 1.0, "axis": "y", "width": 0.25, "softness": 0.18}, ("Suit Effects", "Motion")),
         ("Mirror Sweep", "mirror_sweep", "group", "all", "max", 1600, {"color": [255, 255, 255, 255], "intensity": 1.0, "axis": "y", "width": 0.25, "softness": 0.18}, ("Suit Effects", "Motion")),
         ("Chase", "chase", "group", "all", "max", 1400, {"color": [255, 255, 255, 255], "intensity": 0.9, "axis": "y", "width": 0.18, "repeats": 4}, ("Suit Effects", "Motion")),
         ("Sparkle", "sparkle", "group", "all", "max", 1200, {"color": [255, 255, 255, 255], "intensity": 1.0, "frequency_hz": 6.0}, ("Suit Effects", "Motion")),
         ("Fanout", "fanout", "group", "all", "max", 1500, {"color": [255, 255, 255, 255], "intensity": 1.0, "width": 0.24, "softness": 0.18}, ("Suit Effects", "Motion")),
-        ("Gradient", "gradient", "group", "all", "max", 1600, {"color": [255, 255, 255, 255], "to_color": [0, 128, 255, 255], "intensity": 1.0, "axis": "y"}, ("Suit Effects", "Color")),
-        ("Palette Cycle", "palette_cycle", "group", "all", "max", 1800, {"color": [255, 255, 255, 255], "to_color": [0, 128, 255, 255], "intensity": 1.0, "frequency_hz": 1.0}, ("Suit Effects", "Color")),
-        ("Global Plane Sweep", "global_plane_sweep", "group", "all", "max", 2000, {"color": [255, 255, 255, 255], "intensity": 1.0, "axis": "x", "width": 0.22, "softness": 0.18}, ("Group Effects", "Spatial")),
+        ("Global Sweep", "global_sweep", "group", "all", "max", 2000, {"color": [255, 255, 255, 255], "intensity": 1.0, "axis": "x", "width": 0.22, "softness": 0.18}, ("Group Effects", "Spatial")),
         ("Traveling Orb", "traveling_orb", "group", "all", "max", 2000, {"color": [255, 255, 255, 255], "intensity": 1.0, "axis": "x", "width": 0.20, "softness": 0.16}, ("Group Effects", "Spatial")),
-        ("Ring Burst", "ring_burst", "group", "all", "max", 2200, {"color": [255, 255, 255, 255], "intensity": 1.0, "width": 0.16, "softness": 0.12}, ("Group Effects", "Spatial")),
         ("Radial Ray", "radialray", "group", "all", "max", 1800, {"color": [255, 255, 255, 255], "intensity": 1.0, "width": 0.10, "softness": 0.08, "frequency_hz": 1.0}, ("Group Effects", "Spatial")),
         ("Ground Energy", "ground_energy", "group", "all", "max", 1800, {"color": [255, 255, 255, 255], "intensity": 1.0, "softness": 0.14}, ("Group Effects", "Spatial")),
     )
 
-    HIDDEN_PICKER_EFFECT_IDS = frozenset({"gradient", "palette_cycle"})
+    HIDDEN_PICKER_EFFECT_IDS = frozenset()
     PICKER_EFFECT_LIBRARY = tuple(item for item in EFFECT_LIBRARY if item[1] not in HIDDEN_PICKER_EFFECT_IDS)
     EFFECT_NAMES = tuple(item[0] for item in PICKER_EFFECT_LIBRARY)
     EFFECT_NAME_TO_SPEC = {item[0]: item for item in EFFECT_LIBRARY}
@@ -83,13 +95,28 @@ if PYSIDE_AVAILABLE:
     )
     PREVIEW_OPTIONS = ("A", "B", "C", "All")
     PREVIEW_ROLE_ORDER = tuple(ROLE_NAMES)
-    PREVIEW_ROLE_COLORS = {
-        "A": QtGui.QColor("#ff9f45"),
-        "B": QtGui.QColor("#ff5d8f"),
-        "C": QtGui.QColor("#43d17a"),
-    }
     PREVIEW_ROLE_SPACING_2D = 98.0
     PREVIEW_ROLE_SPACING_3D = 62.0
+    TIMELINE_DISPLAY_FULL = "full"
+    TIMELINE_DISPLAY_GLOBAL = "global"
+    TIMELINE_DISPLAY_HIDDEN = "hidden"
+    TIMELINE_WAVEFORM_HEIGHT_FULL_PX = 120.0
+    TIMELINE_WAVEFORM_HEIGHT_GLOBAL_PX = 120.0
+    TIMELINE_TRACK_TOP_GAP_PX = 18.0
+    TIMELINE_TRACK_GAP_PX = 6.0
+    TIMELINE_LAYER_INSET_PX = 5.0
+    TIMELINE_LAYER_GAP_PX = 3.0
+    TIMELINE_LAYER_MIN_HEIGHT_PX = 11.0
+    TIMELINE_ROLE_MIN_HEIGHT_PX = 63.0
+    TIMELINE_GLOBAL_ROLE_MAX_HEIGHT_PX = 116.0
+    TIMELINE_FULL_ROLE_MAX_HEIGHT_PX = 82.0
+    TIMELINE_PLOT_WIDGET_CHROME_PX = 36.0
+    TIMELINE_PANEL_BOTTOM_SPACING_PX = 6.0
+    TIMELINE_PREVIEW_MIN_PX = 96
+    COLOR_TAB_SECTION_MAX_WIDTH_PX = 276
+    COLOR_PICKER_BLOCK_HEIGHT_PX = 250
+    COLOR_SWATCH_SECTION_MAX_WIDTH_PX = 228
+    COLOR_SWATCH_COLUMNS = 4
     PREVIEW_BODY_FILL = QtGui.QColor(108, 112, 120, 230)
     PREVIEW_BODY_OUTLINE = QtGui.QColor(142, 148, 156, 240)
     PREVIEW_BODY_TORSO = ((0.0, -18.5, 0.0), (0.0, FRONT_BELT_Y, 0.0), (12.8, 9.5), 0.88)
@@ -97,19 +124,21 @@ if PYSIDE_AVAILABLE:
         ((19.3, -5.5, 0.0), (22.4, 19.0, 0.0), (4.2, 3.8)),
         ((-19.3, -5.5, 0.0), (-22.4, 19.0, 0.0), (4.2, 3.8)),
     )
+    USED_COLOR_SWATCH_COUNT = 16
     CLIP_RESIZE_HANDLE_PX = 7.0
     TIMELINE_TRACK_COUNT = 4
     EFFECT_FIELDS_COLOR = frozenset({"color", "intensity", "curves", "palette"})
-    EFFECT_FIELDS_TO_COLOR = frozenset({"fade", "gradient", "palette_cycle"})
-    EFFECT_FIELDS_AXIS = frozenset({"gradient", "sweep", "mirror_sweep", "chase", "global_plane_sweep", "traveling_orb"})
-    EFFECT_FIELDS_WIDTH = frozenset({"sweep", "mirror_sweep", "chase", "fanout", "global_plane_sweep", "traveling_orb", "ring_burst", "radialray"})
-    EFFECT_FIELDS_SOFTNESS = frozenset({"sweep", "mirror_sweep", "fanout", "global_plane_sweep", "traveling_orb", "ring_burst", "radialray", "ground_energy"})
-    EFFECT_FIELDS_RATE = frozenset({"blink", "strobe", "pulse", "sweep", "mirror_sweep", "chase", "sparkle", "fanout", "palette_cycle", "global_plane_sweep", "traveling_orb", "ring_burst", "radialray", "ground_energy"})
-    EFFECT_FIELDS_PHASE = frozenset({"blink", "strobe", "pulse", "sweep", "mirror_sweep", "chase", "sparkle", "fanout", "palette_cycle", "global_plane_sweep", "traveling_orb", "ring_burst", "radialray", "ground_energy"})
+    EFFECT_FIELDS_TO_COLOR = frozenset()
+    EFFECT_FIELDS_AXIS = frozenset({"sweep", "mirror_sweep", "chase", "global_sweep", "traveling_orb"})
+    EFFECT_FIELDS_WIDTH = frozenset({"sweep", "mirror_sweep", "chase", "fanout", "global_sweep", "traveling_orb", "radialray"})
+    EFFECT_FIELDS_SOFTNESS = frozenset({"sweep", "mirror_sweep", "fanout", "global_sweep", "traveling_orb", "radialray", "ground_energy"})
+    EFFECT_FIELDS_RATE = frozenset({"blink", "pulse", "sweep", "mirror_sweep", "chase", "sparkle", "fanout", "global_sweep", "traveling_orb", "radialray", "ground_energy"})
+    EFFECT_FIELDS_PHASE = frozenset({"blink", "pulse", "sweep", "mirror_sweep", "chase", "sparkle", "fanout", "global_sweep", "traveling_orb", "radialray", "ground_energy"})
     EFFECT_FIELDS_REPEATS = frozenset({"chase"})
-    EFFECT_FIELDS_DUTY = frozenset({"blink", "strobe"})
+    EFFECT_FIELDS_DUTY = frozenset({"blink"})
     EFFECT_FIELDS_MIN_MAX = frozenset({"pulse"})
-    EFFECT_FIELDS_REVERSE = frozenset({"sweep", "mirror_sweep", "fanout", "global_plane_sweep", "traveling_orb", "ring_burst", "radialray", "ground_energy"})
+    EFFECT_FIELDS_REVERSE = frozenset({"sweep", "mirror_sweep", "fanout", "global_sweep", "traveling_orb", "radialray", "ground_energy"})
+    EFFECT_FIELDS_RANDOM_CROSS_X = frozenset({"traveling_orb"})
 
     class PreviewRenderProxy(QtCore.QObject):
         render_requested = QtCore.Signal(object)
@@ -126,13 +155,16 @@ if PYSIDE_AVAILABLE:
             preview_roles = tuple(payload.get("preview_roles", ()))
             current_ms = int(payload.get("time_ms", 0))
             try:
+                build_start_s = time.perf_counter()
                 if project is None or layout_data is None:
                     payload["frames"] = {}
                 else:
                     payload["frames"] = build_preview_frames(project, layout_data, preview_roles, current_ms)
+                payload["build_ms"] = (time.perf_counter() - build_start_s) * 1000.0
                 payload["error"] = ""
             except Exception as exc:  # pragma: no cover - worker path requires PySide runtime
                 payload["frames"] = {}
+                payload["build_ms"] = 0.0
                 payload["error"] = str(exc)
             self.rendered.emit(payload)
 
@@ -276,11 +308,12 @@ if PYSIDE_AVAILABLE:
     class ShowTimelineWidget(QtWidgets.QWidget):
         def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
             super().__init__(parent)
-            self.setMinimumHeight(480)
+            self.setMinimumHeight(160)
             self.setFocusPolicy(QtCore.Qt.ClickFocus)
             self.project: ShowProject | None = None
             self.waveform: AudioWaveform | None = None
             self.current_time_ms = 0
+            self.transport_playing = False
             self.selected_role = "A"
             self.seek_callback = None
             self.viewport_changed_callback = None
@@ -300,6 +333,7 @@ if PYSIDE_AVAILABLE:
             self._drag_history_started = False
             self._zoom_factor = 1.0
             self._visible_start_ms = 0
+            self._display_mode = TIMELINE_DISPLAY_FULL
             self._hover_time_ms: int | None = None
             self._hover_snap_time_ms: int | None = None
             self._hover_role: str | None = None
@@ -326,6 +360,73 @@ if PYSIDE_AVAILABLE:
             self._span_create_anchor_time_ms = 0
             self._span_create_current_time_ms = 0
             self._span_create_dragging = False
+            self._static_cache_key: tuple | None = None
+            self._static_cache_pixmap = None
+            self._static_cache_dirty = False
+            self._static_cache_view_start_ms = 0
+            self._static_cache_view_duration_ms = 0
+            self._last_static_interaction_s = 0.0
+            self._static_cache_rebuild_timer = QtCore.QTimer(self)
+            self._static_cache_rebuild_timer.setSingleShot(False)
+            self._static_cache_rebuild_timer.setInterval(24)
+            self._static_cache_rebuild_timer.timeout.connect(self._on_static_cache_rebuild_timeout)
+            self._paint_ms_ema = 0.0
+            self._waveform_ms_ema = 0.0
+            self._lane_ms_ema = 0.0
+            self._static_build_ms_ema = 0.0
+
+        def perf_snapshot(self) -> dict[str, float]:
+            return {
+                "paint_ms": self._paint_ms_ema,
+                "waveform_ms": self._waveform_ms_ema,
+                "lane_ms": self._lane_ms_ema,
+                "static_ms": self._static_build_ms_ema,
+            }
+
+        def set_display_mode(self, mode: str) -> None:
+            normalized_mode = mode if mode in {
+                TIMELINE_DISPLAY_FULL,
+                TIMELINE_DISPLAY_GLOBAL,
+                TIMELINE_DISPLAY_HIDDEN,
+            } else TIMELINE_DISPLAY_FULL
+            if self._display_mode == normalized_mode:
+                return
+            self._display_mode = normalized_mode
+            if normalized_mode != TIMELINE_DISPLAY_FULL and self._active_lane_role not in {None, "*"}:
+                self._active_lane_role = "*"
+                self._active_lane_layer = 0
+            self._invalidate_static_cache()
+            self.update()
+
+        def _visible_lane_roles(self) -> tuple[str, ...]:
+            if self._display_mode == TIMELINE_DISPLAY_GLOBAL:
+                return ("*",)
+            if self._display_mode == TIMELINE_DISPLAY_HIDDEN:
+                return ()
+            return ("*", "A", "B", "C")
+
+        def _invalidate_static_cache(self, defer: bool = False) -> None:
+            self._static_cache_key = None
+            if defer and self._static_cache_pixmap is not None:
+                self._static_cache_dirty = True
+                self._last_static_interaction_s = time.monotonic()
+                if not self._static_cache_rebuild_timer.isActive():
+                    self._static_cache_rebuild_timer.start()
+                return
+            self._static_cache_dirty = False
+            self._static_cache_rebuild_timer.stop()
+            self._static_cache_pixmap = None
+
+        def _on_static_cache_rebuild_timeout(self) -> None:
+            if not self._static_cache_dirty:
+                if (time.monotonic() - self._last_static_interaction_s) > 0.08:
+                    self._static_cache_rebuild_timer.stop()
+                return
+            self._static_cache_dirty = False
+            self._ensure_static_cache()
+            self.update()
+            if not self._static_cache_dirty and (time.monotonic() - self._last_static_interaction_s) > 0.08:
+                self._static_cache_rebuild_timer.stop()
 
         def set_timeline_data(
             self,
@@ -334,6 +435,7 @@ if PYSIDE_AVAILABLE:
             current_time_ms: int,
             selected_role: str,
             auto_scroll: bool = True,
+            transport_playing: bool = False,
         ) -> None:
             clip_counts = None
             if project is not None:
@@ -359,6 +461,7 @@ if PYSIDE_AVAILABLE:
             self.waveform = waveform
             self.selected_role = selected_role
             self.current_time_ms = current_time_ms
+            self.transport_playing = transport_playing
             self._last_visual_signature = visual_signature
             self._clamp_view_window()
             suppress_auto_scroll = (
@@ -370,6 +473,7 @@ if PYSIDE_AVAILABLE:
                 self._ensure_time_visible(current_time_ms)
             self._emit_viewport_changed()
             if static_changed or previous_visible_start != self._visible_start_ms:
+                self._invalidate_static_cache()
                 self.update()
                 return
             self._update_playhead_region(previous_time_ms, current_time_ms)
@@ -402,6 +506,7 @@ if PYSIDE_AVAILABLE:
                 return
             self.snap_enabled = enabled
             self.snap_divisor = normalized_divisor
+            self._invalidate_static_cache()
             self.update()
 
         def set_insert_preview(self, effect_name: str, duration_ms: int) -> None:
@@ -463,6 +568,7 @@ if PYSIDE_AVAILABLE:
             new_visible = self._visible_duration_ms()
             self._visible_start_ms = int(round(anchor - anchor_ratio * new_visible))
             self._clamp_view_window()
+            self._invalidate_static_cache(defer=True)
             self._emit_viewport_changed()
             self.update()
 
@@ -472,6 +578,7 @@ if PYSIDE_AVAILABLE:
                 return
             self.selected_clip = clip
             self.selected_clip_ids = new_ids
+            self._invalidate_static_cache()
             self.update()
 
         def set_selected_clips(self, clips) -> None:
@@ -482,6 +589,7 @@ if PYSIDE_AVAILABLE:
                 return
             self.selected_clip = selected_clip
             self.selected_clip_ids = selected_ids
+            self._invalidate_static_cache()
             self.update()
 
         def _all_display_clips(self) -> tuple:
@@ -521,6 +629,7 @@ if PYSIDE_AVAILABLE:
             if new_start == self._visible_start_ms:
                 return
             self._visible_start_ms = new_start
+            self._invalidate_static_cache(defer=True)
             self._emit_viewport_changed()
             self.update()
 
@@ -576,6 +685,7 @@ if PYSIDE_AVAILABLE:
             self._hold_manual_view()
             self._visible_start_ms += int(delta_ms)
             self._clamp_view_window()
+            self._invalidate_static_cache(defer=True)
             self._emit_viewport_changed()
             self.update()
 
@@ -593,6 +703,7 @@ if PYSIDE_AVAILABLE:
             new_visible = self._visible_duration_ms()
             self._visible_start_ms = int(round(anchor_time_ms - anchor_ratio * new_visible))
             self._clamp_view_window()
+            self._invalidate_static_cache(defer=True)
             self._emit_viewport_changed()
             self.update()
 
@@ -702,9 +813,12 @@ if PYSIDE_AVAILABLE:
                 return max(1, min(24, max(3, width_px // 10)))
             duration_ms = max(1, int(clip.end_ms) - int(clip.start_ms))
             rate = max(0.0, float(clip.params.get("color_rate", 1.0) or 0.0))
+            fit_to_clip = bool(clip.params.get("color_fit_to_clip", False))
             tempo_sync = bool(clip.params.get("color_tempo_sync", True))
             estimated_cycles = 1.0
-            if tempo_sync and float(self.project.tempo_bpm) > 0.0:
+            if fit_to_clip:
+                estimated_cycles = max(1.0, rate)
+            elif tempo_sync and float(self.project.tempo_bpm) > 0.0:
                 beat_ms = 60000.0 / float(self.project.tempo_bpm)
                 estimated_cycles = max(1.0, (duration_ms / beat_ms) * max(0.0625, rate))
             elif rate > 0.0:
@@ -726,17 +840,99 @@ if PYSIDE_AVAILABLE:
                 gradient.setColorAt(stop_t, color)
             return (QtGui.QBrush(gradient), colors[count // 2])
 
+        def _clip_corner_radius(self, clip_rect: QtCore.QRectF) -> float:
+            return max(2.0, min(6.0, clip_rect.height() * 0.22, clip_rect.width() * 0.16))
+
+        def _clip_body_path(
+            self,
+            clip_rect: QtCore.QRectF,
+            *,
+            round_left: bool,
+            round_right: bool,
+            inset: float = 0.0,
+        ) -> QtGui.QPainterPath:
+            rect = clip_rect.adjusted(inset, inset, -inset, -inset)
+            path = QtGui.QPainterPath()
+            if rect.width() <= 0.0 or rect.height() <= 0.0:
+                return path
+
+            radius = min(self._clip_corner_radius(clip_rect), rect.width() * 0.5, rect.height() * 0.5)
+            left = rect.left()
+            right = rect.right()
+            top = rect.top()
+            bottom = rect.bottom()
+
+            start_x = left + radius if round_left and radius > 0.0 else left
+            path.moveTo(start_x, top)
+
+            if round_right and radius > 0.0:
+                path.lineTo(right - radius, top)
+                path.quadTo(right, top, right, top + radius)
+                path.lineTo(right, bottom - radius)
+                path.quadTo(right, bottom, right - radius, bottom)
+            else:
+                path.lineTo(right, top)
+                path.lineTo(right, bottom)
+
+            if round_left and radius > 0.0:
+                path.lineTo(left + radius, bottom)
+                path.quadTo(left, bottom, left, bottom - radius)
+                path.lineTo(left, top + radius)
+                path.quadTo(left, top, left + radius, top)
+            else:
+                path.lineTo(left, bottom)
+                path.lineTo(left, top)
+
+            path.closeSubpath()
+            return path
+
+        def _clip_handle_rects(
+            self,
+            clip_rect: QtCore.QRectF,
+            *,
+            round_left: bool,
+            round_right: bool,
+        ) -> tuple[QtCore.QRectF | None, QtCore.QRectF | None]:
+            if clip_rect.width() < 12.0:
+                return (None, None)
+            handle_width = min(4.0, max(2.0, clip_rect.width() * 0.055))
+            handle_height = max(8.0, min(clip_rect.height() - 6.0, clip_rect.height() * 0.52))
+            handle_top = clip_rect.center().y() - handle_height * 0.5
+            inset_x = 3.0
+            left_rect = None
+            right_rect = None
+            if round_left:
+                left_rect = QtCore.QRectF(
+                    clip_rect.left() + inset_x,
+                    handle_top,
+                    handle_width,
+                    handle_height,
+                )
+            if round_right:
+                right_rect = QtCore.QRectF(
+                    clip_rect.right() - inset_x - handle_width,
+                    handle_top,
+                    handle_width,
+                    handle_height,
+                )
+            return (left_rect, right_rect)
+
         def _paint_clip_fill(
             self,
             painter: QtGui.QPainter,
             clip_rect: QtCore.QRectF,
             clip,
             plot_rect: QtCore.QRectF,
+            *,
+            fill_path: QtGui.QPainterPath | None = None,
         ) -> QtGui.QColor:
             inner_rect = clip_rect.adjusted(1.0, 1.0, -1.0, -1.0)
             if self.project is None or clip is None or inner_rect.width() <= 1.0 or inner_rect.height() <= 1.0:
                 fill_brush, preview_color = self._clip_fill_brush(inner_rect, clip)
-                painter.fillRect(inner_rect, fill_brush)
+                if fill_path is not None and not fill_path.isEmpty():
+                    painter.fillPath(fill_path, fill_brush)
+                else:
+                    painter.fillRect(inner_rect, fill_brush)
                 return preview_color
 
             visible_rect = inner_rect.intersected(
@@ -744,7 +940,10 @@ if PYSIDE_AVAILABLE:
             )
             if visible_rect.isEmpty() or visible_rect.width() <= 0.0:
                 fill_brush, preview_color = self._clip_fill_brush(inner_rect, clip)
-                painter.fillRect(inner_rect, fill_brush)
+                if fill_path is not None and not fill_path.isEmpty():
+                    painter.fillPath(fill_path, fill_brush)
+                else:
+                    painter.fillRect(inner_rect, fill_brush)
                 return preview_color
 
             full_width = max(1e-6, inner_rect.width())
@@ -752,6 +951,9 @@ if PYSIDE_AVAILABLE:
             sample_count = self._clip_fill_sample_count(visible_rect, clip, visible_fraction)
             duration_ms = max(1, int(clip.end_ms) - int(clip.start_ms))
             preview_color = QtGui.QColor(255, 255, 255, 255)
+            painter.save()
+            if fill_path is not None and not fill_path.isEmpty():
+                painter.setClipPath(fill_path)
             for sample_index in range(sample_count):
                 left_t = sample_index / sample_count
                 right_t = (sample_index + 1) / sample_count
@@ -774,7 +976,96 @@ if PYSIDE_AVAILABLE:
                 )
                 if sample_index == sample_count // 2:
                     preview_color = qcolor
+            painter.restore()
             return preview_color
+
+        def _draw_clip_block(
+            self,
+            painter: QtGui.QPainter,
+            clip_rect: QtCore.QRectF,
+            clip,
+            plot_rect: QtCore.QRectF,
+            *,
+            is_selected: bool,
+        ) -> None:
+            visible_clip_rect = clip_rect.intersected(
+                QtCore.QRectF(plot_rect.left(), clip_rect.top(), plot_rect.width(), clip_rect.height())
+            )
+            if visible_clip_rect.isEmpty() or visible_clip_rect.width() <= 0.0:
+                return
+            round_left = clip_rect.left() >= plot_rect.left() + 0.5
+            round_right = clip_rect.right() <= plot_rect.right() - 0.5
+            outer_path = self._clip_body_path(
+                visible_clip_rect,
+                round_left=round_left,
+                round_right=round_right,
+            )
+            inner_path = self._clip_body_path(
+                visible_clip_rect,
+                round_left=round_left,
+                round_right=round_right,
+                inset=1.0,
+            )
+            painter.save()
+            painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            painter.fillPath(outer_path, QtGui.QColor("#101822"))
+            preview_color = self._paint_clip_fill(
+                painter,
+                clip_rect,
+                clip,
+                plot_rect,
+                fill_path=inner_path,
+            )
+            border_color = preview_color.lighter(122)
+            border_color.setAlpha(208)
+            border_width = 1.0
+            if is_selected:
+                border_color = QtGui.QColor(255, 255, 255, 228)
+                border_width = 1.6
+            painter.setPen(QtGui.QPen(border_color, border_width))
+            painter.setBrush(QtCore.Qt.NoBrush)
+            painter.drawPath(outer_path)
+            top_rim_rect = QtCore.QRectF(
+                visible_clip_rect.left() + 1.5,
+                visible_clip_rect.top() + 1.2,
+                max(0.0, visible_clip_rect.width() - 3.0),
+                max(1.0, visible_clip_rect.height() * 0.18),
+            )
+            if top_rim_rect.width() > 0.0 and top_rim_rect.height() > 0.0:
+                rim_path = self._clip_body_path(
+                    top_rim_rect,
+                    round_left=round_left,
+                    round_right=round_right,
+                )
+                rim_color = preview_color.lighter(135)
+                rim_color.setAlpha(42 if is_selected else 28)
+                painter.fillPath(rim_path, rim_color)
+            if is_selected:
+                left_handle_rect, right_handle_rect = self._clip_handle_rects(
+                    visible_clip_rect,
+                    round_left=round_left,
+                    round_right=round_right,
+                )
+                painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 188), 1.0))
+                for handle_rect in (left_handle_rect, right_handle_rect):
+                    if handle_rect is None:
+                        continue
+                    painter.setBrush(QtGui.QColor(255, 255, 255, 112))
+                    painter.drawRoundedRect(handle_rect, handle_rect.width() * 0.5, handle_rect.width() * 0.5)
+            painter.restore()
+            if visible_clip_rect.width() > 68.0:
+                painter.setPen(self._text_color_for_fill(preview_color))
+                text = f"{clip.effect} {clip.target}"
+                text = painter.fontMetrics().elidedText(
+                    text,
+                    QtCore.Qt.ElideRight,
+                    max(8, int(visible_clip_rect.width() - 10.0)),
+                )
+                painter.drawText(
+                    visible_clip_rect.adjusted(6.0, 0.0, -4.0, 0.0),
+                    int(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft),
+                    text,
+                )
 
         def _insert_effect_color(self) -> QtGui.QColor:
             spec = EFFECT_NAME_TO_SPEC.get(self.insert_effect_name, EFFECT_LIBRARY[0])
@@ -798,15 +1089,20 @@ if PYSIDE_AVAILABLE:
             return lanes
 
         def _waveform_rect(self, plot_rect: QtCore.QRectF) -> QtCore.QRectF:
-            return QtCore.QRectF(plot_rect.left(), plot_rect.top(), plot_rect.width(), 96.0)
+            waveform_height = (
+                TIMELINE_WAVEFORM_HEIGHT_FULL_PX
+                if self._display_mode == TIMELINE_DISPLAY_FULL
+                else TIMELINE_WAVEFORM_HEIGHT_GLOBAL_PX
+            )
+            return QtCore.QRectF(plot_rect.left(), plot_rect.top(), plot_rect.width(), waveform_height)
 
         def _time_selection_zone_rect(self, plot_rect: QtCore.QRectF) -> QtCore.QRectF:
             waveform_rect = self._waveform_rect(plot_rect)
             return QtCore.QRectF(
-                plot_rect.left(),
-                plot_rect.top(),
-                plot_rect.width(),
-                waveform_rect.bottom() - plot_rect.top() + 18.0,
+                waveform_rect.left(),
+                waveform_rect.top(),
+                waveform_rect.width(),
+                waveform_rect.height(),
             )
 
         def selection_range(self) -> tuple[int, int] | None:
@@ -853,10 +1149,15 @@ if PYSIDE_AVAILABLE:
             return max(0, int(round(snapped)))
 
         def _lane_rects(self, plot_rect: QtCore.QRectF) -> dict[str, QtCore.QRectF]:
-            top = self._waveform_rect(plot_rect).bottom() + 18.0
-            lane_gap = 6.0
-            lanes = ("*", "A", "B", "C")
-            lane_height = max(34.0, (plot_rect.bottom() - top - lane_gap * (len(lanes) - 1)) / len(lanes))
+            top = self._waveform_rect(plot_rect).bottom() + TIMELINE_TRACK_TOP_GAP_PX
+            lane_gap = TIMELINE_TRACK_GAP_PX
+            lanes = self._visible_lane_roles()
+            if not lanes:
+                return {}
+            lane_height = max(
+                TIMELINE_ROLE_MIN_HEIGHT_PX,
+                (plot_rect.bottom() - top - lane_gap * (len(lanes) - 1)) / len(lanes),
+            )
             return {
                 role: QtCore.QRectF(
                     plot_rect.left(),
@@ -878,9 +1179,16 @@ if PYSIDE_AVAILABLE:
                 layer_count = max(TIMELINE_TRACK_COUNT, max(row.clip.layer for row in rows) + 1)
             if extra_layer is not None:
                 layer_count = max(layer_count, extra_layer + 1)
-            inner_top = rect.top() + 6.0
-            layer_gap = 3.0
-            layer_height = max(10.0, (rect.height() - 12.0 - layer_gap * (layer_count - 1)) / layer_count)
+            inner_top = rect.top() + TIMELINE_LAYER_INSET_PX
+            layer_gap = TIMELINE_LAYER_GAP_PX
+            layer_height = max(
+                TIMELINE_LAYER_MIN_HEIGHT_PX,
+                (
+                    rect.height()
+                    - (TIMELINE_LAYER_INSET_PX * 2.0)
+                    - layer_gap * (layer_count - 1)
+                ) / layer_count,
+            )
             return layer_count, inner_top, layer_gap, layer_height
 
         def _preview_clip_rect(
@@ -952,7 +1260,7 @@ if PYSIDE_AVAILABLE:
             visible_frame_count = max(1, visible_frame_end - visible_frame_start)
             samples_per_column = visible_frame_count / max(1, column_count)
 
-            if samples_per_column <= 512.0 and len(self.waveform.mono_samples) >= frame_count:
+            if samples_per_column <= 256.0 and len(self.waveform.mono_samples) >= frame_count:
                 painter.save()
                 painter.setRenderHint(QtGui.QPainter.Antialiasing, False)
                 painter.setPen(QtGui.QPen(QtGui.QColor("#7aa2f7"), 1.0))
@@ -978,9 +1286,24 @@ if PYSIDE_AVAILABLE:
                     painter.drawLine(QtCore.QPointF(x, y0), QtCore.QPointF(x, y1))
                 painter.restore()
             else:
-                peaks = self.waveform.peaks
-                total_peak_count = len(peaks)
-                bucket_size = max(1, int(math.ceil(frame_count / max(1, total_peak_count))))
+                min_levels = getattr(self.waveform, "envelope_min_levels", ())
+                max_levels = getattr(self.waveform, "envelope_max_levels", ())
+                stride_levels = getattr(self.waveform, "envelope_stride_frames", ())
+                level_index = 0
+                if stride_levels:
+                    while (
+                        level_index + 1 < len(stride_levels)
+                        and float(stride_levels[level_index + 1]) <= samples_per_column
+                    ):
+                        level_index += 1
+                level_mins = min_levels[level_index] if min_levels else (0.0,)
+                level_maxes = max_levels[level_index] if max_levels else (0.0,)
+                level_stride = (
+                    max(1, int(stride_levels[level_index]))
+                    if stride_levels
+                    else max(1, int(math.ceil(frame_count / max(1, len(self.waveform.peaks)))))
+                )
+                total_bucket_count = max(1, len(level_mins))
                 amplitude_scale = rect.height() * 0.42
                 painter.save()
                 painter.setRenderHint(QtGui.QPainter.Antialiasing, False)
@@ -990,16 +1313,24 @@ if PYSIDE_AVAILABLE:
                     column_end = visible_frame_start + int(math.ceil(visible_frame_count * ((column + 1) / column_count)))
                     column_start = max(0, min(frame_count - 1, column_start))
                     column_end = max(column_start + 1, min(frame_count, column_end))
-                    index0 = max(0, min(total_peak_count - 1, column_start // bucket_size))
-                    index1 = max(index0 + 1, min(total_peak_count, int(math.ceil(column_end / bucket_size))))
-                    peak_value = 0.0
-                    for peak in peaks[index0:index1]:
-                        if peak > peak_value:
-                            peak_value = peak
+                    index0 = max(0, min(total_bucket_count - 1, column_start // level_stride))
+                    index1 = max(index0 + 1, min(total_bucket_count, int(math.ceil(column_end / level_stride))))
+                    min_value = 1.0
+                    max_value = -1.0
+                    for bucket_index in range(index0, index1):
+                        bucket_min = float(level_mins[bucket_index])
+                        bucket_max = float(level_maxes[bucket_index])
+                        if bucket_min < min_value:
+                            min_value = bucket_min
+                        if bucket_max > max_value:
+                            max_value = bucket_max
+                    if min_value > max_value:
+                        min_value = 0.0
+                        max_value = 0.0
                     x = rect.left() + rect.width() * ((column + 0.5) / column_count)
                     x = self._aligned_x(x)
-                    y0 = center_y - peak_value * amplitude_scale
-                    y1 = center_y + peak_value * amplitude_scale
+                    y0 = center_y - max_value * amplitude_scale
+                    y1 = center_y - min_value * amplitude_scale
                     painter.drawLine(QtCore.QPointF(x, y0), QtCore.QPointF(x, y1))
                 painter.restore()
             painter.drawLine(rect.left(), center_y, rect.right(), center_y)
@@ -1010,32 +1341,55 @@ if PYSIDE_AVAILABLE:
             beat_ms = self._beat_ms()
             if beat_ms is None:
                 return
-            divisor = max(1, self.snap_divisor if self.snap_enabled else 1)
-            step_ms = self._snap_step_value_ms() if self.snap_enabled else max(1.0, float(beat_ms))
             visible_start = self._visible_start_ms
             visible_end = visible_start + self._visible_duration_ms()
             offset_ms = float(self.project.beat_offset_ms)
-            first_index = int(math.floor((visible_start - offset_ms) / step_ms))
-            last_index = int(math.ceil((visible_end - offset_ms) / step_ms))
-            primary_spacing_ms = step_ms * divisor
-            beat_pixel_spacing = plot_rect.width() * (primary_spacing_ms / max(1, self._visible_duration_ms()))
-            for step_index in range(first_index, last_index + 1):
-                time_ms = offset_ms + step_index * step_ms
-                x = self._aligned_x(self._time_to_x(time_ms, plot_rect))
-                is_primary = (step_index % divisor) == 0
-                color = QtGui.QColor("#2f4358" if is_primary else "#223041")
-                if not is_primary:
-                    color.setAlpha(110 if self.snap_enabled else 70)
-                painter.setPen(QtGui.QPen(color, 1.0))
-                painter.drawLine(QtCore.QPointF(x, plot_rect.top()), QtCore.QPointF(x, plot_rect.bottom()))
-                if is_primary and beat_pixel_spacing >= 44.0:
-                    beat_number = 1 + int(round(step_index / divisor))
-                    painter.setPen(QtGui.QColor("#8fa4ba"))
-                    painter.drawText(
-                        QtCore.QRectF(x + 2.0, self._waveform_rect(plot_rect).top() + 2.0, 42.0, 14.0),
-                        int(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter),
-                        f"b{beat_number}",
-                    )
+            visible_duration_ms = max(1.0, float(self._visible_duration_ms()))
+            beat_pixel_spacing = plot_rect.width() * (float(beat_ms) / visible_duration_ms)
+            bar_beats = 4.0
+            bar_ms = float(beat_ms) * bar_beats
+            bar_pixel_spacing = beat_pixel_spacing * bar_beats
+
+            def _draw_grid_series(
+                step_beats: float,
+                color_value: str,
+                alpha: int,
+                width: float,
+            ) -> None:
+                step_ms = float(beat_ms) * step_beats
+                if step_ms <= 0.0:
+                    return
+                first_index = int(math.floor((visible_start - offset_ms) / step_ms)) - 1
+                last_index = int(math.ceil((visible_end - offset_ms) / step_ms)) + 1
+                pen_color = QtGui.QColor(color_value)
+                pen_color.setAlpha(alpha)
+                painter.setPen(QtGui.QPen(pen_color, width))
+                for step_index in range(first_index, last_index + 1):
+                    time_ms = offset_ms + step_index * step_ms
+                    if time_ms < visible_start - step_ms or time_ms > visible_end + step_ms:
+                        continue
+                    x = self._aligned_x(self._time_to_x(time_ms, plot_rect))
+                    painter.drawLine(QtCore.QPointF(x, plot_rect.top()), QtCore.QPointF(x, plot_rect.bottom()))
+
+            painter.save()
+            painter.setRenderHint(QtGui.QPainter.Antialiasing, False)
+
+            if beat_pixel_spacing < 16.0:
+                bars_step = 1
+                while bar_pixel_spacing * bars_step < 56.0:
+                    bars_step *= 2
+                _draw_grid_series(float(bars_step) * bar_beats, "#31465c", 150, 1.0)
+            else:
+                if beat_pixel_spacing >= 144.0:
+                    _draw_grid_series(0.125, "#1d2a37", 84, 1.0)
+                if beat_pixel_spacing >= 84.0:
+                    _draw_grid_series(0.25, "#1f2e3b", 92, 1.0)
+                if beat_pixel_spacing >= 42.0:
+                    _draw_grid_series(0.5, "#233243", 106, 1.0)
+                _draw_grid_series(1.0, "#2f4358", 146, 1.0)
+                _draw_grid_series(bar_beats, "#48647f", 196, 1.0)
+
+            painter.restore()
 
         def _draw_lane(
             self,
@@ -1080,37 +1434,15 @@ if PYSIDE_AVAILABLE:
 
             for row, clip_rect in self._lane_entries(role, rows, rect, plot_rect):
                 clip = row.clip
-                visible_clip_rect = clip_rect.intersected(
-                    QtCore.QRectF(plot_rect.left(), clip_rect.top(), plot_rect.width(), clip_rect.height())
-                )
-                if visible_clip_rect.isEmpty() or visible_clip_rect.width() <= 0.0:
+                if self._drag_clip is not None and clip is self._drag_clip:
                     continue
-                painter.fillRect(visible_clip_rect, QtGui.QColor("#18212d"))
-                preview_color = self._paint_clip_fill(painter, clip_rect, clip, plot_rect)
-                if id(row.clip) in self.selected_clip_ids:
-                    painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff"), 2.0))
-                else:
-                    painter.setPen(QtGui.QPen(preview_color.lighter(145), 1.0))
-                painter.drawRect(visible_clip_rect)
-                if id(row.clip) in self.selected_clip_ids and visible_clip_rect.width() >= 10.0:
-                    painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff"), 1.1))
-                    left_x = visible_clip_rect.left() + CLIP_RESIZE_HANDLE_PX * 0.5
-                    right_x = visible_clip_rect.right() - CLIP_RESIZE_HANDLE_PX * 0.5
-                    painter.drawLine(
-                        QtCore.QPointF(left_x, visible_clip_rect.top() + 2.0),
-                        QtCore.QPointF(left_x, visible_clip_rect.bottom() - 2.0),
-                    )
-                    painter.drawLine(
-                        QtCore.QPointF(right_x, visible_clip_rect.top() + 2.0),
-                        QtCore.QPointF(right_x, visible_clip_rect.bottom() - 2.0),
-                    )
-                if visible_clip_rect.width() > 68.0:
-                    painter.setPen(self._text_color_for_fill(preview_color))
-                    painter.drawText(
-                        visible_clip_rect.adjusted(4.0, 0.0, -4.0, 0.0),
-                        int(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft),
-                        f"{clip.effect} {clip.target}",
-                    )
+                self._draw_clip_block(
+                    painter,
+                    clip_rect,
+                    clip,
+                    plot_rect,
+                    is_selected=id(row.clip) in self.selected_clip_ids,
+                )
 
         def _lane_entries(self, role: str, rows: list, rect: QtCore.QRectF, plot_rect: QtCore.QRectF):
             _, inner_top, layer_gap, layer_height = self._lane_layout_metrics(rows, rect)
@@ -1127,12 +1459,128 @@ if PYSIDE_AVAILABLE:
                 entries.append((row, clip_rect))
             return entries
 
+        def _drag_clip_entry(self, plot_rect: QtCore.QRectF):
+            if self._drag_clip is None or self.project is None:
+                return None
+            lane_rects = self._lane_rects(plot_rect)
+            lanes = self._lane_rows()
+            for role in ("*", "A", "B", "C"):
+                rect = lane_rects.get(role)
+                if rect is None:
+                    continue
+                rows = lanes[role]
+                for row, clip_rect in self._lane_entries(role, rows, rect, plot_rect):
+                    if row.clip is self._drag_clip:
+                        return (row, clip_rect)
+            return None
+
+        def _timeline_visual_signature(self) -> tuple:
+            clips = self._all_display_clips()
+            clip_signature: list[tuple] = []
+            for clip in clips:
+                params = clip.params
+                clip_signature.append(
+                    (
+                        clip.start_ms,
+                        clip.end_ms,
+                        clip.layer,
+                        clip.effect,
+                        clip.target_kind,
+                        clip.target,
+                        clip.blend,
+                        str(params.get("color_mode", "")),
+                        tuple(params.get("color_from", params.get("color", []))) if isinstance(params.get("color_from", params.get("color", [])), (list, tuple)) else (),
+                        tuple(params.get("color_to", [])) if isinstance(params.get("color_to", []), (list, tuple)) else (),
+                        str(params.get("color_palette_preset", "")),
+                        str(params.get("palette_text", "")),
+                        bool(params.get("color_fit_to_clip", False)),
+                        bool(params.get("color_tempo_sync", True)),
+                        float(params.get("color_rate", 0.0) or 0.0),
+                    )
+                )
+            selection_range = self.selection_range()
+            return (
+                self.width(),
+                self.height(),
+                self.devicePixelRatioF(),
+                id(self.project),
+                id(self.waveform),
+                self.selected_role,
+                self._visible_start_ms,
+                self._visible_duration_ms(),
+                self.snap_enabled,
+                self.snap_divisor,
+                tuple(sorted(self.selected_clip_ids)),
+                tuple(clip_signature),
+            )
+
+        def _paint_selection_overlay(self, painter: QtGui.QPainter, plot_rect: QtCore.QRectF) -> None:
+            selection_range = self.selection_range()
+            if selection_range is None:
+                return
+            select_x0 = self._aligned_x(self._time_to_x_raw(selection_range[0], plot_rect))
+            select_x1 = self._aligned_x(self._time_to_x_raw(selection_range[1], plot_rect))
+            selection_rect = QtCore.QRectF(
+                min(select_x0, select_x1),
+                plot_rect.top(),
+                max(1.0, abs(select_x1 - select_x0)),
+                plot_rect.height(),
+            ).intersected(plot_rect)
+            if selection_rect.isEmpty():
+                return
+            painter.fillRect(selection_rect, QtGui.QColor(122, 162, 247, 36))
+            painter.setPen(QtGui.QPen(QtGui.QColor("#7aa2f7"), 1.2))
+            painter.drawLine(
+                QtCore.QPointF(selection_rect.left(), plot_rect.top()),
+                QtCore.QPointF(selection_rect.left(), plot_rect.bottom()),
+            )
+            painter.drawLine(
+                QtCore.QPointF(selection_rect.right(), plot_rect.top()),
+                QtCore.QPointF(selection_rect.right(), plot_rect.bottom()),
+            )
+
+        def _ensure_static_cache(self) -> None:
+            cache_key = self._timeline_visual_signature()
+            if self._static_cache_key == cache_key and self._static_cache_pixmap is not None:
+                return
+            build_start_s = time.perf_counter()
+            pixel_ratio = max(1.0, float(self.devicePixelRatioF()))
+            pixmap = QtGui.QPixmap(max(1, int(round(self.width() * pixel_ratio))), max(1, int(round(self.height() * pixel_ratio))))
+            pixmap.setDevicePixelRatio(pixel_ratio)
+            pixmap.fill(QtGui.QColor("#0b0f14"))
+            painter = QtGui.QPainter(pixmap)
+            try:
+                painter.setRenderHint(QtGui.QPainter.Antialiasing, False)
+                painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, False)
+                plot_rect = self._plot_rect()
+                waveform_start_s = time.perf_counter()
+                self._draw_beat_grid(painter, plot_rect)
+                self._draw_waveform(painter, self._waveform_rect(plot_rect))
+                waveform_end_s = time.perf_counter()
+                lane_rects = self._lane_rects(plot_rect)
+                lanes = self._lane_rows()
+                lane_start_s = time.perf_counter()
+                for role in self._visible_lane_roles():
+                    self._draw_lane(painter, lane_rects[role], role, lanes[role], plot_rect)
+                lane_end_s = time.perf_counter()
+            finally:
+                painter.end()
+            build_end_s = time.perf_counter()
+            self._waveform_ms_ema = _ema_ms(self._waveform_ms_ema, (waveform_end_s - waveform_start_s) * 1000.0)
+            self._lane_ms_ema = _ema_ms(self._lane_ms_ema, (lane_end_s - lane_start_s) * 1000.0)
+            self._static_build_ms_ema = _ema_ms(self._static_build_ms_ema, (build_end_s - build_start_s) * 1000.0)
+            self._static_cache_pixmap = pixmap
+            self._static_cache_key = cache_key
+            self._static_cache_dirty = False
+            self._static_cache_view_start_ms = int(self._visible_start_ms)
+            self._static_cache_view_duration_ms = int(self._visible_duration_ms())
+
         def _clip_hit_entries(self):
             plot_rect = self._plot_rect()
             lane_rects = self._lane_rects(plot_rect)
             lanes = self._lane_rows()
             entries = []
-            for role in ("*", "A", "B", "C"):
+            for role in self._visible_lane_roles():
                 entries.extend(self._lane_entries(role, lanes[role], lane_rects[role], plot_rect))
             return entries
 
@@ -1154,7 +1602,7 @@ if PYSIDE_AVAILABLE:
             plot_rect = self._plot_rect()
             lane_rects = self._lane_rects(plot_rect)
             lanes = self._lane_rows()
-            for role in ("*", "A", "B", "C"):
+            for role in self._visible_lane_roles():
                 rect = lane_rects[role]
                 if not rect.contains(pos):
                     continue
@@ -1242,6 +1690,8 @@ if PYSIDE_AVAILABLE:
                     self._span_create_anchor_time_ms = anchor_time_ms
                     self._span_create_current_time_ms = anchor_time_ms
                     self._span_create_dragging = False
+                    if not self.transport_playing and self.seek_callback is not None:
+                        self.seek_callback(anchor_time_ms)
                     self.update()
                     event.accept()
                     return
@@ -1304,6 +1754,7 @@ if PYSIDE_AVAILABLE:
                 if not self._drag_history_started and self.clip_edit_started_callback is not None:
                     self.clip_edit_started_callback(self._drag_clip, self._drag_kind or "move")
                     self._drag_history_started = True
+                    self._invalidate_static_cache()
                 if self.clip_moved_callback is not None:
                     self.clip_moved_callback(
                         self._drag_clip,
@@ -1368,11 +1819,15 @@ if PYSIDE_AVAILABLE:
                 self.update()
                 event.accept()
                 return
+            had_drag_clip = self._drag_clip is not None
             self._drag_clip = None
             self._drag_kind = ""
             self._drag_origin_role = None
             self._drag_origin_layer = 0
             self._drag_history_started = False
+            if had_drag_clip:
+                self._invalidate_static_cache()
+                self.update()
             self.unsetCursor()
             super().mouseReleaseEvent(event)
 
@@ -1439,41 +1894,27 @@ if PYSIDE_AVAILABLE:
                 self._set_zoom_around_time(zoom_factor, anchor_time_ms)
             event.accept()
 
+        def resizeEvent(self, event) -> None:  # type: ignore[override]
+            self._invalidate_static_cache()
+            self.update()
+            super().resizeEvent(event)
+
         def paintEvent(self, event) -> None:  # type: ignore[override]
-            del event
+            paint_start_s = time.perf_counter()
             painter = QtGui.QPainter(self)
-            painter.fillRect(self.rect(), QtGui.QColor("#0b0f14"))
-            painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            painter.setRenderHint(QtGui.QPainter.Antialiasing, False)
+            painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, False)
+            if self._static_cache_pixmap is None:
+                self._ensure_static_cache()
+            if self._static_cache_pixmap is not None:
+                painter.drawPixmap(0, 0, self._static_cache_pixmap)
+            else:
+                painter.fillRect(self.rect(), QtGui.QColor("#0b0f14"))
 
             plot_rect = self._plot_rect()
-
-            self._draw_beat_grid(painter, plot_rect)
-            self._draw_waveform(painter, self._waveform_rect(plot_rect))
-            selection_range = self.selection_range()
-            if selection_range is not None:
-                select_x0 = self._aligned_x(self._time_to_x_raw(selection_range[0], plot_rect))
-                select_x1 = self._aligned_x(self._time_to_x_raw(selection_range[1], plot_rect))
-                selection_rect = QtCore.QRectF(
-                    min(select_x0, select_x1),
-                    plot_rect.top(),
-                    max(1.0, abs(select_x1 - select_x0)),
-                    plot_rect.height(),
-                ).intersected(plot_rect)
-                if not selection_rect.isEmpty():
-                    painter.fillRect(selection_rect, QtGui.QColor(122, 162, 247, 36))
-                    painter.setPen(QtGui.QPen(QtGui.QColor("#7aa2f7"), 1.2))
-                    painter.drawLine(
-                        QtCore.QPointF(selection_rect.left(), plot_rect.top()),
-                        QtCore.QPointF(selection_rect.left(), plot_rect.bottom()),
-                    )
-                    painter.drawLine(
-                        QtCore.QPointF(selection_rect.right(), plot_rect.top()),
-                        QtCore.QPointF(selection_rect.right(), plot_rect.bottom()),
-                    )
             lane_rects = self._lane_rects(plot_rect)
-            lanes = self._lane_rows()
-            for role in ("*", "A", "B", "C"):
-                self._draw_lane(painter, lane_rects[role], role, lanes[role], plot_rect)
+
+            self._paint_selection_overlay(painter, plot_rect)
 
             insert_target = self.current_insert_target()
             if insert_target is not None and insert_target[0] in lane_rects:
@@ -1509,6 +1950,17 @@ if PYSIDE_AVAILABLE:
                             self.insert_effect_name,
                         )
 
+            drag_entry = self._drag_clip_entry(plot_rect)
+            if drag_entry is not None:
+                row, clip_rect = drag_entry
+                self._draw_clip_block(
+                    painter,
+                    clip_rect,
+                    row.clip,
+                    plot_rect,
+                    is_selected=True,
+                )
+
             playhead_x = self._aligned_x(self._time_to_x_raw(self.current_time_ms, plot_rect))
             if plot_rect.left() <= playhead_x <= plot_rect.right():
                 painter.save()
@@ -1519,12 +1971,14 @@ if PYSIDE_AVAILABLE:
                 )
                 painter.restore()
             painter.end()
+            paint_end_s = time.perf_counter()
+            self._paint_ms_ema = _ema_ms(self._paint_ms_ema, (paint_end_s - paint_start_s) * 1000.0)
 
 
-    class PreviewViewportWidget(QtWidgets.QWidget):
+    class PreviewViewportWidget(PREVIEW_VIEW_BASE):
         def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
             super().__init__(parent)
-            self.setMinimumSize(520, 360)
+            self.setMinimumSize(180, 96)
             self.setFocusPolicy(QtCore.Qt.ClickFocus)
             self._layout_data: LoadedLayout = generated_layout()
             self._frames: dict[str, PreviewFrame] = {}
@@ -1548,10 +2002,31 @@ if PYSIDE_AVAILABLE:
             self._role_body_depth_cache: dict[str, float] = {}
             self._projected_role_label_cache: dict[str, QtCore.QPointF] = {}
             self._dot_pen_cache: dict[tuple[int, int, int, int], QtGui.QPen] = {}
+            self._gl_program = None
+            self._gl_vbo = None
+            self._gl_attr_pos = -1
+            self._gl_attr_color = -1
+            self._gl_uniform_point_size = -1
+            self._gl_ready = False
+            self._gl_point_blob = b""
+            self._gl_point_count = 0
+            self._gl_back_point_blob = b""
+            self._gl_back_point_count = 0
+            self._gl_front_point_blob = b""
+            self._gl_front_point_count = 0
             self._frame_times: deque[float] = deque(maxlen=30)
             self._fps_value = 0.0
+            self._paint_ms_ema = 0.0
+            self._projection_ms_ema = 0.0
             self.setMouseTracking(True)
             self._rebuild_scene_cache()
+
+        def perf_snapshot(self) -> dict[str, float]:
+            return {
+                "paint_ms": self._paint_ms_ema,
+                "projection_ms": self._projection_ms_ema,
+                "fps": self._fps_value,
+            }
 
         def set_preview_data(
             self,
@@ -1574,6 +2049,8 @@ if PYSIDE_AVAILABLE:
             if geometry_key != self._geometry_key:
                 self._geometry_key = geometry_key
                 self._rebuild_scene_cache()
+            else:
+                self._mark_gl_geometry_dirty()
             self.update()
 
         def view_mode(self) -> str:
@@ -1586,6 +2063,132 @@ if PYSIDE_AVAILABLE:
             if self._view_mode == "3d":
                 return "3D: drag orbit, shift-drag pan, wheel zoom"
             return "2D: drag pan, wheel zoom"
+
+        def _uses_opengl(self) -> bool:
+            return bool(
+                QT_OPENGL_AVAILABLE
+                and QtOpenGLWidgets is not None
+                and isinstance(self, QtOpenGLWidgets.QOpenGLWidget)
+            )
+
+        def _mark_gl_geometry_dirty(self) -> None:
+            self._gl_point_blob = b""
+            self._gl_point_count = 0
+            self._gl_back_point_blob = b""
+            self._gl_back_point_count = 0
+            self._gl_front_point_blob = b""
+            self._gl_front_point_count = 0
+
+        def _ensure_gl_resources(self) -> bool:
+            if not self._uses_opengl() or QtOpenGL is None:
+                return False
+            if self._gl_ready and self._gl_program is not None and self._gl_vbo is not None:
+                return True
+            current_context = QtGui.QOpenGLContext.currentContext()
+            if current_context is None:
+                return False
+
+            vertex_shader = """
+                attribute highp vec2 a_pos;
+                attribute highp vec4 a_color;
+                varying highp vec4 v_color;
+                uniform highp float u_point_size;
+                void main() {
+                    gl_Position = vec4(a_pos, 0.0, 1.0);
+                    gl_PointSize = u_point_size;
+                    v_color = a_color;
+                }
+            """
+            fragment_shader = """
+                varying highp vec4 v_color;
+                void main() {
+                    highp vec2 coord = gl_PointCoord * 2.0 - vec2(1.0, 1.0);
+                    highp float radius2 = dot(coord, coord);
+                    if (radius2 > 1.0) {
+                        discard;
+                    }
+                    gl_FragColor = v_color;
+                }
+            """
+
+            program = QtOpenGL.QOpenGLShaderProgram(self)
+            if not program.addShaderFromSourceCode(QtOpenGL.QOpenGLShader.Vertex, vertex_shader):
+                program.deleteLater()
+                return False
+            if not program.addShaderFromSourceCode(QtOpenGL.QOpenGLShader.Fragment, fragment_shader):
+                program.deleteLater()
+                return False
+            if not program.link():
+                program.deleteLater()
+                return False
+
+            vbo = QtOpenGL.QOpenGLBuffer(QtOpenGL.QOpenGLBuffer.VertexBuffer)
+            if not vbo.create():
+                program.deleteLater()
+                return False
+            vbo.setUsagePattern(QtOpenGL.QOpenGLBuffer.DynamicDraw)
+
+            self._gl_program = program
+            self._gl_vbo = vbo
+            self._gl_attr_pos = int(program.attributeLocation("a_pos"))
+            self._gl_attr_color = int(program.attributeLocation("a_color"))
+            self._gl_uniform_point_size = int(program.uniformLocation("u_point_size"))
+            self._gl_ready = True
+            return True
+
+        def _point_to_ndc(self, point: QtCore.QPointF) -> tuple[float, float]:
+            width = max(1.0, float(self.width()))
+            height = max(1.0, float(self.height()))
+            x_ndc = (float(point.x()) / width) * 2.0 - 1.0
+            y_ndc = 1.0 - (float(point.y()) / height) * 2.0
+            return (x_ndc, y_ndc)
+
+        def _build_gl_point_blob(
+            self,
+            point_iterable,
+        ) -> tuple[bytes, int]:
+            vertex_data = array("f")
+            count = 0
+            for color_key, mapped_point in point_iterable:
+                x_ndc, y_ndc = self._point_to_ndc(mapped_point)
+                vertex_data.extend((
+                    x_ndc,
+                    y_ndc,
+                    color_key[0] / 255.0,
+                    color_key[1] / 255.0,
+                    color_key[2] / 255.0,
+                    color_key[3] / 255.0,
+                ))
+                count += 1
+            return (vertex_data.tobytes(), count)
+
+        def _draw_gl_point_blob(self, point_blob: bytes, point_count: int) -> bool:
+            if point_count <= 0 or not point_blob or not self._ensure_gl_resources():
+                return False
+            current_context = QtGui.QOpenGLContext.currentContext()
+            if current_context is None or self._gl_program is None or self._gl_vbo is None:
+                return False
+            funcs = current_context.functions()
+            funcs.glEnable(GL_BLEND)
+            funcs.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            funcs.glEnable(GL_PROGRAM_POINT_SIZE)
+
+            self._gl_program.bind()
+            self._gl_vbo.bind()
+            self._gl_vbo.allocate(point_blob, len(point_blob))
+            stride = 6 * 4
+            self._gl_program.enableAttributeArray(self._gl_attr_pos)
+            self._gl_program.enableAttributeArray(self._gl_attr_color)
+            self._gl_program.setAttributeBuffer(self._gl_attr_pos, GL_FLOAT, 0, 2, stride)
+            self._gl_program.setAttributeBuffer(self._gl_attr_color, GL_FLOAT, 2 * 4, 4, stride)
+            point_size = float(7.2 * max(1.0, self.devicePixelRatioF()))
+            self._gl_program.setUniformValue(self._gl_uniform_point_size, point_size)
+            funcs.glDrawArrays(GL_POINTS, 0, point_count)
+            self._gl_program.disableAttributeArray(self._gl_attr_pos)
+            self._gl_program.disableAttributeArray(self._gl_attr_color)
+            self._gl_vbo.release()
+            self._gl_program.release()
+            return True
 
         def set_view_mode(self, mode: str) -> None:
             if mode not in {"2d", "3d"}:
@@ -1684,7 +2287,7 @@ if PYSIDE_AVAILABLE:
                     zs = [point[2] for point in role_points]
                     label_points_cache[role] = (
                         (min(xs) + max(xs)) * 0.5,
-                        min(ys) - 8.0,
+                        min(ys) - 12.0,
                         (min(zs) + max(zs)) * 0.5,
                     )
 
@@ -1696,6 +2299,7 @@ if PYSIDE_AVAILABLE:
             self._projected_body_shape_cache = ()
             self._role_body_depth_cache = {}
             self._projected_role_label_cache = {}
+            self._mark_gl_geometry_dirty()
 
         def _dot_pen(self, rgba: tuple[int, int, int, int]) -> QtGui.QPen:
             pen = self._dot_pen_cache.get(rgba)
@@ -1973,7 +2577,160 @@ if PYSIDE_AVAILABLE:
                 body_shapes.sort(key=lambda item: item[0])
                 self._projected_body_shape_cache = tuple(shape for _, shape in body_shapes)
                 self._role_body_depth_cache = role_body_depth
+                back_points: list[tuple[tuple[int, int, int, int], QtCore.QPointF]] = []
+                front_points: list[tuple[tuple[int, int, int, int], QtCore.QPointF]] = []
+                for role, led_index, mapped_point, depth in self._projected_led_draw_cache:
+                    color_key = self._point_color_key(role, led_index)
+                    if color_key is None:
+                        continue
+                    threshold = self._role_body_depth_cache.get(role, 0.0)
+                    if depth >= threshold:
+                        front_points.append((color_key, mapped_point))
+                    else:
+                        back_points.append((color_key, mapped_point))
+                self._gl_back_point_blob, self._gl_back_point_count = self._build_gl_point_blob(back_points)
+                self._gl_front_point_blob, self._gl_front_point_count = self._build_gl_point_blob(front_points)
+                self._gl_point_blob = b""
+                self._gl_point_count = 0
+            else:
+                flat_points: list[tuple[tuple[int, int, int, int], QtCore.QPointF]] = []
+                for role, led_index, mapped_point, _depth in self._projected_led_draw_cache:
+                    color_key = self._point_color_key(role, led_index)
+                    if color_key is None:
+                        continue
+                    flat_points.append((color_key, mapped_point))
+                self._gl_point_blob, self._gl_point_count = self._build_gl_point_blob(flat_points)
+                self._gl_back_point_blob = b""
+                self._gl_back_point_count = 0
+                self._gl_front_point_blob = b""
+                self._gl_front_point_count = 0
             self._projection_draw_key = projection_key
+
+        def _paint_body_shapes(self, painter: QtGui.QPainter) -> None:
+            painter.setBrush(QtCore.Qt.NoBrush)
+            for shape in self._projected_body_shape_cache:
+                if not shape:
+                    continue
+                kind = shape[0]
+                if kind == "torso":
+                    _, top_point, bottom_point, half_width_px, top_round_px = shape
+                    top_point = top_point  # type: ignore[assignment]
+                    bottom_point = bottom_point  # type: ignore[assignment]
+                    axis_dx = bottom_point.x() - top_point.x()
+                    axis_dy = bottom_point.y() - top_point.y()
+                    axis_len = math.hypot(axis_dx, axis_dy)
+                    if axis_len <= 1e-6:
+                        continue
+                    axis_x = axis_dx / axis_len
+                    axis_y = axis_dy / axis_len
+                    normal_x = -axis_y
+                    normal_y = axis_x
+                    top_base = QtCore.QPointF(
+                        top_point.x() + axis_x * top_round_px,
+                        top_point.y() + axis_y * top_round_px,
+                    )
+                    left_bottom = QtCore.QPointF(
+                        bottom_point.x() + normal_x * half_width_px,
+                        bottom_point.y() + normal_y * half_width_px,
+                    )
+                    right_bottom = QtCore.QPointF(
+                        bottom_point.x() - normal_x * half_width_px,
+                        bottom_point.y() - normal_y * half_width_px,
+                    )
+                    left_top = QtCore.QPointF(
+                        top_base.x() + normal_x * half_width_px,
+                        top_base.y() + normal_y * half_width_px,
+                    )
+                    right_top = QtCore.QPointF(
+                        top_base.x() - normal_x * half_width_px,
+                        top_base.y() - normal_y * half_width_px,
+                    )
+                    torso_path = QtGui.QPainterPath(left_bottom)
+                    torso_path.lineTo(left_top)
+                    torso_path.quadTo(top_point, right_top)
+                    torso_path.lineTo(right_bottom)
+                    torso_path.closeSubpath()
+                    painter.setPen(QtGui.QPen(PREVIEW_BODY_OUTLINE, 1.5))
+                    painter.setBrush(PREVIEW_BODY_FILL)
+                    painter.drawPath(torso_path)
+                    continue
+
+                _, start_point, end_point, radius_px = shape
+                outline_pen = QtGui.QPen(
+                    PREVIEW_BODY_OUTLINE,
+                    radius_px * 2.0 + 2.0,
+                    QtCore.Qt.SolidLine,
+                    QtCore.Qt.RoundCap,
+                    QtCore.Qt.RoundJoin,
+                )
+                fill_pen = QtGui.QPen(
+                    PREVIEW_BODY_FILL,
+                    radius_px * 2.0,
+                    QtCore.Qt.SolidLine,
+                    QtCore.Qt.RoundCap,
+                    QtCore.Qt.RoundJoin,
+                )
+                painter.setPen(outline_pen)
+                painter.drawLine(start_point, end_point)
+                painter.setPen(fill_pen)
+                painter.drawLine(start_point, end_point)
+
+        def _paint_labels_and_hud(self, painter: QtGui.QPainter, visible_roles: tuple[str, ...]) -> None:
+            show_role_labels = self.width() >= 220 and self.height() >= 120
+            show_fps = self.width() >= 180 and self.height() >= 72
+
+            if self._show_all_roles and show_role_labels:
+                label_font = QtGui.QFont(painter.font())
+                base_size = label_font.pointSizeF()
+                if base_size <= 0.0:
+                    base_size = float(max(10, label_font.pixelSize()))
+                label_font.setPointSizeF(max(16.0, base_size * 2.0))
+                label_font.setBold(True)
+                painter.save()
+                painter.setFont(label_font)
+                painter.setPen(QtGui.QColor("#000000"))
+                for role in visible_roles:
+                    label_point = self._projected_role_label_cache.get(role, QtCore.QPointF(self.width() * 0.5, 20.0))
+                    painter.drawText(
+                        QtCore.QRectF(label_point.x() - 28.0, label_point.y() - 16.0, 56.0, 32.0),
+                        int(QtCore.Qt.AlignCenter),
+                        role,
+                    )
+                painter.restore()
+
+            if show_fps:
+                fps_rect = QtCore.QRectF(self.width() - 120.0, 10.0, 108.0, 20.0)
+                painter.fillRect(fps_rect, QtGui.QColor(17, 21, 28, 210))
+                painter.setPen(QtGui.QColor("#d7dfeb"))
+                painter.drawText(
+                    fps_rect.adjusted(6.0, 0.0, -6.0, 0.0),
+                        int(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter),
+                        f"{self._fps_value:5.1f} FPS",
+                    )
+
+        def _paint_projected_points_cpu(self, painter: QtGui.QPainter) -> None:
+            if self._show_body and self._view_mode == "3d" and self._projected_body_shape_cache:
+                back_point_groups: dict[tuple[int, int, int, int], list[QtCore.QPointF]] = {}
+                front_point_groups: dict[tuple[int, int, int, int], list[QtCore.QPointF]] = {}
+                for role, led_index, mapped_point, depth in self._projected_led_draw_cache:
+                    color_key = self._point_color_key(role, led_index)
+                    if color_key is None:
+                        continue
+                    threshold = self._role_body_depth_cache.get(role, 0.0)
+                    target_groups = front_point_groups if depth >= threshold else back_point_groups
+                    target_groups.setdefault(color_key, []).append(mapped_point)
+                self._draw_point_groups(painter, back_point_groups)
+                self._paint_body_shapes(painter)
+                self._draw_point_groups(painter, front_point_groups)
+                return
+
+            point_groups: dict[tuple[int, int, int, int], list[QtCore.QPointF]] = {}
+            for role, led_index, mapped_point, _depth in self._projected_led_draw_cache:
+                color_key = self._point_color_key(role, led_index)
+                if color_key is None:
+                    continue
+                point_groups.setdefault(color_key, []).append(mapped_point)
+            self._draw_point_groups(painter, point_groups)
 
         def wheelEvent(self, event) -> None:  # type: ignore[override]
             delta = event.angleDelta().y()
@@ -2022,6 +2779,16 @@ if PYSIDE_AVAILABLE:
             self.reset_view()
             super().mouseDoubleClickEvent(event)
 
+        def resizeEvent(self, event) -> None:  # type: ignore[override]
+            self._projection_draw_key = None
+            self._projected_led_draw_cache = ()
+            self._projected_body_shape_cache = ()
+            self._projected_role_label_cache = {}
+            self._role_body_depth_cache = {}
+            self._mark_gl_geometry_dirty()
+            self.update()
+            super().resizeEvent(event)
+
         def _update_fps(self) -> None:
             now = time.monotonic()
             self._frame_times.append(now)
@@ -2034,8 +2801,58 @@ if PYSIDE_AVAILABLE:
                 return
             self._fps_value = (len(self._frame_times) - 1) / elapsed
 
+        def initializeGL(self) -> None:  # type: ignore[override]
+            if not self._uses_opengl():
+                return
+            self._ensure_gl_resources()
+
+        def paintGL(self) -> None:  # type: ignore[override]
+            if not self._uses_opengl():
+                return
+            paint_start_s = time.perf_counter()
+            self._update_fps()
+            visible_roles = self._visible_roles()
+            painter = QtGui.QPainter(self)
+            try:
+                current_context = QtGui.QOpenGLContext.currentContext()
+                if current_context is not None:
+                    funcs = current_context.functions()
+                    funcs.glViewport(
+                        0,
+                        0,
+                        int(self.width() * max(1.0, self.devicePixelRatioF())),
+                        int(self.height() * max(1.0, self.devicePixelRatioF())),
+                    )
+                    funcs.glClearColor(17.0 / 255.0, 21.0 / 255.0, 28.0 / 255.0, 1.0)
+                    funcs.glClear(GL_COLOR_BUFFER_BIT)
+                painter.setRenderHint(QtGui.QPainter.Antialiasing, False)
+                if not visible_roles:
+                    painter.setPen(QtGui.QColor("#d7dfeb"))
+                    painter.drawText(
+                        self.rect().adjusted(16, 16, -16, -16),
+                        int(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop),
+                        "No project loaded",
+                    )
+                    return
+
+                projection_start_s = time.perf_counter()
+                self._rebuild_projected_draw_cache(visible_roles)
+                projection_end_s = time.perf_counter()
+                self._paint_projected_points_cpu(painter)
+                self._paint_labels_and_hud(painter, visible_roles)
+            finally:
+                painter.end()
+                paint_end_s = time.perf_counter()
+                if visible_roles:
+                    self._projection_ms_ema = _ema_ms(self._projection_ms_ema, (projection_end_s - projection_start_s) * 1000.0)
+                self._paint_ms_ema = _ema_ms(self._paint_ms_ema, (paint_end_s - paint_start_s) * 1000.0)
+
         def paintEvent(self, event) -> None:  # type: ignore[override]
+            if self._uses_opengl():
+                super().paintEvent(event)
+                return
             del event
+            paint_start_s = time.perf_counter()
             self._update_fps()
             painter = QtGui.QPainter(self)
             try:
@@ -2052,123 +2869,17 @@ if PYSIDE_AVAILABLE:
                     )
                     return
 
+                projection_start_s = time.perf_counter()
                 self._rebuild_projected_draw_cache(visible_roles)
-
-                if self._show_body and self._view_mode == "3d" and self._projected_body_shape_cache:
-                    back_point_groups: dict[tuple[int, int, int, int], list[QtCore.QPointF]] = {}
-                    front_point_groups: dict[tuple[int, int, int, int], list[QtCore.QPointF]] = {}
-                    for role, led_index, mapped_point, depth in self._projected_led_draw_cache:
-                        color_key = self._point_color_key(role, led_index)
-                        if color_key is None:
-                            continue
-                        threshold = self._role_body_depth_cache.get(role, 0.0)
-                        target_groups = front_point_groups if depth >= threshold else back_point_groups
-                        target_groups.setdefault(color_key, []).append(mapped_point)
-
-                    self._draw_point_groups(painter, back_point_groups)
-                    painter.setBrush(QtCore.Qt.NoBrush)
-                    for shape in self._projected_body_shape_cache:
-                        if not shape:
-                            continue
-                        kind = shape[0]
-                        if kind == "torso":
-                            _, top_point, bottom_point, half_width_px, top_round_px = shape
-                            top_point = top_point  # type: ignore[assignment]
-                            bottom_point = bottom_point  # type: ignore[assignment]
-                            axis_dx = bottom_point.x() - top_point.x()
-                            axis_dy = bottom_point.y() - top_point.y()
-                            axis_len = math.hypot(axis_dx, axis_dy)
-                            if axis_len <= 1e-6:
-                                continue
-                            axis_x = axis_dx / axis_len
-                            axis_y = axis_dy / axis_len
-                            normal_x = -axis_y
-                            normal_y = axis_x
-                            top_base = QtCore.QPointF(
-                                top_point.x() + axis_x * top_round_px,
-                                top_point.y() + axis_y * top_round_px,
-                            )
-                            left_bottom = QtCore.QPointF(
-                                bottom_point.x() + normal_x * half_width_px,
-                                bottom_point.y() + normal_y * half_width_px,
-                            )
-                            right_bottom = QtCore.QPointF(
-                                bottom_point.x() - normal_x * half_width_px,
-                                bottom_point.y() - normal_y * half_width_px,
-                            )
-                            left_top = QtCore.QPointF(
-                                top_base.x() + normal_x * half_width_px,
-                                top_base.y() + normal_y * half_width_px,
-                            )
-                            right_top = QtCore.QPointF(
-                                top_base.x() - normal_x * half_width_px,
-                                top_base.y() - normal_y * half_width_px,
-                            )
-                            torso_path = QtGui.QPainterPath(left_bottom)
-                            torso_path.lineTo(left_top)
-                            torso_path.quadTo(top_point, right_top)
-                            torso_path.lineTo(right_bottom)
-                            torso_path.closeSubpath()
-                            painter.setPen(QtGui.QPen(PREVIEW_BODY_OUTLINE, 1.5))
-                            painter.setBrush(PREVIEW_BODY_FILL)
-                            painter.drawPath(torso_path)
-                            continue
-
-                        _, start_point, end_point, radius_px = shape
-                        outline_pen = QtGui.QPen(
-                            PREVIEW_BODY_OUTLINE,
-                            radius_px * 2.0 + 2.0,
-                            QtCore.Qt.SolidLine,
-                            QtCore.Qt.RoundCap,
-                            QtCore.Qt.RoundJoin,
-                        )
-                        fill_pen = QtGui.QPen(
-                            PREVIEW_BODY_FILL,
-                            radius_px * 2.0,
-                            QtCore.Qt.SolidLine,
-                            QtCore.Qt.RoundCap,
-                            QtCore.Qt.RoundJoin,
-                        )
-                        painter.setPen(outline_pen)
-                        painter.drawLine(start_point, end_point)
-                        painter.setPen(fill_pen)
-                        painter.drawLine(start_point, end_point)
-                    self._draw_point_groups(painter, front_point_groups)
-                else:
-                    point_groups: dict[tuple[int, int, int, int], list[QtCore.QPointF]] = {}
-                    for role, led_index, mapped_point, _ in self._projected_led_draw_cache:
-                        color_key = self._point_color_key(role, led_index)
-                        if color_key is None:
-                            continue
-                        point_groups.setdefault(color_key, []).append(mapped_point)
-                    self._draw_point_groups(painter, point_groups)
-
-                if self._show_all_roles:
-                    for role in visible_roles:
-                        label_point = self._projected_role_label_cache.get(role, QtCore.QPointF(self.width() * 0.5, 20.0))
-                        painter.setPen(QtGui.QColor(PREVIEW_ROLE_COLORS.get(role, QtGui.QColor("#d7dfeb"))))
-                        painter.drawText(
-                            QtCore.QRectF(label_point.x() - 18.0, label_point.y() - 10.0, 36.0, 20.0),
-                            int(QtCore.Qt.AlignCenter),
-                            role,
-                        )
-
-                painter.setPen(QtGui.QColor("#d7dfeb"))
-                painter.drawText(
-                    QtCore.QRectF(12.0, self.height() - 28.0, self.width() - 24.0, 20.0),
-                    int(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter),
-                    self.interaction_hint(),
-                )
-                fps_rect = QtCore.QRectF(self.width() - 120.0, 10.0, 108.0, 20.0)
-                painter.fillRect(fps_rect, QtGui.QColor(17, 21, 28, 210))
-                painter.setPen(QtGui.QColor("#d7dfeb"))
-                painter.drawText(
-                    fps_rect.adjusted(6.0, 0.0, -6.0, 0.0),
-                    int(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter),
-                    f"{self._fps_value:5.1f} FPS",
-                )
+                projection_end_s = time.perf_counter()
+                self._paint_projected_points_cpu(painter)
+                self._paint_labels_and_hud(painter, visible_roles)
             finally:
                 painter.end()
+                paint_end_s = time.perf_counter()
+                if visible_roles:
+                    self._projection_ms_ema = _ema_ms(self._projection_ms_ema, (projection_end_s - projection_start_s) * 1000.0)
+                self._paint_ms_ema = _ema_ms(self._paint_ms_ema, (paint_end_s - paint_start_s) * 1000.0)
 
 
     class ShowEditorMainWindow(QtWidgets.QMainWindow):
@@ -2188,12 +2899,15 @@ if PYSIDE_AVAILABLE:
             self.audio_waveform: AudioWaveform | None = None
             self.audio_player = None
             self.audio_output = None
+            self._media_devices = None
             self._ignore_time_slider_change = False
             self._ignore_clip_editor_changes = False
+            self._ignore_editor_splitter_sync = False
+            self._timeline_split_mode = TIMELINE_DISPLAY_FULL
             self.selected_clip = None
             self.timeline_rows = []
             self.clip_clipboard: dict | None = None
-            self.effect_presets: list[dict] = []
+            self.custom_color_swatches: list[tuple[int, int, int, int]] = []
             self._selected_clip_ids: set[int] = set()
             self._last_single_preview_role = ROLE_NAMES[0]
             self._last_audio_ui_update_s = 0.0
@@ -2216,6 +2930,14 @@ if PYSIDE_AVAILABLE:
             self._pending_history_entry: dict | None = None
             self._clip_editor_dirty = False
             self._saved_project_signature: str | None = None
+            self._perf_preview_build_ms_ema = 0.0
+            self._perf_preview_total_ms_ema = 0.0
+            self._perf_playback_tick_ms_ema = 0.0
+            self._perf_preview_dropped = 0
+            self._perf_preview_completed = 0
+            self._perf_last_request_sent_s = 0.0
+            self._audio_backend_recovering = False
+            self._ignore_picker_value_changes = False
             self._preview_refresh_timer = QtCore.QTimer(self)
             self._preview_refresh_timer.setSingleShot(True)
             self._preview_refresh_timer.setInterval(8)
@@ -2238,11 +2960,12 @@ if PYSIDE_AVAILABLE:
             self._update_view_buttons()
             self._update_transport_state()
             self._set_target_list_items("all")
-            self._refresh_preset_list()
             self._refresh_color_palette_preset_combo()
             self._update_clip_color_buttons()
+            self._refresh_custom_color_swatches()
             self._update_color_mode_ui()
             self.statusBar().showMessage("Ready")
+            QtCore.QTimer.singleShot(0, self._simplify_embedded_color_picker_ui)
 
             if self.project is not None:
                 self.set_project(self.project)
@@ -2266,6 +2989,21 @@ if PYSIDE_AVAILABLE:
             self.audio_player.playbackStateChanged.connect(self._on_audio_playback_state_changed, queued)
             if hasattr(self.audio_player, "errorOccurred"):
                 self.audio_player.errorOccurred.connect(self._on_audio_error, queued)
+            if hasattr(QtMultimedia, "QMediaDevices"):
+                try:
+                    self._media_devices = QtMultimedia.QMediaDevices(self)
+                except TypeError:
+                    try:
+                        self._media_devices = QtMultimedia.QMediaDevices()
+                    except Exception:
+                        self._media_devices = None
+                except Exception:
+                    self._media_devices = None
+                if self._media_devices is not None:
+                    if hasattr(self._media_devices, "audioOutputsChanged"):
+                        self._media_devices.audioOutputsChanged.connect(self._on_audio_outputs_changed, queued)
+                    if hasattr(self._media_devices, "defaultAudioOutputChanged"):
+                        self._media_devices.defaultAudioOutputChanged.connect(self._on_audio_default_output_changed, queued)
 
         def _setup_preview_worker(self) -> None:
             queued = (
@@ -2287,14 +3025,6 @@ if PYSIDE_AVAILABLE:
             self.effects_list.setRootIsDecorated(True)
             self.effects_list.setUniformRowHeights(True)
             self._populate_effect_tree()
-            self.new_clip_lane_combo = QtWidgets.QComboBox()
-            for role_code in CLIP_ROLE_OPTIONS:
-                self.new_clip_lane_combo.addItem("Global" if role_code == "*" else f"Suit {role_code}", role_code)
-            self.add_effect_button = QtWidgets.QPushButton("Add At Playhead")
-            self.presets_list = QtWidgets.QListWidget()
-            self.save_preset_button = QtWidgets.QPushButton("Save Selected")
-            self.add_preset_button = QtWidgets.QPushButton("Add Preset")
-            self.delete_preset_button = QtWidgets.QPushButton("Delete Preset")
             self.snap_checkbox = QtWidgets.QCheckBox("Snap")
             self.snap_checkbox.setChecked(True)
             self.snap_division_combo = QtWidgets.QComboBox()
@@ -2308,19 +3038,7 @@ if PYSIDE_AVAILABLE:
             effects_layout.setContentsMargins(8, 8, 8, 8)
             effects_layout.addWidget(QtWidgets.QLabel("Effects"))
             effects_layout.addWidget(self.effects_list, 1)
-            lane_row = QtWidgets.QHBoxLayout()
-            lane_row.addWidget(QtWidgets.QLabel("Track"))
-            lane_row.addWidget(self.new_clip_lane_combo, 1)
-            effects_layout.addLayout(lane_row)
-            effects_layout.addWidget(self.add_effect_button)
-            effects_layout.addSpacing(10)
-            effects_layout.addWidget(QtWidgets.QLabel("Presets"))
-            effects_layout.addWidget(self.presets_list, 1)
-            preset_buttons = QtWidgets.QHBoxLayout()
-            preset_buttons.addWidget(self.save_preset_button)
-            preset_buttons.addWidget(self.add_preset_button)
-            preset_buttons.addWidget(self.delete_preset_button)
-            effects_layout.addLayout(preset_buttons)
+            effects_layout.addStretch(1)
 
             self.clip_status_label = QtWidgets.QLabel("No clip selected")
             self.clip_role_combo = QtWidgets.QComboBox()
@@ -2351,10 +3069,6 @@ if PYSIDE_AVAILABLE:
             self.clip_to_g_spin = QtWidgets.QSpinBox()
             self.clip_to_b_spin = QtWidgets.QSpinBox()
             self.clip_to_a_spin = QtWidgets.QSpinBox()
-            self.clip_curve_text_edit = QtWidgets.QLineEdit()
-            self.clip_curve_text_edit.setPlaceholderText("intensity=0:0,0.2:1,1:0; width=0:0.12,1:0.28")
-            self.clip_curve_text_edit.setToolTip("Manual parameter curves over clip time. Format: key=t:v,t:v; key=t:v,t:v")
-            self.clip_curve_edit_button = QtWidgets.QPushButton("Edit...")
             self.clip_palette_text_edit = QtWidgets.QLineEdit()
             self.clip_palette_text_edit.setPlaceholderText("#ff5500; #00aaff; #ffffff")
             self.clip_palette_text_edit.setToolTip("Palette colors in order. Stops are evenly spaced automatically.")
@@ -2415,6 +3129,7 @@ if PYSIDE_AVAILABLE:
             self.clip_max_intensity_spin.setSingleStep(0.05)
             self.clip_max_intensity_spin.setDecimals(3)
             self.clip_reverse_checkbox = QtWidgets.QCheckBox("Reverse")
+            self.clip_random_cross_x_checkbox = QtWidgets.QCheckBox("Random Cross X")
             self.clip_color_mode_combo = QtWidgets.QComboBox()
             self.clip_color_mode_combo.addItem("Hold", "hold")
             self.clip_color_mode_combo.addItem("Linear", "linear")
@@ -2428,6 +3143,7 @@ if PYSIDE_AVAILABLE:
             self.clip_color_palette_preset_combo = QtWidgets.QComboBox()
             self.clip_color_palette_save_button = QtWidgets.QPushButton("Save Preset...")
             self.clip_color_palette_delete_button = QtWidgets.QPushButton("Delete Preset")
+            self.clip_color_fit_to_clip_checkbox = QtWidgets.QCheckBox("Fit To Clip")
             self.clip_color_tempo_sync_checkbox = QtWidgets.QCheckBox("Use Project BPM")
             self.clip_color_tempo_sync_checkbox.setChecked(True)
             self.clip_color_rate_spin = SliderFieldWidget()
@@ -2441,10 +3157,26 @@ if PYSIDE_AVAILABLE:
             self.clip_embedded_color_picker.setOption(QtWidgets.QColorDialog.NoButtons, True)
             self.clip_embedded_color_picker.setOption(QtWidgets.QColorDialog.ShowAlphaChannel, True)
             self.clip_embedded_color_picker.setWindowFlags(QtCore.Qt.Widget)
+            self.clip_embedded_color_picker.setMinimumWidth(0)
+            self.clip_embedded_color_picker.setMinimumHeight(220)
+            self.clip_embedded_color_picker.setMaximumHeight(280)
             self.clip_embedded_color_picker.setSizePolicy(
                 QtWidgets.QSizePolicy.Expanding,
-                QtWidgets.QSizePolicy.Preferred,
+                QtWidgets.QSizePolicy.Expanding,
             )
+            self.clip_embedded_color_picker.installEventFilter(self)
+            self.clip_picker_r_spin = QtWidgets.QSpinBox()
+            self.clip_picker_g_spin = QtWidgets.QSpinBox()
+            self.clip_picker_b_spin = QtWidgets.QSpinBox()
+            self.clip_picker_a_spin = QtWidgets.QSpinBox()
+            for spin in (
+                self.clip_picker_r_spin,
+                self.clip_picker_g_spin,
+                self.clip_picker_b_spin,
+                self.clip_picker_a_spin,
+            ):
+                spin.setRange(0, 255)
+            self.custom_color_swatch_buttons: list[QtWidgets.QPushButton] = []
             self.clip_palette_strip = PaletteStripWidget()
             self.clip_palette_position_spin = QtWidgets.QDoubleSpinBox()
             self.clip_palette_position_spin.setRange(0.0, 1.0)
@@ -2454,10 +3186,6 @@ if PYSIDE_AVAILABLE:
             self.clip_palette_position_spin.setEnabled(False)
             self.clip_palette_position_spin.setVisible(False)
             self.clip_palette_delete_stop_button = QtWidgets.QPushButton("Delete Stop")
-            self.clip_palette_hint_label = QtWidgets.QLabel(
-                "Click the palette bar to add colors, drag stops to reorder them, right-click a stop to remove."
-            )
-            self.clip_palette_hint_label.setWordWrap(True)
             self.reset_clip_params_button = QtWidgets.QPushButton("Reset Effect Defaults")
             self.delete_clip_button = QtWidgets.QPushButton("Delete")
 
@@ -2469,7 +3197,7 @@ if PYSIDE_AVAILABLE:
 
             self.clip_effect_panel = QtWidgets.QWidget()
             effect_layout = QtWidgets.QVBoxLayout(self.clip_effect_panel)
-            effect_layout.setContentsMargins(0, 0, 0, 0)
+            effect_layout.setContentsMargins(6, 6, 6, 6)
             clip_form = QtWidgets.QFormLayout()
             self.clip_form = clip_form
             clip_form.addRow("Track", self.clip_role_combo)
@@ -2485,12 +3213,6 @@ if PYSIDE_AVAILABLE:
             self.clip_to_color_widget = QtWidgets.QWidget()
             self.clip_to_color_widget.setLayout(to_color_row)
             clip_form.addRow("Effect Target", self.clip_to_color_widget)
-            curve_row = QtWidgets.QHBoxLayout()
-            curve_row.addWidget(self.clip_curve_text_edit, 1)
-            curve_row.addWidget(self.clip_curve_edit_button)
-            self.clip_curve_widget = QtWidgets.QWidget()
-            self.clip_curve_widget.setLayout(curve_row)
-            clip_form.addRow("Curves", self.clip_curve_widget)
             clip_form.addRow("Intensity", self.clip_intensity_spin)
             clip_form.addRow("Axis", self.clip_axis_combo)
             clip_form.addRow("Width", self.clip_width_spin)
@@ -2506,37 +3228,102 @@ if PYSIDE_AVAILABLE:
             clip_form.addRow("Min Intensity", self.clip_min_intensity_spin)
             clip_form.addRow("Max Intensity", self.clip_max_intensity_spin)
             clip_form.addRow("", self.clip_reverse_checkbox)
+            clip_form.addRow("", self.clip_random_cross_x_checkbox)
             effect_layout.addLayout(clip_form)
 
             self.clip_color_panel = QtWidgets.QWidget()
             color_layout = QtWidgets.QVBoxLayout(self.clip_color_panel)
-            color_layout.setContentsMargins(0, 0, 0, 0)
-            color_form = QtWidgets.QFormLayout()
-            self.clip_color_form = color_form
-            from_color_row = QtWidgets.QHBoxLayout()
-            from_color_row.addWidget(self.clip_color_from_button)
-            self.clip_color_widget = QtWidgets.QWidget()
-            self.clip_color_widget.setLayout(from_color_row)
-            color_form.addRow("From", self.clip_color_widget)
-            to_color_pick_row = QtWidgets.QHBoxLayout()
-            to_color_pick_row.addWidget(self.clip_color_to_button)
-            self.clip_color_to_widget = QtWidgets.QWidget()
-            self.clip_color_to_widget.setLayout(to_color_pick_row)
-            color_form.addRow("To", self.clip_color_to_widget)
-            color_form.addRow("Mode", self.clip_color_mode_combo)
-            color_form.addRow("", self.clip_color_tempo_sync_checkbox)
-            color_form.addRow(self.clip_color_rate_label, self.clip_color_rate_spin)
-            color_form.addRow("Palette Preset", self.clip_color_palette_preset_combo)
-            color_form.addRow("Palette", self.clip_palette_summary_label)
+            color_layout.setContentsMargins(6, 6, 6, 6)
+            color_layout.setSpacing(8)
+
+            self.clip_color_mode_label = QtWidgets.QLabel("Mode")
+            color_layout.addWidget(self.clip_color_mode_label)
+            self.clip_color_mode_combo.setSizePolicy(
+                QtWidgets.QSizePolicy.Expanding,
+                QtWidgets.QSizePolicy.Fixed,
+            )
+            color_layout.addWidget(self.clip_color_mode_combo)
+
+            self.clip_color_targets_label = QtWidgets.QLabel("Colors")
+            color_layout.addWidget(self.clip_color_targets_label)
+            color_targets_layout = QtWidgets.QVBoxLayout()
+            color_targets_layout.setContentsMargins(0, 0, 0, 0)
+            color_targets_layout.setSpacing(6)
+            color_targets_layout.addWidget(self.clip_color_from_button)
+            color_targets_layout.addWidget(self.clip_color_to_button)
+            self.clip_color_targets_widget = QtWidgets.QWidget()
+            self.clip_color_targets_widget.setLayout(color_targets_layout)
+            color_layout.addWidget(self.clip_color_targets_widget)
+
+            self.clip_color_picker_container = QtWidgets.QWidget()
+            self.clip_color_picker_container.setMaximumWidth(COLOR_TAB_SECTION_MAX_WIDTH_PX)
+            self.clip_color_picker_container.setMinimumHeight(COLOR_PICKER_BLOCK_HEIGHT_PX)
+            self.clip_color_picker_container.setMaximumHeight(COLOR_PICKER_BLOCK_HEIGHT_PX)
+            picker_container_layout = QtWidgets.QVBoxLayout(self.clip_color_picker_container)
+            picker_container_layout.setContentsMargins(0, 0, 0, 0)
+            picker_container_layout.setSpacing(0)
+            self.clip_color_picker_widget = self.clip_embedded_color_picker
+            picker_container_layout.addWidget(self.clip_color_picker_widget, 1)
+            color_layout.addWidget(self.clip_color_picker_container, 0, QtCore.Qt.AlignLeft)
+
+            self.clip_color_values_label = QtWidgets.QLabel("RGBA")
+            color_layout.addWidget(self.clip_color_values_label, 0, QtCore.Qt.AlignLeft)
+            self.clip_color_values_widget = QtWidgets.QWidget()
+            self.clip_color_values_widget.setMaximumWidth(COLOR_TAB_SECTION_MAX_WIDTH_PX)
+            picker_values_layout = QtWidgets.QGridLayout(self.clip_color_values_widget)
+            picker_values_layout.setContentsMargins(0, 0, 0, 0)
+            picker_values_layout.setHorizontalSpacing(6)
+            picker_values_layout.setVerticalSpacing(4)
+            picker_values_layout.addWidget(QtWidgets.QLabel("R"), 0, 0)
+            picker_values_layout.addWidget(self.clip_picker_r_spin, 0, 1)
+            picker_values_layout.addWidget(QtWidgets.QLabel("G"), 0, 2)
+            picker_values_layout.addWidget(self.clip_picker_g_spin, 0, 3)
+            picker_values_layout.addWidget(QtWidgets.QLabel("B"), 1, 0)
+            picker_values_layout.addWidget(self.clip_picker_b_spin, 1, 1)
+            picker_values_layout.addWidget(QtWidgets.QLabel("A"), 1, 2)
+            picker_values_layout.addWidget(self.clip_picker_a_spin, 1, 3)
+            color_layout.addWidget(self.clip_color_values_widget, 0, QtCore.Qt.AlignLeft)
+
+            self.custom_color_swatches_label = QtWidgets.QLabel("Used Colors")
+            color_layout.addWidget(self.custom_color_swatches_label, 0, QtCore.Qt.AlignLeft)
+            self.custom_color_swatch_widget = QtWidgets.QWidget()
+            self.custom_color_swatch_widget.setMaximumWidth(COLOR_SWATCH_SECTION_MAX_WIDTH_PX)
+            custom_swatch_grid = QtWidgets.QGridLayout(self.custom_color_swatch_widget)
+            custom_swatch_grid.setContentsMargins(0, 0, 0, 0)
+            custom_swatch_grid.setHorizontalSpacing(6)
+            custom_swatch_grid.setVerticalSpacing(6)
+            for index in range(USED_COLOR_SWATCH_COUNT):
+                button = QtWidgets.QPushButton()
+                button.setMinimumSize(28, 24)
+                button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+                button.clicked.connect(lambda _checked=False, idx=index: self._apply_custom_color_swatch(idx))
+                custom_swatch_grid.addWidget(button, index // COLOR_SWATCH_COLUMNS, index % COLOR_SWATCH_COLUMNS)
+                self.custom_color_swatch_buttons.append(button)
+            color_layout.addWidget(self.custom_color_swatch_widget, 0, QtCore.Qt.AlignLeft)
+
+            self.clip_color_cycle_controls_widget = QtWidgets.QWidget()
+            cycle_controls_layout = QtWidgets.QVBoxLayout(self.clip_color_cycle_controls_widget)
+            cycle_controls_layout.setContentsMargins(0, 0, 0, 0)
+            cycle_controls_layout.setSpacing(6)
+            cycle_controls_layout.addWidget(self.clip_color_fit_to_clip_checkbox)
+            cycle_controls_layout.addWidget(self.clip_color_tempo_sync_checkbox)
+            self.clip_color_rate_section_label = QtWidgets.QLabel("Cycles / Beat")
+            cycle_controls_layout.addWidget(self.clip_color_rate_section_label)
+            cycle_controls_layout.addWidget(self.clip_color_rate_spin)
+            self.clip_color_palette_preset_label = QtWidgets.QLabel("Palette Preset")
+            cycle_controls_layout.addWidget(self.clip_color_palette_preset_label)
+            cycle_controls_layout.addWidget(self.clip_color_palette_preset_combo)
+            self.clip_palette_summary_heading = QtWidgets.QLabel("Palette")
+            cycle_controls_layout.addWidget(self.clip_palette_summary_heading)
+            cycle_controls_layout.addWidget(self.clip_palette_summary_label)
             palette_button_row = QtWidgets.QHBoxLayout()
             palette_button_row.addWidget(self.clip_color_palette_save_button)
             palette_button_row.addWidget(self.clip_color_palette_delete_button)
             self.clip_palette_widget = QtWidgets.QWidget()
             self.clip_palette_widget.setLayout(palette_button_row)
-            color_form.addRow("", self.clip_palette_widget)
-            color_layout.addLayout(color_form)
-            self.clip_color_picker_widget = self.clip_embedded_color_picker
-            color_layout.addWidget(self.clip_color_picker_widget, 1)
+            cycle_controls_layout.addWidget(self.clip_palette_widget)
+            color_layout.addWidget(self.clip_color_cycle_controls_widget)
+
             self.clip_palette_editor_widget = QtWidgets.QWidget()
             palette_editor_layout = QtWidgets.QVBoxLayout(self.clip_palette_editor_widget)
             palette_editor_layout.setContentsMargins(0, 0, 0, 0)
@@ -2547,8 +3334,8 @@ if PYSIDE_AVAILABLE:
             palette_control_row.addWidget(self.clip_palette_delete_stop_button)
             palette_control_row.addStretch(1)
             palette_editor_layout.addLayout(palette_control_row)
-            palette_editor_layout.addWidget(self.clip_palette_hint_label)
             color_layout.addWidget(self.clip_palette_editor_widget)
+            color_layout.addStretch(1)
 
             self.clip_tabs.addTab(self.clip_effect_panel, "Effect")
             self.clip_tabs.addTab(self.clip_color_panel, "Color")
@@ -2560,8 +3347,20 @@ if PYSIDE_AVAILABLE:
             clip_layout.addStretch(1)
 
             self.sidebar_tabs = QtWidgets.QTabWidget()
-            self.sidebar_tabs.addTab(effects_panel, "Effects")
-            self.sidebar_tabs.addTab(self.clip_panel, "Inspector")
+            self.sidebar_tabs.setSizePolicy(
+                QtWidgets.QSizePolicy.Preferred,
+                QtWidgets.QSizePolicy.Expanding,
+            )
+            effects_scroll = QtWidgets.QScrollArea()
+            effects_scroll.setWidgetResizable(True)
+            effects_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+            effects_scroll.setWidget(effects_panel)
+            inspector_scroll = QtWidgets.QScrollArea()
+            inspector_scroll.setWidgetResizable(True)
+            inspector_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+            inspector_scroll.setWidget(self.clip_panel)
+            self.sidebar_tabs.addTab(effects_scroll, "Effects")
+            self.sidebar_tabs.addTab(inspector_scroll, "Inspector")
 
             self.timeline_view = ShowTimelineWidget()
             self.preview_view = PreviewViewportWidget()
@@ -2583,6 +3382,8 @@ if PYSIDE_AVAILABLE:
             self.time_slider.setRange(0, 0)
 
             self.time_label = QtWidgets.QLabel("0.000 s")
+            self.time_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            self.time_label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Preferred)
             self.timeline_zoom_out_button = QtWidgets.QPushButton("-")
             self.timeline_zoom_out_button.setFixedWidth(28)
             self.timeline_zoom_in_button = QtWidgets.QPushButton("+")
@@ -2599,6 +3400,7 @@ if PYSIDE_AVAILABLE:
             self.restart_button = self._make_tool_button(QtWidgets.QStyle.SP_MediaSkipBackward, "Restart", self._restart_audio)
 
             transport_bar = QtWidgets.QWidget()
+            transport_bar.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
             transport_layout = QtWidgets.QHBoxLayout(transport_bar)
             transport_layout.setContentsMargins(0, 0, 0, 0)
             transport_layout.setSpacing(6)
@@ -2627,6 +3429,7 @@ if PYSIDE_AVAILABLE:
             transport_layout.addWidget(self.audio_label)
 
             scrub_bar = QtWidgets.QWidget()
+            scrub_bar.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
             scrub_layout = QtWidgets.QHBoxLayout(scrub_bar)
             scrub_layout.setContentsMargins(0, 0, 0, 0)
             scrub_layout.setSpacing(8)
@@ -2638,32 +3441,56 @@ if PYSIDE_AVAILABLE:
             scrub_layout.addWidget(self.timeline_zoom_out_button)
             scrub_layout.addWidget(self.timeline_zoom_in_button)
             scrub_layout.addWidget(self.timeline_zoom_fit_button)
+            row_min_height = max(
+                32,
+                self.time_label.sizeHint().height() + 8,
+                self.timeline_zoom_fit_button.sizeHint().height() + 4,
+            )
+            transport_bar.setMinimumHeight(row_min_height)
+            scrub_bar.setMinimumHeight(row_min_height)
 
             preview_panel = QtWidgets.QWidget()
+            preview_panel.setMinimumHeight(0)
             preview_layout = QtWidgets.QVBoxLayout(preview_panel)
             preview_layout.setContentsMargins(0, 0, 0, 0)
             preview_layout.addWidget(self.preview_view)
 
             timeline_panel = QtWidgets.QWidget()
+            timeline_panel.setMinimumHeight(0)
             timeline_layout = QtWidgets.QVBoxLayout(timeline_panel)
             timeline_layout.setContentsMargins(0, 0, 0, 0)
             timeline_layout.setSpacing(6)
             timeline_layout.addWidget(self.timeline_view, 1)
             timeline_layout.addWidget(self.timeline_scrollbar)
+            timeline_panel.setMaximumHeight(
+                self._timeline_split_target_bottom(
+                    TIMELINE_DISPLAY_FULL,
+                    lane_height=TIMELINE_FULL_ROLE_MAX_HEIGHT_PX,
+                )
+            )
 
             editor_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+            editor_splitter.setChildrenCollapsible(True)
             editor_splitter.addWidget(preview_panel)
             editor_splitter.addWidget(timeline_panel)
+            editor_splitter.setCollapsible(0, True)
+            editor_splitter.setCollapsible(1, True)
             editor_splitter.setStretchFactor(0, 2)
             editor_splitter.setStretchFactor(1, 1)
-            editor_splitter.setSizes([580, 300])
+            editor_splitter.setSizes([500, 420])
+            self.scrub_bar = scrub_bar
+            self.preview_panel = preview_panel
+            self.timeline_panel = timeline_panel
+            self.editor_splitter = editor_splitter
+            self.editor_splitter.splitterMoved.connect(self._on_editor_splitter_moved)
 
             main_splitter = QtWidgets.QSplitter()
             main_splitter.addWidget(self.sidebar_tabs)
             main_splitter.addWidget(editor_splitter)
             main_splitter.setStretchFactor(0, 0)
             main_splitter.setStretchFactor(1, 1)
-            main_splitter.setSizes([320, 1100])
+            self.sidebar_tabs.setMinimumWidth(236)
+            main_splitter.setSizes([272, 1148])
 
             central = QtWidgets.QWidget()
             root_layout = QtWidgets.QVBoxLayout(central)
@@ -2673,6 +3500,7 @@ if PYSIDE_AVAILABLE:
             root_layout.addWidget(scrub_bar)
             root_layout.addWidget(main_splitter, 1)
             self.setCentralWidget(central)
+            QtCore.QTimer.singleShot(0, self._sync_timeline_split_mode)
 
         def _wire_controls(self) -> None:
             self.time_slider.valueChanged.connect(self._on_time_slider_changed)
@@ -2702,11 +3530,6 @@ if PYSIDE_AVAILABLE:
             self.timeline_view.clip_span_create_callback = self._create_clip_span_from_timeline
             self.timeline_view.clip_edit_started_callback = self._begin_clip_drag_edit
             self.effects_list.itemDoubleClicked.connect(self._add_selected_effect)
-            self.add_effect_button.clicked.connect(self._add_selected_effect)
-            self.presets_list.itemDoubleClicked.connect(self._add_selected_preset)
-            self.save_preset_button.clicked.connect(self._save_selected_preset)
-            self.add_preset_button.clicked.connect(self._add_selected_preset)
-            self.delete_preset_button.clicked.connect(self._delete_selected_preset)
             self.reset_clip_params_button.clicked.connect(self._reset_clip_params)
             self.delete_clip_button.clicked.connect(self._delete_selected_clip)
             self.clip_role_combo.currentIndexChanged.connect(self._on_clip_combo_changed)
@@ -2716,10 +3539,9 @@ if PYSIDE_AVAILABLE:
             self.clip_axis_combo.currentIndexChanged.connect(self._on_clip_combo_changed)
             self.clip_tempo_sync_checkbox.toggled.connect(self._on_tempo_sync_toggled)
             self.clip_reverse_checkbox.toggled.connect(self._on_clip_toggle_changed)
-            self.clip_curve_text_edit.editingFinished.connect(self._mark_clip_dirty)
-            self.clip_curve_text_edit.editingFinished.connect(self._apply_clip_editor_if_dirty)
-            self.clip_curve_edit_button.clicked.connect(self._open_curve_editor)
+            self.clip_random_cross_x_checkbox.toggled.connect(self._on_clip_toggle_changed)
             self.clip_color_mode_combo.currentIndexChanged.connect(self._on_color_mode_changed)
+            self.clip_color_fit_to_clip_checkbox.toggled.connect(self._on_color_fit_to_clip_toggled)
             self.clip_color_tempo_sync_checkbox.toggled.connect(self._on_color_tempo_sync_toggled)
             self.clip_color_palette_preset_combo.currentIndexChanged.connect(self._on_color_palette_preset_changed)
             self.clip_color_palette_save_button.clicked.connect(self._save_color_palette_preset)
@@ -2728,6 +3550,13 @@ if PYSIDE_AVAILABLE:
             self.clip_color_to_button.clicked.connect(lambda: self._set_clip_color_picker_target("to"))
             self.clip_effect_to_color_button.clicked.connect(lambda: self._choose_clip_color("effect_to"))
             self.clip_embedded_color_picker.currentColorChanged.connect(self._on_embedded_color_picker_changed)
+            for spin in (
+                self.clip_picker_r_spin,
+                self.clip_picker_g_spin,
+                self.clip_picker_b_spin,
+                self.clip_picker_a_spin,
+            ):
+                spin.valueChanged.connect(self._on_picker_value_spin_changed)
             self.clip_palette_strip.stops_changed.connect(self._on_palette_strip_changed)
             self.clip_palette_strip.selection_changed.connect(self._on_palette_stop_selection_changed)
             self.clip_palette_position_spin.valueChanged.connect(self._on_palette_stop_position_changed)
@@ -2752,6 +3581,17 @@ if PYSIDE_AVAILABLE:
             self._set_clip_editor_enabled(False)
 
         def eventFilter(self, watched, event) -> bool:
+            if watched is getattr(self, "clip_embedded_color_picker", None):
+                event_type = event.type()
+                if event_type in {
+                    QtCore.QEvent.Show,
+                    QtCore.QEvent.Resize,
+                    QtCore.QEvent.LayoutRequest,
+                    QtCore.QEvent.Paint,
+                    QtCore.QEvent.ChildAdded,
+                    QtCore.QEvent.ChildPolished,
+                }:
+                    QtCore.QTimer.singleShot(0, self._simplify_embedded_color_picker_ui)
             return super().eventFilter(watched, event)
 
         def _make_tool_button(self, icon_enum, tooltip: str, callback) -> QtWidgets.QPushButton:
@@ -2901,8 +3741,21 @@ if PYSIDE_AVAILABLE:
             if self.project is not None:
                 duration_ms = max(duration_ms, self.project.duration_ms)
             if self.audio_player is not None:
-                duration_ms = max(duration_ms, self.audio_player.duration())
+                duration_ms = max(duration_ms, self._safe_audio_duration())
             return max(0, duration_ms)
+
+        def _format_time_label_text(self, time_ms: int) -> str:
+            return f"{max(0, int(time_ms)) / 1000.0:.3f} s"
+
+        def _update_time_label_width(self) -> None:
+            max_time_ms = max(int(self.time_slider.maximum()), int(self.time_slider.value()), 0)
+            metrics = self.time_label.fontMetrics()
+            sample_text = self._format_time_label_text(max_time_ms)
+            width = max(
+                metrics.horizontalAdvance("0.000 s"),
+                metrics.horizontalAdvance(sample_text),
+            ) + 10
+            self.time_label.setFixedWidth(width)
 
         def _has_audio_source(self) -> bool:
             if self.audio_player is None or self.project is None:
@@ -2914,6 +3767,7 @@ if PYSIDE_AVAILABLE:
             current_value = self.time_slider.value()
             max_time = self._timeline_max_ms()
             self.time_slider.setRange(0, max(0, max_time))
+            self._update_time_label_width()
             if current_value > self.time_slider.maximum():
                 self._set_timeline_position(self.time_slider.maximum(), sync_player=False)
 
@@ -2939,10 +3793,7 @@ if PYSIDE_AVAILABLE:
 
         def _update_transport_state(self) -> None:
             has_audio = self._has_audio_source()
-            if self.audio_player is not None and QtMultimedia is not None:
-                playing = self.audio_player.playbackState() == QtMultimedia.QMediaPlayer.PlayingState
-            else:
-                playing = False
+            playing = self._audio_is_playing()
             self.play_button.setEnabled(has_audio and not playing)
             self.pause_button.setEnabled(has_audio and playing)
             self.stop_button.setEnabled(has_audio or self.time_slider.value() > 0)
@@ -2951,7 +3802,7 @@ if PYSIDE_AVAILABLE:
         def _audio_is_playing(self) -> bool:
             if self.audio_player is None or QtMultimedia is None:
                 return False
-            return self.audio_player.playbackState() == QtMultimedia.QMediaPlayer.PlayingState
+            return self._safe_audio_playback_state() == QtMultimedia.QMediaPlayer.PlayingState
 
         def _preview_selection(self) -> str:
             selection = self.preview_combo.currentText().strip()
@@ -2970,9 +3821,9 @@ if PYSIDE_AVAILABLE:
                 location = self._find_clip_location(self.selected_clip)
                 if location is not None and location[0] in ROLE_NAMES:
                     return location[0]
-            lane_role = self.new_clip_lane_combo.currentData()
-            if lane_role in ROLE_NAMES:
-                return str(lane_role)
+            insert_target = self.timeline_view.current_insert_target() if hasattr(self, "timeline_view") else None
+            if insert_target is not None and insert_target[0] in ROLE_NAMES:
+                return str(insert_target[0])
             return self._last_single_preview_role
 
         def _timeline_focus_role(self) -> str:
@@ -2992,7 +3843,7 @@ if PYSIDE_AVAILABLE:
                 snap_divisor=max(1, int(self.snap_division_combo.currentData() or 1)),
                 layout_kind=self._layout_source_kind,
                 layout_path=str(self._layout_source_path) if self._layout_source_path is not None else "",
-                presets=tuple(dict(entry) for entry in self.effect_presets),
+                custom_colors=(),
             )
 
         def _schedule_session_save(self) -> None:
@@ -3110,8 +3961,7 @@ if PYSIDE_AVAILABLE:
 
             self._set_preview_mode("3d" if session.view_mode == "3d" else "2d")
             self.preview_view.set_show_body(bool(session.show_body))
-            self.effect_presets = [dict(entry) for entry in getattr(session, "presets", ())]
-            self._refresh_preset_list()
+            self._refresh_custom_color_swatches()
             self._set_timeline_position(int(session.current_time_ms), sync_player=False)
             self._refresh_timeline()
             self._schedule_session_save()
@@ -3126,8 +3976,6 @@ if PYSIDE_AVAILABLE:
                 self.clip_start_spin,
                 self.clip_end_spin,
                 self.clip_layer_spin,
-                self.clip_curve_text_edit,
-                self.clip_curve_edit_button,
                 self.clip_intensity_spin,
                 self.clip_axis_combo,
                 self.clip_width_spin,
@@ -3140,16 +3988,19 @@ if PYSIDE_AVAILABLE:
                 self.clip_min_intensity_spin,
                 self.clip_max_intensity_spin,
                 self.clip_reverse_checkbox,
+                self.clip_random_cross_x_checkbox,
                 self.clip_color_mode_combo,
                 self.clip_color_from_button,
                 self.clip_color_to_button,
                 self.clip_effect_to_color_button,
+                self.clip_color_fit_to_clip_checkbox,
                 self.clip_color_tempo_sync_checkbox,
                 self.clip_color_rate_spin,
                 self.clip_color_palette_preset_combo,
                 self.clip_color_palette_save_button,
                 self.clip_color_palette_delete_button,
-                self.clip_color_picker_widget,
+                self.clip_color_picker_container,
+                self.clip_color_values_widget,
                 self.clip_palette_editor_widget,
                 self.clip_palette_strip,
                 self.clip_palette_position_spin,
@@ -3176,7 +4027,6 @@ if PYSIDE_AVAILABLE:
         def _apply_effect_row_visibility(self, effect_name: str) -> None:
             effect_id = EFFECT_NAME_TO_SPEC.get(effect_name, EFFECT_LIBRARY[0])[1]
             self._set_clip_form_row_visible(self.clip_intensity_spin, True)
-            self._set_clip_form_row_visible(self.clip_curve_widget, True)
             self._set_clip_form_row_visible(self.clip_to_color_widget, effect_id in EFFECT_FIELDS_TO_COLOR)
             self._set_clip_form_row_visible(self.clip_axis_combo, effect_id in EFFECT_FIELDS_AXIS)
             self._set_clip_form_row_visible(self.clip_width_spin, effect_id in EFFECT_FIELDS_WIDTH)
@@ -3191,6 +4041,7 @@ if PYSIDE_AVAILABLE:
             self._set_clip_form_row_visible(self.clip_min_intensity_spin, show_min_max)
             self._set_clip_form_row_visible(self.clip_max_intensity_spin, show_min_max)
             self._set_clip_form_row_visible(self.clip_reverse_checkbox, effect_id in EFFECT_FIELDS_REVERSE)
+            self._set_clip_form_row_visible(self.clip_random_cross_x_checkbox, effect_id in EFFECT_FIELDS_RANDOM_CROSS_X)
             self._update_color_mode_ui()
 
         def _set_clip_editor_dirty(self, dirty: bool) -> None:
@@ -3216,6 +4067,12 @@ if PYSIDE_AVAILABLE:
             if not self._clip_editor_dirty:
                 return
             self._apply_clip_changes()
+
+        def _apply_color_change_immediately(self) -> None:
+            if self._ignore_clip_editor_changes or self.selected_clip is None:
+                return
+            self._mark_clip_dirty()
+            self._apply_clip_changes(quiet=True)
 
         def _on_clip_combo_changed(self, *args) -> None:
             del args
@@ -3311,110 +4168,6 @@ if PYSIDE_AVAILABLE:
             del item
             self._mark_clip_dirty()
             self._apply_clip_editor_if_dirty()
-
-        def _refresh_preset_list(self) -> None:
-            self.presets_list.clear()
-            for entry in self.effect_presets:
-                name = str(entry.get("name", "Preset")).strip() or "Preset"
-                clip_obj = entry.get("clip")
-                effect_name = ""
-                if isinstance(clip_obj, dict):
-                    effect_name = EFFECT_ID_TO_NAME.get(str(clip_obj.get("effect", "")), str(clip_obj.get("effect", "")))
-                item = QtWidgets.QListWidgetItem(name if not effect_name else f"{name} [{effect_name}]")
-                item.setData(QtCore.Qt.UserRole, entry)
-                self.presets_list.addItem(item)
-
-        def _save_selected_preset(self) -> None:
-            if self.selected_clip is None:
-                self.statusBar().showMessage("No clip selected")
-                return
-            if not self._flush_pending_clip_apply():
-                return
-            default_name = EFFECT_ID_TO_NAME.get(self.selected_clip.effect, self.selected_clip.effect.title())
-            name, accepted = QtWidgets.QInputDialog.getText(
-                self,
-                "Save Preset",
-                "Preset name",
-                text=default_name,
-            )
-            if not accepted:
-                return
-            preset_name = name.strip() or default_name
-            preset_entry = {
-                "name": preset_name,
-                "clip": {
-                    "start_ms": 0,
-                    "end_ms": max(1, self.selected_clip.end_ms - self.selected_clip.start_ms),
-                    "layer": int(self.selected_clip.layer),
-                    "effect": str(self.selected_clip.effect),
-                    "blend": str(self.selected_clip.blend),
-                    "target_kind": str(self.selected_clip.target_kind),
-                    "target": str(self.selected_clip.target),
-                    "palette": self.selected_clip.palette,
-                    "params": json.loads(json.dumps(self.selected_clip.params)),
-                },
-            }
-            self.effect_presets.append(preset_entry)
-            self._refresh_preset_list()
-            self._schedule_session_save()
-            self.statusBar().showMessage(f"Saved preset {preset_name}")
-
-        def _selected_preset_entry(self) -> dict | None:
-            item = self.presets_list.currentItem()
-            if item is None:
-                return None
-            entry = item.data(QtCore.Qt.UserRole)
-            if isinstance(entry, dict):
-                return dict(entry)
-            return None
-
-        def _add_selected_preset(self, *args) -> None:
-            del args
-            if self.project is None:
-                self.statusBar().showMessage("No project loaded")
-                return
-            entry = self._selected_preset_entry()
-            if entry is None:
-                self.statusBar().showMessage("No preset selected")
-                return
-            clip_obj = entry.get("clip")
-            if not isinstance(clip_obj, dict):
-                self.statusBar().showMessage("Preset is invalid")
-                return
-            if not self._flush_pending_clip_apply():
-                return
-            self._record_undo_state("Add preset clip")
-            lane_role = str(self.new_clip_lane_combo.currentData() or "*")
-            duration = max(1, int(clip_obj.get("end_ms", 1000)) - int(clip_obj.get("start_ms", 0)))
-            start_ms = self._snap_time_ms(self.time_slider.value())
-            new_clip = ShowClip(
-                start_ms=start_ms,
-                end_ms=start_ms + duration,
-                layer=int(clip_obj.get("layer", 0)),
-                effect=str(clip_obj.get("effect", "solid")),
-                blend=str(clip_obj.get("blend", "max")),
-                target_kind=str(clip_obj.get("target_kind", "all")),
-                target=str(clip_obj.get("target", "all")),
-                palette=clip_obj.get("palette"),
-                params=json.loads(json.dumps(dict(clip_obj.get("params", {})))),
-            )
-            self._insert_clip(lane_role, new_clip)
-            self._populate_timeline_table()
-            self._select_clip(new_clip)
-            self._set_timeline_position(new_clip.end_ms, sync_player=False)
-            self._refresh_preview()
-            self._schedule_session_save()
-            self.statusBar().showMessage(f"Added preset {entry.get('name', 'Preset')}")
-
-        def _delete_selected_preset(self) -> None:
-            row = self.presets_list.currentRow()
-            if row < 0 or row >= len(self.effect_presets):
-                return
-            deleted_name = str(self.effect_presets[row].get("name", "Preset"))
-            del self.effect_presets[row]
-            self._refresh_preset_list()
-            self._schedule_session_save()
-            self.statusBar().showMessage(f"Deleted preset {deleted_name}")
 
         def _find_clip_location(self, clip):
             if self.project is None or clip is None:
@@ -3662,43 +4415,6 @@ if PYSIDE_AVAILABLE:
                 return effect_name
             return EFFECT_NAMES[0]
 
-        def _curve_parameter_specs_for_effect(self, effect_name: str) -> list[CurveParameterSpec]:
-            effect_id = EFFECT_NAME_TO_SPEC.get(effect_name, EFFECT_LIBRARY[0])[1]
-            specs = [CurveParameterSpec("intensity", "Intensity", 0.0, 4.0)]
-            if effect_id in EFFECT_FIELDS_WIDTH:
-                specs.append(CurveParameterSpec("width", "Width", 0.01, 2.0))
-            if effect_id in EFFECT_FIELDS_SOFTNESS:
-                specs.append(CurveParameterSpec("softness", "Softness", 0.0, 2.0))
-            if effect_id in EFFECT_FIELDS_RATE:
-                rate_label = "Cycles / Beat" if self.clip_tempo_sync_checkbox.isChecked() else "Frequency"
-                specs.append(CurveParameterSpec("frequency_hz", rate_label, 0.0, 40.0))
-            if effect_id in EFFECT_FIELDS_PHASE:
-                specs.append(CurveParameterSpec("phase", "Phase", 0.0, 1.0))
-            if effect_id in EFFECT_FIELDS_REPEATS:
-                specs.append(CurveParameterSpec("repeats", "Repeats", 1.0, 64.0))
-            if effect_id in EFFECT_FIELDS_DUTY:
-                specs.append(CurveParameterSpec("duty_cycle", "Duty Cycle", 0.0, 1.0))
-            if effect_id in EFFECT_FIELDS_MIN_MAX:
-                specs.append(CurveParameterSpec("min_intensity", "Min Intensity", 0.0, 4.0))
-                specs.append(CurveParameterSpec("max_intensity", "Max Intensity", 0.0, 4.0))
-            return specs
-
-        def _open_curve_editor(self) -> None:
-            if self.selected_clip is None:
-                self.statusBar().showMessage("No clip selected")
-                return
-            effect_name = EFFECT_ID_TO_NAME.get(self.selected_clip.effect, self.selected_clip.effect.title())
-            dialog = CurveEditorDialog(
-                self.clip_curve_text_edit.text(),
-                self._curve_parameter_specs_for_effect(effect_name),
-                self,
-            )
-            if dialog.exec() != QtWidgets.QDialog.Accepted:
-                return
-            self.clip_curve_text_edit.setText(dialog.result_text())
-            self._mark_clip_dirty()
-            self._apply_clip_editor_if_dirty()
-
         def _normalized_rgba(self, rgba) -> tuple[int, int, int, int]:
             if not isinstance(rgba, (list, tuple)) or len(rgba) != 4:
                 return (255, 255, 255, 255)
@@ -3726,6 +4442,17 @@ if PYSIDE_AVAILABLE:
                 return hex_text
             return f"{hex_text} / {rgba[3]}"
 
+        def _swatch_button_style(self, rgba: tuple[int, int, int, int]) -> str:
+            border = "#394658"
+            return (
+                "QPushButton {"
+                f"background-color: rgba({rgba[0]}, {rgba[1]}, {rgba[2]}, {rgba[3]});"
+                f"border: 1px solid {border};"
+                "border-radius: 4px;"
+                "padding: 0px;"
+                "}"
+            )
+
         def _set_hidden_rgba_spins(self, spins, rgba: tuple[int, int, int, int]) -> None:
             color = self._normalized_rgba(rgba)
             for spin, value in zip(spins, color):
@@ -3744,6 +4471,134 @@ if PYSIDE_AVAILABLE:
             button.setProperty("rgba", color)
             button.setStyleSheet(self._color_button_style(color, selected=selected))
             button.setText(self._format_rgba_label(color))
+
+        def _project_used_colors(self) -> list[tuple[int, int, int, int]]:
+            if self.project is None:
+                return []
+            color_counts: dict[tuple[int, int, int, int], int] = {}
+            first_seen_index: dict[tuple[int, int, int, int], int] = {}
+            next_seen_index = 0
+
+            def add_color(value) -> None:
+                nonlocal next_seen_index
+                if not isinstance(value, (list, tuple)) or len(value) < 4:
+                    return
+                color = self._normalized_rgba(value[:4])
+                color_counts[color] = color_counts.get(color, 0) + 1
+                if color not in first_seen_index:
+                    first_seen_index[color] = next_seen_index
+                    next_seen_index += 1
+
+            clip_collections = [self.project.global_clips]
+            for role_name in ROLE_NAMES:
+                clip_collections.append(self.project.role_clips.get(role_name, []))
+
+            for clip_list in clip_collections:
+                for clip in clip_list:
+                    params = clip.params if isinstance(clip.params, dict) else {}
+                    for key in ("color_from", "color", "color_to", "to_color"):
+                        add_color(params.get(key))
+                    palette_text = resolve_palette_text(
+                        self.project.palettes,
+                        str(params.get("color_palette_preset", "")),
+                        str(params.get("palette_text", "")),
+                    )
+                    for _point_t, rgba in parse_palette_text(palette_text):
+                        add_color(rgba)
+            return [
+                color
+                for color, _count in sorted(
+                    color_counts.items(),
+                    key=lambda item: (-item[1], first_seen_index.get(item[0], 0)),
+                )
+            ]
+
+        def _refresh_custom_color_swatches(self) -> None:
+            self.custom_color_swatches = self._project_used_colors()[:len(self.custom_color_swatch_buttons)]
+            for index, button in enumerate(self.custom_color_swatch_buttons):
+                if index < len(self.custom_color_swatches):
+                    color = self.custom_color_swatches[index]
+                    button.setProperty("rgba", color)
+                    button.setStyleSheet(self._swatch_button_style(color))
+                    button.setText("")
+                    button.setMinimumWidth(0)
+                    button.setToolTip(f"{self._format_rgba_label(color)}\nClick to apply.")
+                    button.setVisible(True)
+                    button.setEnabled(True)
+                else:
+                    button.hide()
+                    button.setEnabled(False)
+
+        def _refresh_basic_color_swatches(self) -> None:
+            for index, button in enumerate(self.basic_color_swatch_buttons):
+                color = self._normalized_rgba(DEFAULT_BASIC_COLOR_SWATCHES[index])
+                button.setProperty("rgba", color)
+                button.setStyleSheet(self._swatch_button_style(color))
+                button.setText("")
+                button.setMinimumWidth(0)
+                button.setToolTip(f"{self._format_rgba_label(color)}\nClick to apply.")
+
+        def _simplify_embedded_color_picker_ui(self) -> None:
+            picker = getattr(self, "clip_embedded_color_picker", None)
+            if picker is None:
+                return
+            keep_widgets: set[QtWidgets.QWidget] = {picker}
+            for child in picker.findChildren(QtWidgets.QWidget):
+                class_name = child.metaObject().className().lower()
+                if "picker" in class_name or "luminance" in class_name:
+                    current = child
+                    while current is not None and current not in keep_widgets:
+                        keep_widgets.add(current)
+                        current = current.parentWidget()
+            def _tighten_layout(widget: QtWidgets.QWidget) -> None:
+                layout = widget.layout()
+                if layout is not None:
+                    layout.setContentsMargins(0, 0, 0, 0)
+                    layout.setSpacing(0)
+            for child in picker.findChildren(QtWidgets.QWidget):
+                if child in keep_widgets:
+                    child.show()
+                    child.setMaximumSize(16777215, 16777215)
+                    _tighten_layout(child)
+                    continue
+                child.hide()
+                child.setMinimumSize(0, 0)
+                child.setMaximumSize(0, 0)
+            picker.updateGeometry()
+
+        def _sync_picker_value_spins(self, rgba) -> None:
+            color = self._normalized_rgba(rgba)
+            self._ignore_picker_value_changes = True
+            try:
+                self.clip_picker_r_spin.setValue(color[0])
+                self.clip_picker_g_spin.setValue(color[1])
+                self.clip_picker_b_spin.setValue(color[2])
+                self.clip_picker_a_spin.setValue(color[3])
+            finally:
+                self._ignore_picker_value_changes = False
+
+        def _apply_color_swatch_rgba(self, rgba) -> None:
+            color = self._normalized_rgba(rgba)
+            if self.selected_clip is None:
+                self.clip_embedded_color_picker.setCurrentColor(QtGui.QColor(*color))
+                self._sync_picker_value_spins(color)
+                return
+            if self._color_mode_value() == "cycle":
+                self.clip_palette_strip.set_selected_stop_color(color)
+            elif self.clip_color_picker_target == "to":
+                self._set_clip_color_to_rgba(color)
+                self._update_clip_color_buttons()
+                self._apply_color_change_immediately()
+            else:
+                self._set_clip_color_from_rgba(color)
+                self._update_clip_color_buttons()
+                self._apply_color_change_immediately()
+            self._sync_embedded_color_picker_from_selection()
+
+        def _apply_custom_color_swatch(self, index: int) -> None:
+            if not (0 <= index < len(self.custom_color_swatches)):
+                return
+            self._apply_color_swatch_rgba(self.custom_color_swatches[index])
 
         def _clip_color_from_rgba(self) -> tuple[int, int, int, int]:
             return self._button_rgba(
@@ -3824,8 +4679,11 @@ if PYSIDE_AVAILABLE:
             previous = self.clip_embedded_color_picker.blockSignals(True)
             self.clip_embedded_color_picker.setCurrentColor(color)
             self.clip_embedded_color_picker.blockSignals(previous)
+            self._sync_picker_value_spins(target_rgba)
 
         def _on_embedded_color_picker_changed(self, color: QtGui.QColor) -> None:
+            if color.isValid():
+                self._sync_picker_value_spins((color.red(), color.green(), color.blue(), color.alpha()))
             if self._ignore_clip_editor_changes or self.selected_clip is None or not color.isValid():
                 return
             rgba = (color.red(), color.green(), color.blue(), color.alpha())
@@ -3837,8 +4695,32 @@ if PYSIDE_AVAILABLE:
             else:
                 self._set_clip_color_from_rgba(rgba)
             self._update_clip_color_buttons()
-            self._mark_clip_dirty()
-            self._apply_clip_editor_if_dirty()
+            self._apply_color_change_immediately()
+
+        def _on_picker_value_spin_changed(self, *args) -> None:
+            del args
+            if self._ignore_picker_value_changes or self._ignore_clip_editor_changes:
+                return
+            rgba = (
+                int(self.clip_picker_r_spin.value()),
+                int(self.clip_picker_g_spin.value()),
+                int(self.clip_picker_b_spin.value()),
+                int(self.clip_picker_a_spin.value()),
+            )
+            previous = self.clip_embedded_color_picker.blockSignals(True)
+            self.clip_embedded_color_picker.setCurrentColor(QtGui.QColor(*rgba))
+            self.clip_embedded_color_picker.blockSignals(previous)
+            if self.selected_clip is None:
+                return
+            if self._color_mode_value() == "cycle":
+                self.clip_palette_strip.set_selected_stop_color(rgba)
+                return
+            if self.clip_color_picker_target == "to":
+                self._set_clip_color_to_rgba(rgba)
+            else:
+                self._set_clip_color_from_rgba(rgba)
+            self._update_clip_color_buttons()
+            self._apply_color_change_immediately()
 
         def _selected_palette_stop_rgba(self) -> tuple[int, int, int, int]:
             stops = self.clip_palette_strip.stops()
@@ -3878,8 +4760,7 @@ if PYSIDE_AVAILABLE:
             self._refresh_color_palette_preset_combo("__custom__")
             self._sync_palette_controls_from_selection()
             self._update_color_palette_summary()
-            self._mark_clip_dirty()
-            self._apply_clip_editor_if_dirty()
+            self._apply_color_change_immediately()
 
         def _on_palette_stop_selection_changed(self, index: int) -> None:
             del index
@@ -3929,8 +4810,7 @@ if PYSIDE_AVAILABLE:
                 if rgba is None:
                     return
                 self._set_clip_effect_target_rgba(rgba)
-            self._mark_clip_dirty()
-            self._apply_clip_editor_if_dirty()
+            self._apply_color_change_immediately()
 
         def _selected_color_palette_preset_name(self) -> str:
             data = self.clip_color_palette_preset_combo.currentData()
@@ -3995,13 +4875,31 @@ if PYSIDE_AVAILABLE:
             self.clip_color_palette_save_button.setEnabled(self.selected_clip is not None and bool(resolved_text))
 
         def _update_color_tempo_sync_ui(self) -> None:
-            tempo_sync = self.selected_clip is not None and self.clip_color_tempo_sync_checkbox.isChecked()
-            self.clip_color_rate_label.setText("Cycles / Beat" if tempo_sync else "Frequency Hz")
-            self.clip_color_rate_spin.setToolTip(
-                "Color cycles per beat when BPM sync is enabled."
-                if tempo_sync else
-                "Color cycles per second."
-            )
+            fit_to_clip = self.clip_color_fit_to_clip_checkbox.isChecked()
+            tempo_sync = self.clip_color_tempo_sync_checkbox.isChecked()
+            if fit_to_clip:
+                rate_label = "Cycles / Clip"
+                tooltip = "How many full palette cycles should fit across this clip."
+            elif tempo_sync:
+                rate_label = "Cycles / Beat"
+                tooltip = "Color cycles per beat when BPM sync is enabled."
+            else:
+                rate_label = "Frequency Hz"
+                tooltip = "Color cycles per second."
+            self.clip_color_tempo_sync_checkbox.setEnabled(not fit_to_clip and self.selected_clip is not None)
+            self.clip_color_rate_label.setText(rate_label)
+            if hasattr(self, "clip_color_rate_section_label"):
+                self.clip_color_rate_section_label.setText(rate_label)
+            self.clip_color_rate_spin.setToolTip(tooltip)
+
+        def _on_color_fit_to_clip_toggled(self, checked: bool) -> None:
+            if checked and self.clip_color_rate_spin.value() <= 0.0:
+                self.clip_color_rate_spin.setValue(1.0)
+            self._update_color_tempo_sync_ui()
+            if self._ignore_clip_editor_changes:
+                return
+            self._mark_clip_dirty()
+            self._apply_clip_editor_if_dirty()
 
         def _color_mode_value(self) -> str:
             data = self.clip_color_mode_combo.currentData()
@@ -4014,14 +4912,17 @@ if PYSIDE_AVAILABLE:
             show_from = mode in {"hold", "linear", "smooth"}
             show_to = mode in {"linear", "smooth"}
             show_cycle = mode == "cycle"
-            self._set_form_row_visible(self.clip_color_form, self.clip_color_widget, show_from)
-            self._set_form_row_visible(self.clip_color_form, self.clip_color_to_widget, show_to)
-            self._set_form_row_visible(self.clip_color_form, self.clip_color_tempo_sync_checkbox, show_cycle)
-            self._set_form_row_visible(self.clip_color_form, self.clip_color_rate_spin, show_cycle)
-            self._set_form_row_visible(self.clip_color_form, self.clip_color_palette_preset_combo, show_cycle)
-            self._set_form_row_visible(self.clip_color_form, self.clip_palette_summary_label, show_cycle)
-            self._set_form_row_visible(self.clip_color_form, self.clip_palette_widget, show_cycle)
-            self.clip_color_picker_widget.setVisible(show_from or show_to or show_cycle)
+            show_used_colors = (show_from or show_to or show_cycle) and bool(self.custom_color_swatches)
+            self.clip_color_from_button.setVisible(show_from)
+            self.clip_color_to_button.setVisible(show_to)
+            self.clip_color_targets_label.setVisible(show_from or show_to)
+            self.clip_color_targets_widget.setVisible(show_from or show_to)
+            self.clip_color_picker_container.setVisible(show_from or show_to or show_cycle)
+            self.clip_color_values_label.setVisible(show_from or show_to or show_cycle)
+            self.clip_color_values_widget.setVisible(show_from or show_to or show_cycle)
+            self.custom_color_swatches_label.setVisible(show_used_colors)
+            self.custom_color_swatch_widget.setVisible(show_used_colors)
+            self.clip_color_cycle_controls_widget.setVisible(show_cycle)
             self.clip_palette_editor_widget.setVisible(show_cycle)
             if show_from and not show_to and self.clip_color_picker_target != "from":
                 self.clip_color_picker_target = "from"
@@ -4044,6 +4945,8 @@ if PYSIDE_AVAILABLE:
             if checked:
                 self.clip_color_rate_spin.setValue(1.0)
             self._update_color_tempo_sync_ui()
+            if self._ignore_clip_editor_changes:
+                return
             self._mark_clip_dirty()
             self._apply_clip_editor_if_dirty()
 
@@ -4204,8 +5107,7 @@ if PYSIDE_AVAILABLE:
             target = self.timeline_view.current_insert_target()
             if target is not None:
                 return (target[0], target[1], self.timeline_view.current_insert_time_ms())
-            fallback_role = str(self.new_clip_lane_combo.currentData() or "*")
-            return (fallback_role, 0, self.time_slider.value())
+            return ("*", 0, self.time_slider.value())
 
         def _insert_reference_time_ms(self) -> int:
             return int(self._insert_reference()[2])
@@ -4339,7 +5241,7 @@ if PYSIDE_AVAILABLE:
                 if location is not None:
                     target = (location[0], self.selected_clip.layer)
             if target is None:
-                fallback_role = str(self.new_clip_lane_combo.currentData() or clipboard_items[0].get("role", "*"))
+                fallback_role = str(clipboard_items[0].get("role", "*"))
                 fallback_layer = int(clipboard_items[0].get("clip").layer if clipboard_items[0].get("clip") is not None else 0)
                 target = (fallback_role, fallback_layer)
             base_paste_start_ms = self._snap_time_ms(insert_time_ms)
@@ -4463,9 +5365,11 @@ if PYSIDE_AVAILABLE:
             defaults["color_from"] = list(defaults.get("color_from", base_color))
             defaults["color_to"] = list(defaults.get("color_to", to_color))
             defaults["color_mode"] = str(defaults.get("color_mode", "hold"))
+            defaults["color_fit_to_clip"] = bool(defaults.get("color_fit_to_clip", False))
             defaults["color_tempo_sync"] = bool(defaults.get("color_tempo_sync", True))
             defaults["color_rate"] = float(defaults.get("color_rate", 1.0))
             defaults["color_palette_preset"] = str(defaults.get("color_palette_preset", "Rainbow"))
+            defaults["random_cross_x"] = bool(defaults.get("random_cross_x", False))
             return defaults
 
         def _set_effect_param_widgets(self, params: dict, effect_name: str) -> None:
@@ -4494,6 +5398,7 @@ if PYSIDE_AVAILABLE:
             self.clip_min_intensity_spin.setValue(float(params.get("min_intensity", 0.15)))
             self.clip_max_intensity_spin.setValue(float(params.get("max_intensity", 1.0)))
             self.clip_reverse_checkbox.setChecked(bool(params.get("reverse", False)))
+            self.clip_random_cross_x_checkbox.setChecked(bool(params.get("random_cross_x", False)))
             self._sync_effect_param_enabled(effect_name)
             self._update_tempo_sync_ui()
 
@@ -4510,6 +5415,7 @@ if PYSIDE_AVAILABLE:
             if color_mode_index < 0:
                 color_mode_index = self.clip_color_mode_combo.findData("hold")
             self.clip_color_mode_combo.setCurrentIndex(max(0, color_mode_index))
+            self.clip_color_fit_to_clip_checkbox.setChecked(bool(params.get("color_fit_to_clip", False)))
             self.clip_color_tempo_sync_checkbox.setChecked(bool(params.get("color_tempo_sync", True)))
             self.clip_color_rate_spin.setValue(float(params.get("color_rate", 1.0)))
             preferred_preset = str(params.get("color_palette_preset", "")).strip()
@@ -4563,12 +5469,8 @@ if PYSIDE_AVAILABLE:
             merged["min_intensity"] = float(self.clip_min_intensity_spin.value())
             merged["max_intensity"] = float(self.clip_max_intensity_spin.value())
             merged["reverse"] = bool(self.clip_reverse_checkbox.isChecked())
+            merged["random_cross_x"] = bool(self.clip_random_cross_x_checkbox.isChecked())
             merged["to_color"] = list(self._clip_effect_target_rgba())
-            curve_text = self.clip_curve_text_edit.text().strip()
-            if curve_text:
-                merged["curve_text"] = curve_text
-            else:
-                merged.pop("curve_text", None)
             return merged
 
         def _on_clip_effect_changed(self, effect_name: str) -> None:
@@ -4610,7 +5512,6 @@ if PYSIDE_AVAILABLE:
                 self.clip_start_spin.setValue(max(0, clip.start_ms))
                 self.clip_end_spin.setValue(max(1, clip.end_ms))
                 self.clip_layer_spin.setValue(max(0, clip.layer))
-                self.clip_curve_text_edit.setText(str(clip.params.get("curve_text", "")))
                 self.clip_intensity_spin.setValue(float(clip.params.get("intensity", 1.0)))
                 effect_name = EFFECT_ID_TO_NAME.get(clip.effect, clip.effect.title())
                 self._set_effect_param_widgets(clip.params, effect_name)
@@ -4632,7 +5533,6 @@ if PYSIDE_AVAILABLE:
             self._ignore_clip_editor_changes = True
             try:
                 self._set_color_param_widgets(params)
-                self.clip_curve_text_edit.setText("")
             finally:
                 self._ignore_clip_editor_changes = False
             self.clip_intensity_spin.setValue(float(params.get("intensity", 1.0)))
@@ -4659,6 +5559,7 @@ if PYSIDE_AVAILABLE:
             new_params["color_from"] = list(self._clip_color_from_rgba())
             new_params["color_to"] = list(self._clip_color_to_rgba())
             new_params["color_mode"] = self._color_mode_value()
+            new_params["color_fit_to_clip"] = bool(self.clip_color_fit_to_clip_checkbox.isChecked())
             new_params["color_tempo_sync"] = bool(self.clip_color_tempo_sync_checkbox.isChecked())
             new_params["color_rate"] = max(0.0, float(self.clip_color_rate_spin.value()))
             palette_preset_name = self._selected_color_palette_preset_name()
@@ -4814,9 +5715,12 @@ if PYSIDE_AVAILABLE:
                 return
             if self._time_slider_scrubbing:
                 return
-            if abs(self.audio_player.position() - time_ms) > 40:
+            if abs(self._safe_audio_position() - time_ms) > 40:
                 self._set_playback_anchor(time_ms)
-                self.audio_player.setPosition(time_ms)
+                try:
+                    self.audio_player.setPosition(time_ms)
+                except RuntimeError:
+                    self._handle_audio_backend_failure("Audio output disconnected")
 
         def _set_playback_anchor(self, position_ms: int, now_s: float | None = None) -> None:
             if now_s is None:
@@ -4832,6 +5736,135 @@ if PYSIDE_AVAILABLE:
             self._playback_anchor_monotonic_s = 0.0
             self._playback_anchor_valid = False
 
+        def _safe_audio_playback_state(self):
+            if self.audio_player is None or QtMultimedia is None:
+                return None
+            try:
+                return self.audio_player.playbackState()
+            except RuntimeError:
+                self._handle_audio_backend_failure("Audio output disconnected")
+                return QtMultimedia.QMediaPlayer.StoppedState
+
+        def _safe_audio_position(self) -> int:
+            if self.audio_player is None:
+                return 0
+            try:
+                return int(self.audio_player.position())
+            except RuntimeError:
+                self._handle_audio_backend_failure("Audio output disconnected")
+                return 0
+
+        def _safe_audio_duration(self) -> int:
+            if self.audio_player is None:
+                return 0
+            try:
+                return int(self.audio_player.duration())
+            except RuntimeError:
+                self._handle_audio_backend_failure("Audio output disconnected")
+                return 0
+
+        def _audio_device_id(self, device) -> bytes:
+            if device is None:
+                return b""
+            try:
+                if hasattr(device, "id"):
+                    value = device.id()
+                    if isinstance(value, bytes):
+                        return value
+                    return bytes(value)
+            except Exception:
+                return b""
+            return b""
+
+        def _available_audio_outputs(self) -> list:
+            if not QT_MULTIMEDIA_AVAILABLE or QtMultimedia is None or not hasattr(QtMultimedia, "QMediaDevices"):
+                return []
+            try:
+                if self._media_devices is not None and hasattr(self._media_devices, "audioOutputs"):
+                    return list(self._media_devices.audioOutputs())
+                return list(QtMultimedia.QMediaDevices.audioOutputs())
+            except Exception:
+                return []
+
+        def _default_audio_output(self):
+            if not QT_MULTIMEDIA_AVAILABLE or QtMultimedia is None or not hasattr(QtMultimedia, "QMediaDevices"):
+                return None
+            try:
+                if self._media_devices is not None and hasattr(self._media_devices, "defaultAudioOutput"):
+                    return self._media_devices.defaultAudioOutput()
+                return QtMultimedia.QMediaDevices.defaultAudioOutput()
+            except Exception:
+                return None
+
+        def _handle_audio_backend_failure(self, message: str = "Audio backend unavailable") -> None:
+            if self._audio_backend_recovering:
+                return
+            self._audio_backend_recovering = True
+            try:
+                self._playback_sync_timer.stop()
+                self._playback_range_ms = None
+                self._clear_playback_anchor()
+                self._update_transport_state()
+                if hasattr(self, "statusBar"):
+                    self.statusBar().showMessage(message)
+            finally:
+                self._audio_backend_recovering = False
+
+        def _recover_audio_output_device(self) -> None:
+            if self.audio_output is None or self.audio_player is None:
+                return
+            outputs = self._available_audio_outputs()
+            if not outputs:
+                self._handle_audio_backend_failure("Audio output disconnected")
+                return
+            replacement = None
+            current_id = b""
+            if hasattr(self.audio_output, "device"):
+                try:
+                    current_id = self._audio_device_id(self.audio_output.device())
+                except Exception:
+                    current_id = b""
+            for device in outputs:
+                if self._audio_device_id(device) == current_id and current_id:
+                    replacement = device
+                    break
+            if replacement is None:
+                replacement = self._default_audio_output() or outputs[0]
+            if replacement is None:
+                self._handle_audio_backend_failure("Audio output disconnected")
+                return
+            try:
+                if hasattr(self.audio_player, "pause"):
+                    self.audio_player.pause()
+            except RuntimeError:
+                self._handle_audio_backend_failure("Audio output disconnected")
+                return
+            except Exception:
+                pass
+            self._playback_range_ms = None
+            self._clear_playback_anchor()
+            try:
+                if hasattr(self.audio_output, "setDevice"):
+                    self.audio_output.setDevice(replacement)
+            except RuntimeError:
+                self._handle_audio_backend_failure("Audio output disconnected")
+                return
+            except Exception:
+                self._handle_audio_backend_failure("Audio output changed")
+                return
+            description = ""
+            try:
+                if hasattr(replacement, "description"):
+                    description = str(replacement.description()).strip()
+            except Exception:
+                description = ""
+            self._update_transport_state()
+            if hasattr(self, "statusBar"):
+                if description:
+                    self.statusBar().showMessage(f"Audio output changed to {description}. Playback paused.")
+                else:
+                    self.statusBar().showMessage("Audio output changed. Playback paused.")
+
         def _playback_rate(self) -> float:
             if self.audio_player is None or not hasattr(self.audio_player, "playbackRate"):
                 return 1.0
@@ -4843,7 +5876,7 @@ if PYSIDE_AVAILABLE:
         def _predicted_audio_position_ms(self, observed_position_ms: int | None = None) -> int:
             now_s = time.monotonic()
             if observed_position_ms is None and self.audio_player is not None:
-                observed_position_ms = int(self.audio_player.position())
+                observed_position_ms = self._safe_audio_position()
             observed = max(0, int(observed_position_ms or 0))
             if not self._playback_anchor_valid:
                 self._set_playback_anchor(observed, now_s)
@@ -4914,22 +5947,31 @@ if PYSIDE_AVAILABLE:
             self._set_timeline_position(position, sync_player=False)
 
         def _on_playback_sync_timer(self) -> None:
+            tick_start_s = time.perf_counter()
             if self.audio_player is None or not self._audio_is_playing():
                 self._playback_sync_timer.stop()
+                self._perf_playback_tick_ms_ema = _ema_ms(self._perf_playback_tick_ms_ema, (time.perf_counter() - tick_start_s) * 1000.0)
                 return
-            position = self._predicted_audio_position_ms(int(self.audio_player.position()))
+            position = self._predicted_audio_position_ms(self._safe_audio_position())
             if self._playback_range_ms is not None:
                 range_start_ms, range_end_ms = self._playback_range_ms
                 if position >= range_end_ms:
-                    self.audio_player.pause()
+                    try:
+                        self.audio_player.pause()
+                    except RuntimeError:
+                        self._handle_audio_backend_failure("Audio output disconnected")
+                        self._perf_playback_tick_ms_ema = _ema_ms(self._perf_playback_tick_ms_ema, (time.perf_counter() - tick_start_s) * 1000.0)
+                        return
                     self._set_playback_anchor(range_end_ms)
                     self._playback_range_ms = None
                     self._set_timeline_position(range_end_ms, sync_player=False)
                     self._update_transport_state()
+                    self._perf_playback_tick_ms_ema = _ema_ms(self._perf_playback_tick_ms_ema, (time.perf_counter() - tick_start_s) * 1000.0)
                     return
                 if position < range_start_ms:
                     position = range_start_ms
             self._set_timeline_position(position, sync_player=False)
+            self._perf_playback_tick_ms_ema = _ema_ms(self._perf_playback_tick_ms_ema, (time.perf_counter() - tick_start_s) * 1000.0)
 
         def _on_audio_duration_changed(self, duration: int) -> None:
             if self.project is not None:
@@ -4946,13 +5988,13 @@ if PYSIDE_AVAILABLE:
             if QtMultimedia is not None and state == QtMultimedia.QMediaPlayer.PlayingState:
                 self._last_audio_ui_update_s = 0.0
                 if self.audio_player is not None:
-                    self._set_playback_anchor(int(self.audio_player.position()))
+                    self._set_playback_anchor(self._safe_audio_position())
                 if not self._playback_sync_timer.isActive():
                     self._playback_sync_timer.start()
             else:
                 self._playback_sync_timer.stop()
                 if self.audio_player is not None:
-                    self._set_playback_anchor(int(self.audio_player.position()))
+                    self._set_playback_anchor(self._safe_audio_position())
                 else:
                     self._clear_playback_anchor()
                 if QtMultimedia is not None and state == QtMultimedia.QMediaPlayer.StoppedState:
@@ -4962,9 +6004,21 @@ if PYSIDE_AVAILABLE:
         def _on_audio_error(self, *args) -> None:
             if self.audio_player is None:
                 return
-            error_text = self.audio_player.errorString()
+            try:
+                error_text = self.audio_player.errorString()
+            except RuntimeError:
+                self._handle_audio_backend_failure("Audio output disconnected")
+                return
             if error_text:
                 self.statusBar().showMessage(f"Audio error: {error_text}")
+
+        def _on_audio_outputs_changed(self, *args) -> None:
+            del args
+            QtCore.QTimer.singleShot(0, self._recover_audio_output_device)
+
+        def _on_audio_default_output_changed(self, *args) -> None:
+            del args
+            QtCore.QTimer.singleShot(0, self._recover_audio_output_device)
 
         def _zoom_timeline_in(self) -> None:
             self.timeline_view.zoom_in(self.time_slider.value())
@@ -4974,6 +6028,148 @@ if PYSIDE_AVAILABLE:
 
         def _zoom_timeline_fit(self) -> None:
             self.timeline_view.reset_zoom(self.time_slider.value())
+
+        def _timeline_split_target_bottom(self, mode: str, *, lane_height: float | None = None) -> int:
+            if mode == TIMELINE_DISPLAY_HIDDEN:
+                return 0
+            scrollbar_height = (
+                int(self.timeline_scrollbar.sizeHint().height())
+                if hasattr(self, "timeline_scrollbar")
+                else 16
+            )
+            lane_count = 4 if mode == TIMELINE_DISPLAY_FULL else 1
+            waveform_height = (
+                TIMELINE_WAVEFORM_HEIGHT_FULL_PX
+                if mode == TIMELINE_DISPLAY_FULL
+                else TIMELINE_WAVEFORM_HEIGHT_GLOBAL_PX
+            )
+            resolved_lane_height = (
+                TIMELINE_ROLE_MIN_HEIGHT_PX
+                if lane_height is None
+                else max(0.0, float(lane_height))
+            )
+            plot_height = (
+                waveform_height
+                + TIMELINE_TRACK_TOP_GAP_PX
+                + lane_count * resolved_lane_height
+                + max(0, lane_count - 1) * TIMELINE_TRACK_GAP_PX
+            )
+            timeline_view_height = plot_height + TIMELINE_PLOT_WIDGET_CHROME_PX
+            panel_height = timeline_view_height + TIMELINE_PANEL_BOTTOM_SPACING_PX + scrollbar_height
+            return int(math.ceil(panel_height))
+
+        def _apply_timeline_split_mode(self, mode: str, *, snap: bool = True, target_bottom: int | None = None) -> None:
+            if not hasattr(self, "editor_splitter"):
+                return
+            normalized_mode = mode if mode in {
+                TIMELINE_DISPLAY_FULL,
+                TIMELINE_DISPLAY_GLOBAL,
+                TIMELINE_DISPLAY_HIDDEN,
+            } else TIMELINE_DISPLAY_FULL
+            if self._timeline_split_mode == normalized_mode and not snap:
+                return
+            self._timeline_split_mode = normalized_mode
+            self.scrub_bar.setVisible(True)
+            timeline_mode = TIMELINE_DISPLAY_FULL if normalized_mode == TIMELINE_DISPLAY_FULL else TIMELINE_DISPLAY_GLOBAL
+            self.timeline_view.set_display_mode(timeline_mode)
+            if normalized_mode != TIMELINE_DISPLAY_FULL:
+                self.timeline_view.set_active_lane("*", 0)
+            if not snap:
+                return
+            sizes = self.editor_splitter.sizes()
+            total = max(1, sum(sizes))
+            resolved_target_bottom = target_bottom
+            if resolved_target_bottom is None:
+                if normalized_mode == TIMELINE_DISPLAY_HIDDEN:
+                    resolved_target_bottom = 0
+                else:
+                    resolved_target_bottom = min(
+                        self._timeline_split_target_bottom(normalized_mode),
+                        max(0, total - TIMELINE_PREVIEW_MIN_PX),
+                    )
+            resolved_target_bottom = max(0, int(resolved_target_bottom))
+            target_top = max(0, total - resolved_target_bottom)
+            self._ignore_editor_splitter_sync = True
+            try:
+                self.editor_splitter.setUpdatesEnabled(False)
+                self.preview_panel.setUpdatesEnabled(False)
+                self.timeline_panel.setUpdatesEnabled(False)
+                self.editor_splitter.setSizes([target_top, resolved_target_bottom])
+            finally:
+                self.timeline_panel.setUpdatesEnabled(True)
+                self.preview_panel.setUpdatesEnabled(True)
+                self.editor_splitter.setUpdatesEnabled(True)
+                self.preview_panel.update()
+                self.timeline_panel.update()
+                self._ignore_editor_splitter_sync = False
+
+        def _sync_timeline_split_mode(self) -> None:
+            if not hasattr(self, "editor_splitter") or self._ignore_editor_splitter_sync:
+                return
+            sizes = self.editor_splitter.sizes()
+            if len(sizes) < 2:
+                return
+            total = max(1, sum(sizes))
+            bottom_size = int(sizes[1])
+            global_min = min(
+                self._timeline_split_target_bottom(TIMELINE_DISPLAY_GLOBAL),
+                max(0, total - TIMELINE_PREVIEW_MIN_PX),
+            )
+            global_max = min(
+                self._timeline_split_target_bottom(
+                    TIMELINE_DISPLAY_GLOBAL,
+                    lane_height=TIMELINE_GLOBAL_ROLE_MAX_HEIGHT_PX,
+                ),
+                max(0, total - TIMELINE_PREVIEW_MIN_PX),
+            )
+            full_min = min(
+                self._timeline_split_target_bottom(TIMELINE_DISPLAY_FULL),
+                max(0, total - TIMELINE_PREVIEW_MIN_PX),
+            )
+            full_max = min(
+                self._timeline_split_target_bottom(
+                    TIMELINE_DISPLAY_FULL,
+                    lane_height=TIMELINE_FULL_ROLE_MAX_HEIGHT_PX,
+                ),
+                max(0, total - TIMELINE_PREVIEW_MIN_PX),
+            )
+            hidden_to_global_threshold = int(round(global_min * 0.5))
+            global_to_full_threshold = int(round((global_max + full_min) * 0.5))
+            current_mode = self._timeline_split_mode
+            if current_mode == TIMELINE_DISPLAY_FULL:
+                if bottom_size > full_max:
+                    self._apply_timeline_split_mode(TIMELINE_DISPLAY_FULL, snap=True, target_bottom=full_max)
+                    return
+                if bottom_size < global_to_full_threshold:
+                    self._apply_timeline_split_mode(TIMELINE_DISPLAY_GLOBAL, snap=True, target_bottom=global_max)
+                    return
+                if bottom_size < full_min:
+                    self._apply_timeline_split_mode(TIMELINE_DISPLAY_FULL, snap=True, target_bottom=full_min)
+                    return
+            elif current_mode == TIMELINE_DISPLAY_GLOBAL:
+                if bottom_size < hidden_to_global_threshold:
+                    self._apply_timeline_split_mode(TIMELINE_DISPLAY_HIDDEN, snap=True, target_bottom=0)
+                    return
+                if bottom_size < global_min:
+                    self._apply_timeline_split_mode(TIMELINE_DISPLAY_GLOBAL, snap=True, target_bottom=global_min)
+                    return
+                if bottom_size > global_to_full_threshold:
+                    self._apply_timeline_split_mode(TIMELINE_DISPLAY_FULL, snap=True, target_bottom=full_min)
+                    return
+                if bottom_size > global_max:
+                    self._apply_timeline_split_mode(TIMELINE_DISPLAY_GLOBAL, snap=True, target_bottom=global_max)
+                    return
+            else:
+                if bottom_size >= hidden_to_global_threshold:
+                    self._apply_timeline_split_mode(TIMELINE_DISPLAY_GLOBAL, snap=True, target_bottom=global_min)
+                    return
+                if bottom_size != 0:
+                    self._apply_timeline_split_mode(TIMELINE_DISPLAY_HIDDEN, snap=True, target_bottom=0)
+                    return
+
+        def _on_editor_splitter_moved(self, pos: int, index: int) -> None:
+            del pos, index
+            self._sync_timeline_split_mode()
 
         def _on_timeline_viewport_changed(self, visible_start_ms: int, visible_duration_ms: int, max_visible_start_ms: int) -> None:
             self._ignore_timeline_scrollbar_change = True
@@ -5034,21 +6230,32 @@ if PYSIDE_AVAILABLE:
                 self._playback_range_ms = None
                 self._seek_audio_player(self.time_slider.value())
                 self._set_playback_anchor(self.time_slider.value())
-            self.audio_player.play()
+            try:
+                self.audio_player.play()
+            except RuntimeError:
+                self._handle_audio_backend_failure("Audio output disconnected")
+                return
             self._update_transport_state()
 
         def _pause_audio(self) -> None:
             if self.audio_player is None:
                 return
             self._playback_range_ms = None
-            self.audio_player.pause()
-            self._set_playback_anchor(int(self.audio_player.position()))
+            try:
+                self.audio_player.pause()
+                self._set_playback_anchor(self._safe_audio_position())
+            except RuntimeError:
+                self._handle_audio_backend_failure("Audio output disconnected")
+                return
             self._update_transport_state()
 
         def _stop_audio(self) -> None:
             self._playback_range_ms = None
             if self.audio_player is not None:
-                self.audio_player.stop()
+                try:
+                    self.audio_player.stop()
+                except RuntimeError:
+                    self._handle_audio_backend_failure("Audio output disconnected")
             self._clear_playback_anchor()
             self._set_timeline_position(0, sync_player=False)
 
@@ -5057,14 +6264,18 @@ if PYSIDE_AVAILABLE:
             self._set_timeline_position(0, sync_player=True)
             self._set_playback_anchor(0)
             if self._has_audio_source() and self.audio_player is not None:
-                self.audio_player.play()
+                try:
+                    self.audio_player.play()
+                except RuntimeError:
+                    self._handle_audio_backend_failure("Audio output disconnected")
+                    return
             self._update_transport_state()
 
         def _toggle_play_pause_from_cursor(self) -> None:
             if not self._has_audio_source() or self.audio_player is None or QtMultimedia is None:
                 self._play_audio()
                 return
-            if self.audio_player.playbackState() == QtMultimedia.QMediaPlayer.PlayingState:
+            if self._safe_audio_playback_state() == QtMultimedia.QMediaPlayer.PlayingState:
                 self._pause_audio()
                 return
             selected_range = self.timeline_view.selection_range()
@@ -5074,7 +6285,15 @@ if PYSIDE_AVAILABLE:
             self._play_audio()
 
         def _load_example(self) -> None:
-            example = Path(__file__).resolve().parent / "example_project.json"
+            repo_root = Path(__file__).resolve().parents[2]
+            shows_dir = repo_root / "shows"
+            example = None
+            if shows_dir.exists():
+                for candidate in sorted(shows_dir.glob("*.json")):
+                    example = candidate
+                    break
+            if example is None:
+                example = Path(__file__).resolve().parent / "example_project.json"
             self.set_project(load_project(example))
 
         def _repo_root_directory(self) -> Path:
@@ -5264,7 +6483,10 @@ if PYSIDE_AVAILABLE:
             self._discard_pending_clip_edit()
             self.timeline_view.set_selected_clips(())
             if reload_audio and self.audio_player is not None:
-                self.audio_player.stop()
+                try:
+                    self.audio_player.stop()
+                except RuntimeError:
+                    self._handle_audio_backend_failure("Audio output disconnected")
             self.tempo_bpm_spin.blockSignals(True)
             self.beat_offset_spin.blockSignals(True)
             self.tempo_bpm_spin.setValue(project.tempo_bpm)
@@ -5291,8 +6513,11 @@ if PYSIDE_AVAILABLE:
         def _load_project_audio(self) -> None:
             self.audio_waveform = None
             if self.audio_player is not None:
-                self.audio_player.stop()
-                self.audio_player.setSource(QtCore.QUrl())
+                try:
+                    self.audio_player.stop()
+                    self.audio_player.setSource(QtCore.QUrl())
+                except RuntimeError:
+                    self._handle_audio_backend_failure("Audio output disconnected")
 
             if self.project is None:
                 self.audio_label.setText("audio: none")
@@ -5329,7 +6554,11 @@ if PYSIDE_AVAILABLE:
                 label_suffix = " (no waveform)"
 
             if self.audio_player is not None:
-                self.audio_player.setSource(QtCore.QUrl.fromLocalFile(str(audio_path.resolve())))
+                try:
+                    self.audio_player.setSource(QtCore.QUrl.fromLocalFile(str(audio_path.resolve())))
+                except RuntimeError:
+                    self._handle_audio_backend_failure("Audio output disconnected")
+                    return
 
             self.audio_label.setText(f"audio: {audio_path.name}{label_suffix}")
             self._update_time_range()
@@ -5339,8 +6568,11 @@ if PYSIDE_AVAILABLE:
         def _populate_timeline_table(self) -> None:
             self.timeline_rows = []
             if self.project is None:
+                self.custom_color_swatches = []
+                self._refresh_custom_color_swatches()
                 return
             self.timeline_rows = build_timeline_rows(self.project)
+            self._refresh_custom_color_swatches()
 
         def _refresh_timeline(self) -> None:
             role = self._timeline_focus_role()
@@ -5353,6 +6585,7 @@ if PYSIDE_AVAILABLE:
                 self.time_slider.value(),
                 role,
                 auto_scroll=not self._audio_is_playing(),
+                transport_playing=self._audio_is_playing(),
             )
             self.timeline_view.set_snap_settings(self.snap_checkbox.isChecked(), divisor)
             self.timeline_view.set_insert_preview(effect_name, effect_duration_ms)
@@ -5365,11 +6598,21 @@ if PYSIDE_AVAILABLE:
 
         def _dispatch_preview_request(self, request: dict) -> None:
             self._preview_worker_busy = True
+            request["queued_at_s"] = time.perf_counter()
+            self._perf_last_request_sent_s = float(request["queued_at_s"])
             self._preview_render_proxy.render_requested.emit(request)
 
         def _on_preview_rendered(self, result: object) -> None:
             payload = dict(result) if isinstance(result, dict) else {}
             self._preview_worker_busy = False
+            build_ms = float(payload.get("build_ms", 0.0) or 0.0)
+            queued_at_s = float(payload.get("queued_at_s", 0.0) or 0.0)
+            self._perf_preview_build_ms_ema = _ema_ms(self._perf_preview_build_ms_ema, build_ms)
+            if queued_at_s > 0.0:
+                self._perf_preview_total_ms_ema = _ema_ms(
+                    self._perf_preview_total_ms_ema,
+                    (time.perf_counter() - queued_at_s) * 1000.0,
+                )
             request_id = int(payload.get("request_id", 0))
             if request_id != self._preview_request_counter:
                 if self._pending_worker_request is not None:
@@ -5380,6 +6623,7 @@ if PYSIDE_AVAILABLE:
             error_text = str(payload.get("error", "")).strip()
             if error_text:
                 self.statusBar().showMessage(f"Preview render error: {error_text}")
+            self._perf_preview_completed += 1
             self.preview_view.set_preview_data(
                 payload.get("layout_data", self.preview_layout_data),
                 dict(payload.get("frames", {})),
@@ -5418,13 +6662,15 @@ if PYSIDE_AVAILABLE:
                 "show_all_roles": show_all_roles,
             }
             if self._preview_worker_busy:
+                if self._pending_worker_request is not None:
+                    self._perf_preview_dropped += 1
                 self._pending_worker_request = request
                 return
             self._dispatch_preview_request(request)
 
         def _refresh_preview(self, time_ms: int | None = None) -> None:
             current_ms = self.time_slider.value() if time_ms is None else int(time_ms)
-            self.time_label.setText(f"{current_ms / 1000.0:.3f} s")
+            self.time_label.setText(self._format_time_label_text(current_ms))
             self._refresh_timeline()
             self._pending_preview_time_ms = current_ms
             if self._preview_refresh_queued:
@@ -5530,6 +6776,10 @@ if PYSIDE_AVAILABLE:
                 self._preview_render_thread.wait(1500)
             event.accept()
             super().closeEvent(event)
+
+        def resizeEvent(self, event) -> None:  # type: ignore[override]
+            super().resizeEvent(event)
+            QtCore.QTimer.singleShot(0, self._sync_timeline_split_mode)
 
 
 else:
