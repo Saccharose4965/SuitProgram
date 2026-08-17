@@ -8,6 +8,33 @@ apps.
 The runtime is centered around the shell in `main/app_shell.c`.
 
 
+Project intent and handoff summary
+----------------------------------
+This is a multi-suit TRON-style wearable platform, not a single-purpose LED
+sketch. The intended end state is several suits that can run spatial LED
+animations, react to live audio, play authored song shows in sync, exchange
+state/files, and expose utilities and games through a small OLED shell.
+
+Keep the existing high-level separation:
+- `main/` is the composition root: shell runtime plus thin app adapters.
+- `components/` owns reusable hardware, media, analysis, communication, layout,
+  rendering, and game engines.
+- `tools/` owns host-side layout and show-authoring utilities.
+- `shows/` contains editable source projects; exported runtime packages belong
+  on SD rather than in the firmware image.
+
+The shell app contract (`init`, `deinit`, `tick`, `handle_input`, `draw`) and
+the spatial LED layout are strong foundations. Prefer extending those contracts
+over adding alternate entry points or direct hardware access from apps.
+
+The project is an advanced work in progress. The main areas that still need
+stabilization are communication security, audio/shared-resource ownership,
+FFT/BPM reliability, show audio integration, real power/GPS integration, and
+reproducible builds.
+See `Current TODO / roadmap` near the end of this file before making broad
+changes.
+
+
 Build and flash
 ---------------
 Environment:
@@ -16,6 +43,17 @@ Environment:
 Typical commands:
 - `source /home/anotherone/Documents/suit/esp-idf/export.sh`
 - `idf.py -p /dev/ttyUSB0 -b 115200 flash monitor`
+
+Reproducibility caveat:
+- The repository currently relies on that local ESP-IDF checkout and does not
+  pin/bootstrap the exact IDF and Python environment.
+- The last inspected local IDF Python environment was incomplete after a Python
+  version change, so a clean full build could not be reproduced from the README
+  alone. Fix the toolchain/bootstrap before treating build failures as firmware
+  regressions.
+- Do not commit real Wi-Fi credentials through `main/Kconfig`, `sdkconfig`, or
+  backup configuration files. Rotate any credentials that were committed and
+  move local values to an untracked/provisioned configuration path.
 
 
 Current runtime architecture
@@ -34,7 +72,7 @@ Shell ownership (`main/app_shell.c`):
 - OLED submit path
 
 Shell frame cadence:
-- `shell_run_loop()` targets `33 ms` period (~30 FPS)
+- `shell_run_loop()` targets `16667 us` period (~60 FPS)
 
 
 Startup sequence (exact current flow)
@@ -52,13 +90,15 @@ Startup sequence (exact current flow)
    - `orientation_service_start()`
 2. `system_state_init()`
 3. `app_settings_init()`
-4. `shell_setup_link()`
+4. `led_layout_init()`
+5. `show_runtime_init()`
+6. `shell_setup_link()`
    - `link_init(...)`
    - if successful: `link_set_frame_rx(...)` and `link_start_info_broadcast(1000)`
-5. `shell_seed_initial_system_state()`
-6. `shell_init_input_and_apps()`
-7. `shell_profiler_init()`
-8. `shell_run_loop()`
+7. `shell_seed_initial_system_state()`
+8. `shell_init_input_and_apps()`
+9. `shell_profiler_init()`
+10. `shell_run_loop()`
 
 Intentionally commented out in startup:
 - `led_modes_start()`
@@ -107,12 +147,14 @@ From `main/app_shell.c` (`s_builtin_apps`):
 - `service_restart`
 - `adc_debug`
 - `calculator`
-- `leds_audio`
-- `leds_custom`
+- `leds_animations`
+- `leds_source`
+- `leds_color`
 - `leds_layout`
 - `manual_bpm`
 - `fft_sync`
 - `music`
+- `show_player`
 - `bt`
 - `message`
 - `file_rx`
@@ -140,12 +182,13 @@ Menu map (current)
 From `main/app_menu.c`:
 
 Root:
+- LEDs
 - Settings
 - Games
 - Simulations
 - Comm
-- LEDs
 - Music
+- Shows
 - Misc
 
 Settings:
@@ -223,32 +266,25 @@ Preferences (`main/app_preferences.c`):
 - `B`: choose 2048 direction icons
 - `C`: toggle direction icon family
 
-LED Audio / LED Custom (`main/app_leds.c`):
-- `A`: up in list
-- `B`: down in list
-- `D`:
-  - on `Back`: return to `menu`
-  - on a new mode item: apply the mapped mode for the current page
-  - on the current `plane` or `ring` row: cycle to the next variant
-- LED Audio and LED Custom use smooth menu scrolling for selection changes
-- Both pages expose the same animation catalog; the Audio page runs the beat/audio-reactive mapping and the Custom page runs the continuous renderer mapping
-- `plane` variants:
-  - Audio: `plane:sweep`, `plane:pair`, `plane:fan`, `plane:sweep+bg`, `plane:pair+bg`, `plane:fan+bg`
-  - Custom: `plane:sweep`, `plane:mirror`, `plane:prism`, `plane:sweep+bg`, `plane:pair+bg`, `plane:fan+bg`
-  - `+bg` uses the secondary color as a dim static background and renders the plane brighter on top
-- `ring` variants:
-  - Audio: `ring:pulse`, `ring:train`
-  - Custom: `ring:pulse`, `ring:contour`
-- Shared config exposed on both pages:
-  - color preset / style / highlight
-  - primary + secondary RGB values
-  - `audio:*`
-  - `bright:*`
-- Audio `random` rotates through the beat-reactive animation list about every 10 seconds
-- Custom page config:
-  - `speed:%` controls free-running custom animation speed (`10%` to `250%`, step `10%`)
-  - `fill` is the full-strip/full-layout coverage mode using the active selected color source
-  - `random` rotates through the custom animation list about every 10 seconds
+LED Animations (`main/app_leds.c`):
+- `A/B`: move through the combined animation list
+- `C/D`: select a beat-triggered (`beat:*`) or continuous synchronized
+  (`sync:*`) animation; on configuration rows they decrement/increment or
+  toggle the value
+- Configuration rows currently include custom speed plus plane/ring backgrounds
+- This app chooses animation behavior only; source/timing and color are separate
+
+LED Source (`main/app_led_source.c`):
+- Chooses `manual` or `fft` as the beat/synchronized timeline source
+- Links to the Manual BPM and FFT Sync detail pages
+- A slave controlled by Master Control ignores the local source and follows the
+  received master clock
+
+LED Color (`main/app_led_color.c`):
+- Configures presets, `mono` / `duo` / `palette`, peak highlights, both RGB
+  colors, audio-driven brightness range, and global brightness
+- `A/B`: move through fields
+- `C/D`: decrement/increment or cycle the selected field
 
 LED Layout (`main/app_led_layout.c`):
 - `A`: previous field
@@ -454,6 +490,124 @@ Animation model notes:
   - optional white highlights via highlight mode
 
 
+FFT/BPM pipeline and local benchmark
+------------------------------------
+The firmware FFT component is a live microphone pipeline. It captures audio in
+the background, computes spectral/energy views, maintains novelty history, runs
+tempo/phase analysis in a worker, and exposes a beat clock to the LED source and
+Master Control. Current shared configuration is 16 kHz input, FFT size 1024,
+256-sample hop, and an 80..159 BPM search range.
+
+Treat its BPM confidence and phase output as experimental. It is useful and
+feature-rich, but not reliable enough yet to be the final synchronization source.
+
+The sibling directory `../localFFT` is the PC-side research workbench for
+improving this pipeline. It is not part of the ESP-IDF build. In particular,
+`../localFFT/benchmark/bpm_bench.c` currently:
+- reads a manifest of labeled songs and decoded mono f32le inputs
+- evaluates tracks as one continuous stream so detector state crosses song
+  boundaries like a live product
+- uses 22.05 kHz input, FFT size 512, 32 comb bands, an 8-second analysis window,
+  and an 80..159 BPM candidate range
+- compares local, accumulated, and held/final BPM estimates
+- writes summary, trace, and per-BPM score CSV files
+- works with `benchmark/visualize_bpm.py` to plot BPM, stability, error, and
+  score heatmaps
+
+The current benchmark has produced very good tempo results, but remains WIP and
+must be expanded before its strategy is ported back to the ESP32. Beat phase is
+the unresolved part: many songs do not expose one unambiguous phase peak.
+
+A likely product direction is explicit user correction rather than promising
+perfect automatic phase. Candidate controls, still to be discussed, include a
+phase choice such as `normal` / `offbeat` and tempo/subdivision choices such as
+`1x` / `2x` / `3x`. Phase offset and tempo multiplier are different concepts
+and should probably remain separate settings. Do not lock this API or UX without
+first reviewing benchmark evidence and real suit behavior.
+
+
+Multi-suit show authoring system
+--------------------------------
+`tools/show_editor/main_window.py` is a desktop PC application for designing
+song-timed LED animation shows shared by multiple suits. It is not an on-device
+ESP32 UI. The editor is a substantial but unfinished tool, currently centered
+on one integrated Qt window.
+
+The intended workflow is:
+1. Import/reference a song and define BPM plus beat offset.
+2. Author layered effect clips on global and per-role (`A`, `B`, `C`) lanes.
+3. Target canonical suit sections/groups rather than hard-coded LED indices.
+4. Preview the same timeline against 2D/3D suit layouts.
+5. Save editable JSON source in `shows/`.
+6. Export a compact `show.bin` package, plus audio when needed, for SD playback.
+7. Have a master suit start/synchronize playback while each suit renders its
+   assigned role.
+
+Implemented editor pieces include timeline clip editing, snapping/beat guides,
+audio transport and WAV waveform support, layered role lanes, presets/inspector,
+undo/redo, autosaved sessions, 2D/3D LED preview, and binary export. The three
+current JSON projects export successfully.
+
+Important limitations:
+- This is WIP authoring software; effect-specific controls and workflow still
+  need refinement.
+- `main_window.py` has grown very large and should eventually be split into
+  timeline, preview, inspector/edit-history, audio transport, and window/controller
+  modules without changing the saved-project format casually.
+- The firmware now validates `show.bin`, loads one role into PSRAM/RAM, resolves
+  canonical targets against the local layout, and renders the compiled effect
+  set from the absolute timeline.
+- `show_player` can choose role A/B/C, start a show as authority, pause/resume,
+  and stop. Followers auto-load the matching local package and catch up from
+  periodic transport packets. `M`/`F` identify authority/follower and `*`
+  indicates calibrated clock sync.
+- Playback deliberately sends transport state, not LED frames. Every suit must
+  have the same exported show directory on SD; the content-derived show UID and
+  package CRC reject stale or corrupt copies.
+- `track.wav` playback, an audio-output lease, audio-delay calibration, seek UI,
+  control authentication, and hardware multi-suit rehearsal remain unfinished.
+
+Related design documents:
+- `docs/show_system_requirements.md`
+- `docs/show_system_spec.md`
+- `docs/show_editor_ux_plan.md`
+- `tools/show_editor/README.md`
+
+
+Engineering notes from the current review
+-----------------------------------------
+Strong foundations worth preserving:
+- shell-owned app lifecycle and framebuffer composition
+- asynchronous/dirty OLED updates
+- mutex-protected system-state snapshots
+- centralized pin/shared-SPI definitions
+- spatial LED layout and per-suit persisted section lengths
+- separate FFT/BPM worker and built-in shell profiler
+- desktop compilation of rich show projects into a simpler runtime format
+
+Highest-risk implementation debt:
+- Telemetry sender and receiver currently disagree on upload-header offsets.
+  File names, total sizes, sequence/source identity, timeouts, and all packet
+  bounds need validation; received names must not permit path traversal.
+- UDP fallback now feeds framed packets through the normal decoder. ACK waiting
+  is armed before send and matches sequence/source. ESP-NOW control frames are
+  still unauthenticated.
+- The shared SPI registry can retain an IMU handle after the orientation service
+  removes that device for a lower-speed retry.
+- GPS uses UART0 console pins and globally disables logging from its task.
+- Link startup state can be overwritten back to `CONNECTING` after successful
+  initialization. HUD battery percentages are placeholders.
+- Show playback now takes an exclusive LED-output lease and restores the prior
+  continuous/beat/audio-brightness settings on stop. Audio, SD, OLED, and
+  service task stopping still need consistent ownership/lifecycle rules.
+- LED output now sends each RMT channel at its configured physical length and
+  caches logical-to-physical mapping until the layout changes.
+- Several large files now mix responsibilities. Split internally rather than
+  creating a component for every small helper.
+- No automated tests or CI currently protect protocols, parsers, layout mapping,
+  show packages, menu/registry consistency, or service state machines.
+
+
 Repository layout
 -----------------
 `main/`:
@@ -465,6 +619,14 @@ Repository layout
 
 `tools/`:
 - Layout preview and SD-export helpers for the chestplate geometry
+- Qt multi-suit song/show editor, preview model, and binary exporter
+
+`shows/`:
+- Editable JSON source projects for song-timed, per-role LED shows
+
+Sibling research directory:
+- `../localFFT/`: PC FFT/BPM experiments and offline benchmark; not part of
+  the ESP-IDF component graph
 
 Legacy entrypoint files still present in `main/` but not in build list:
 - `main/reciever.c`
@@ -473,9 +635,126 @@ Legacy entrypoint files still present in `main/` but not in build list:
 
 Known caveats (current code)
 ----------------------------
-- `gps`, `message`, and `call` menu entries are stubs (unregistered app IDs).
-- Global long `BC combo` restart is reserved by shell and preempts app-local handling.
-- `led_modes_start()`, `power_monitor_start()`, and `gps_services_start(9600)` are still commented out in shell startup.
+- `gps` and `call` are menu stubs with no registered shell app. `message` is
+  registered and partially implemented.
+- Global long `BC combo` restart is reserved by shell and preempts app-local
+  handling.
+- `led_modes_start()`, `power_monitor_start()`, and `gps_services_start(9600)`
+  are not started during shell boot. LED modes start on demand from the LED app;
+  power and GPS remain unwired.
+- The show player performs silent timeline playback and multi-suit transport;
+  synchronized `track.wav` audio is not wired yet.
+- Current battery percentages are placeholders, not trustworthy measurements.
+
+
+Current TODO / roadmap
+----------------------
+Stabilize security, protocols, and hardware first:
+- [ ] Rotate/remove committed Wi-Fi credentials and establish an untracked or
+  provisioned secrets workflow.
+- [ ] Pin the ESP-IDF/toolchain version, add a repeatable bootstrap/environment
+  check, and move stable configuration into `sdkconfig.defaults`.
+- [ ] Replace telemetry packet offset logic with one versioned encode/decode
+  implementation used by both sender and receiver.
+- [ ] Validate upload size, bounds, filename, source, sequence, timeout, and
+  completion state; reject traversal and malformed packets.
+- [x] Fix framed UDP receive, the send-before-ACK-clear race, and ACK matching.
+- [ ] Define authentication/encryption expectations for suit control traffic.
+- [x] Queue show-player network callback work into its service queue instead of
+  loading/rendering inside Wi-Fi/ESP-NOW callbacks. Apply the same boundary to
+  remaining callback-driven app protocols.
+- [ ] Fix the shared-SPI stale device handle during IMU speed fallback.
+- [ ] Move GPS away from UART0 console pins and remove the global log shutdown.
+- [ ] Fix startup connection-state ordering and distinguish placeholders from
+  live status values.
+
+Make ownership and lifecycle explicit:
+- [x] Establish exclusive LED output ownership between base beat/continuous
+  renderers and authored show playback. Add a compositor only if simultaneous
+  base+show blending becomes a real requirement.
+- [ ] Add an audio arbiter/lease model for FFT capture, microphone recording,
+  local playback, Bluetooth playback, calls, and sound effects.
+- [ ] Add synchronized/refcounted SD mounting and prevent remount/unmount while
+  files are in use.
+- [ ] Make complete OLED command/data transfers atomic, ideally with the shell
+  as the only display owner.
+- [ ] Replace cross-core `volatile` stop/state flags with task notifications,
+  event groups, locks, or atomics as appropriate.
+- [ ] Give services consistent `start` / `stop` / `status` behavior and avoid
+  forgetting task handles before a task has actually exited.
+- [ ] Make app descriptors the routing source of truth and validate/derive menu
+  IDs so dead entries cannot drift from the registry.
+
+Optimize measured hot paths:
+- [x] Send each RMT channel only its configured physical strip length instead of
+  721 pixels on both channels.
+- [x] Precompute logical LED -> strip/physical mappings when the layout changes.
+- [ ] Use `shell_profiler` measurements before doing general CPU/memory cleanup.
+- [ ] Revisit the 16 MB flash partition table for OTA A/B images and useful
+  asset/storage space.
+
+FFT/BPM research:
+- [ ] Treat the live firmware FFT/BPM/phase pipeline as provisional and use
+  `../localFFT/benchmark` as the decision environment.
+- [ ] Expand the labeled corpus across genres, intros, breakdowns, silence,
+  tempo changes, noisy live input, ambiguous half/double tempo, and transitions
+  between songs.
+- [ ] Add reproducible per-track and transition metrics: convergence time,
+  strict BPM error, false switches, confidence calibration, CPU time, and memory.
+- [ ] Make benchmark parameters/configurations explicit so candidate strategies
+  share inputs, preprocessing, windows, and scoring.
+- [ ] Compare tempo strategies against the current accumulated normalized comb
+  score and hold/switch policy; preserve plots/traces for failed cases.
+- [ ] Investigate phase separately from BPM: onset/novelty phase stability,
+  ambiguity scoring, drift, and tracks with multiple plausible peaks.
+- [ ] Discuss the intended manual correction UI before implementation. Current
+  ideas are `normal` / `offbeat` phase plus separate `1x` / `2x` / `3x`
+  tempo or subdivision selection; naming and semantics are not decided.
+- [ ] Decide when automatic phase is trustworthy, when to keep the previous
+  phase, and when to ask the wearer for input.
+- [ ] Only port a benchmark strategy after measuring ESP32 real-time CPU, PSRAM,
+  latency, task interaction, and live-microphone behavior.
+
+Multi-suit show system:
+- [ ] Continue the PC editor as the authoring source of truth; do not move its
+  editing complexity into firmware.
+- [ ] Split `tools/show_editor/main_window.py` by responsibility while
+  preserving project/session behavior and export compatibility.
+- [ ] Refine effect-specific editing, selection, audio transport, timeline UX,
+  preview accuracy, presets, and schema migration/versioning.
+- [x] Complete package bounds validation and CRC checking on firmware.
+- [x] Implement bucketed, allocation-conscious show clip evaluation and spatial
+  LED rendering for the local suit role.
+- [x] Implement suit role selection, master start, ping/pong clock offsets,
+  periodic play/pause/stop transport, late catch-up, and standalone degraded
+  playback when peers disappear.
+- [ ] Add seek controls, reusable shared clock-sync extraction, authenticated
+  control traffic, reconnect stress tests, and measured drift correction over
+  full-length songs.
+- [ ] Integrate `track.wav` ownership/playback and configurable audio delay.
+- [x] Add exporter tests for v1.1 offsets, CRC, timing/color suffixes, and
+  content-derived UID changes.
+- [ ] Add firmware-parser golden/corrupted package tests and deterministic
+  preview/runtime effect parity tests.
+
+Structure, tests, and unfinished features:
+- [ ] Add host tests for link/telemetry codecs, LED layout mapping, show packages,
+  menu/registry consistency, NMEA parsing, and audio/service state machines.
+- [ ] Add CI, a formatter configuration, and a warning baseline.
+- [ ] Split large mixed-responsibility files internally: shell runtime/registry/
+  boot/link bridge; LED driver/mapping/color/effects; Master Control protocol/
+  controller/view; Message storage/capture/transport/UI; show-editor widgets and
+  controllers.
+- [ ] Audit and then archive/remove excluded backups, copied C files, old
+  entrypoints, Python bytecode, and stale sdkconfig copies.
+- [ ] Replace placeholder menu icons and complete real GPS, power logging,
+  message/call, Pong synchronization, game sound, and service-restart behavior.
+- [ ] Add real battery voltage/current measurements before broadcasting suit
+  telemetry.
+- [x] Implement the first synchronized handcrafted-song runtime through the show
+  system rather than one-off firmware code.
+- [ ] Rehearse it on all physical suits, tune role spacing/effects against the
+  real layouts, and finish synchronized audio.
 
 
 Legacy notes from original README
@@ -511,25 +790,27 @@ Power / thermal notes (legacy hardware sizing):
 Open TODO / wishlist (legacy backlog)
 -------------------------------------
 
+- general optimizations and better cpu ressource management
+- code cleanup: what are apps doing in main ? why are there other patches of code, bad structure
+- fix or change fft method (confidence, autosync with single phase peak musics, ...)
 - Menu/UI: replace placeholder icons
 - games sfx, conflict with audio player playing sfx ?
-- improve fft confidence and stop_blinking mechanic (we want to keep blinking under noisy music, but stop under musical noise : not easy!)
-- try to optimize fluid further without impacting on behavior, (we already managed to get it to run smooth on one core!)
-- fix and bring back GPS time and link quality.
-- fix GPS/message/call menu items to real apps
-- Link/comms: define structured bundles (leaderboard/GPS/messages/audio headers), add per-type ACK/retry, and integrate link frames into games/remote LED paint tools.
+- fix message and call, esp communication in general
 - fix Pong host election/ACK UI
--> test w/ F.U.Y.A. music
-- score com between costumes
-- accelerometer synth (theremin like? idk)
-- log of novely for fft?
-- autosync with single phase peak musics ? that's work !
+- handcrafted led animations on specific music
 
-- do spatial aware led animations based on limb orientation
+Not yet wired:
+- GPS time and position
 - Power: integrate current reading and store every now and then in sd card
+- accelerometer synth (theremin like? idk)
+- legs
+- gesture menu selection ?
 
 Extras:
+- do spatial aware led animations based on limb orientation
 - wide putin
 - create audio file that when displayed on the spectrogram, spell out words, as hidden messages
-- port more titles (tron/doom/pacman/etc.)
+- tron
+- doom
+- pacman
 - asteroids game !

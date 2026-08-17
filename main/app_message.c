@@ -1,6 +1,7 @@
 #include "app_shell.h"
 
 #include <errno.h>
+#include <ctype.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -18,6 +19,7 @@
 #include "bt_audio.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "fft.h"
 #include "microphone.h"
 #include "oled.h"
@@ -50,13 +52,20 @@ typedef struct {
     char path[128];
 } message_send_task_ctx_t;
 
+typedef struct {
+    size_t count;
+    uint64_t latest_num;
+    char latest_name[64];
+    char random_name[64];
+} message_outbox_scan_t;
+
 static message_state_t s_message = {
     .last_err = ESP_OK,
     .send_err = ESP_OK,
 };
 
 shell_legend_t MESSAGE_LEGEND = {
-    .slots = { SHELL_ICON_RECORD, SHELL_ICON_PLAY, SHELL_ICON_NONE, SHELL_ICON_SELECT },
+    .slots = { SHELL_ICON_RECORD, SHELL_ICON_PLAY, SHELL_ICON_REFRESH, SHELL_ICON_SELECT },
 };
 
 static void message_update_legend(void)
@@ -164,14 +173,95 @@ static esp_err_t message_start_receiver_if_possible(void)
     return err;
 }
 
+static bool message_parse_outbox_number(const char *name, uint64_t *out_num)
+{
+    if (!name) return false;
+    if (strncmp(name, "msg", 3) != 0) return false;
+
+    const char *p = name + 3;
+    if (*p == '_') {
+        ++p;
+    }
+    if (!isdigit((unsigned char)*p)) return false;
+
+    uint64_t num = 0;
+    while (isdigit((unsigned char)*p)) {
+        num = (num * 10u) + (uint64_t)(*p - '0');
+        ++p;
+    }
+    if (strcmp(p, ".wav") != 0) return false;
+
+    if (out_num) {
+        *out_num = num;
+    }
+    return true;
+}
+
+static esp_err_t message_build_outbox_path_from_name(const char *name, char *out, size_t out_len)
+{
+    if (!name || !name[0] || !out || out_len == 0) return ESP_ERR_INVALID_ARG;
+    int n = snprintf(out, out_len, "%s/%s", s_message.outbox_dir, name);
+    return (n > 0 && (size_t)n < out_len) ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+static esp_err_t message_select_outbox_name(const char *name)
+{
+    return message_build_outbox_path_from_name(name, s_message.last_path, sizeof(s_message.last_path));
+}
+
+static esp_err_t message_scan_outbox(message_outbox_scan_t *out)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    memset(out, 0, sizeof(*out));
+
+    if (!s_message.outbox_dir[0]) return ESP_ERR_INVALID_STATE;
+
+    DIR *dir = opendir(s_message.outbox_dir);
+    if (!dir) return ESP_ERR_NOT_FOUND;
+
+    struct dirent *ent = NULL;
+    while ((ent = readdir(dir)) != NULL) {
+        uint64_t num = 0;
+        if (!message_parse_outbox_number(ent->d_name, &num)) {
+            continue;
+        }
+
+        out->count++;
+        if (!out->latest_name[0] || num > out->latest_num) {
+            out->latest_num = num;
+            strncpy(out->latest_name, ent->d_name, sizeof(out->latest_name) - 1);
+            out->latest_name[sizeof(out->latest_name) - 1] = 0;
+        }
+        if ((esp_random() % out->count) == 0u) {
+            strncpy(out->random_name, ent->d_name, sizeof(out->random_name) - 1);
+            out->random_name[sizeof(out->random_name) - 1] = 0;
+        }
+    }
+    closedir(dir);
+
+    return out->count > 0 ? ESP_OK : ESP_ERR_NOT_FOUND;
+}
+
 static esp_err_t message_build_record_path(char *out, size_t out_len)
 {
     if (!out || out_len == 0) return ESP_ERR_INVALID_ARG;
     if (!s_message.sd_ready && !message_prepare_dirs()) {
         return ESP_ERR_INVALID_STATE;
     }
-    uint64_t stamp_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
-    int n = snprintf(out, out_len, "%s/msg_%" PRIu64 ".wav", s_message.outbox_dir, stamp_ms);
+
+    message_outbox_scan_t scan = {0};
+    esp_err_t scan_err = message_scan_outbox(&scan);
+    if (scan_err != ESP_OK && scan_err != ESP_ERR_NOT_FOUND) {
+        return scan_err;
+    }
+
+    uint64_t next_num = 1;
+    if (scan_err == ESP_OK) {
+        if (scan.latest_num == UINT64_MAX) return ESP_ERR_INVALID_STATE;
+        next_num = scan.latest_num + 1u;
+    }
+
+    int n = snprintf(out, out_len, "%s/msg%" PRIu64 ".wav", s_message.outbox_dir, next_num);
     return (n > 0 && (size_t)n < out_len) ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
@@ -187,30 +277,64 @@ static void message_restore_latest_outbox_path(void)
 {
     if (!s_message.outbox_dir[0]) return;
 
-    DIR *dir = opendir(s_message.outbox_dir);
-    if (!dir) return;
-
-    char best_name[64] = {0};
-    struct dirent *ent = NULL;
-    while ((ent = readdir(dir)) != NULL) {
-        const char *name = ent->d_name;
-        size_t len = strlen(name);
-        if (len < 5) continue;
-        if (strncmp(name, "msg_", 4) != 0) continue;
-        if (strcmp(name + len - 4, ".wav") != 0) continue;
-        if (best_name[0] == 0 || strcmp(name, best_name) > 0) {
-            strncpy(best_name, name, sizeof(best_name) - 1);
-            best_name[sizeof(best_name) - 1] = 0;
-        }
-    }
-    closedir(dir);
-
-    if (!best_name[0]) return;
-    int n = snprintf(s_message.last_path, sizeof(s_message.last_path), "%s/%s",
-                     s_message.outbox_dir, best_name);
-    if (n < 0 || (size_t)n >= sizeof(s_message.last_path)) {
+    message_outbox_scan_t scan = {0};
+    if (message_scan_outbox(&scan) != ESP_OK || !scan.latest_name[0]) return;
+    if (message_select_outbox_name(scan.latest_name) != ESP_OK) {
         s_message.last_path[0] = 0;
     }
+}
+
+static esp_err_t message_select_random_outbox_path(void)
+{
+    if (mic_rec_is_recording()) return ESP_ERR_INVALID_STATE;
+    if (s_message.send_active) return ESP_ERR_INVALID_STATE;
+    if (!s_message.sd_ready && !message_prepare_dirs()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    message_outbox_scan_t scan = {0};
+    esp_err_t err = message_scan_outbox(&scan);
+    if (err != ESP_OK) return err;
+    if (!scan.random_name[0]) return ESP_ERR_NOT_FOUND;
+
+    if (audio_player_is_active()) {
+        audio_player_stop();
+    }
+    return message_select_outbox_name(scan.random_name);
+}
+
+static esp_err_t message_delete_latest_outbox_path(void)
+{
+    if (mic_rec_is_recording()) return ESP_ERR_INVALID_STATE;
+    if (s_message.send_active) return ESP_ERR_INVALID_STATE;
+    if (!s_message.sd_ready && !message_prepare_dirs()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    message_outbox_scan_t scan = {0};
+    esp_err_t err = message_scan_outbox(&scan);
+    if (err != ESP_OK) return err;
+    if (!scan.latest_name[0]) return ESP_ERR_NOT_FOUND;
+
+    char latest_path[128];
+    err = message_build_outbox_path_from_name(scan.latest_name, latest_path, sizeof(latest_path));
+    if (err != ESP_OK) return err;
+
+    bool selected_was_latest = (s_message.last_path[0] != 0) &&
+                               (strcmp(s_message.last_path, latest_path) == 0);
+
+    if (audio_player_is_active()) {
+        audio_player_stop();
+    }
+    if (remove(latest_path) != 0) {
+        return ESP_FAIL;
+    }
+
+    if (selected_was_latest) {
+        s_message.last_path[0] = 0;
+        message_restore_latest_outbox_path();
+    }
+    return ESP_OK;
 }
 
 static void message_send_progress(size_t sent, size_t total, void *user_ctx)
@@ -354,23 +478,35 @@ void message_app_deinit(shell_app_context_t *ctx)
 void message_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 {
     (void)ctx;
-    if (!ev || ev->type != INPUT_EVENT_PRESS) return;
+    if (!ev) return;
 
-    if (ev->button == INPUT_BTN_B) {
-        s_message.last_err = message_toggle_playback();
+    if (ev->type == INPUT_EVENT_PRESS) {
+        if (ev->button == INPUT_BTN_B) {
+            s_message.last_err = message_toggle_playback();
+            return;
+        }
+
+        if (ev->button == INPUT_BTN_A) {
+            s_message.last_err = mic_rec_is_recording()
+                ? message_stop_recording()
+                : message_start_recording();
+            message_update_legend();
+            return;
+        }
+
+        if (ev->button == INPUT_BTN_C) {
+            s_message.last_err = message_select_random_outbox_path();
+            return;
+        }
+
+        if (ev->button == INPUT_BTN_D) {
+            s_message.last_err = message_start_send();
+        }
         return;
     }
 
-    if (ev->button == INPUT_BTN_A) {
-        s_message.last_err = mic_rec_is_recording()
-            ? message_stop_recording()
-            : message_start_recording();
-        message_update_legend();
-        return;
-    }
-
-    if (ev->button == INPUT_BTN_D) {
-        s_message.last_err = message_start_send();
+    if (ev->type == INPUT_EVENT_LONG_PRESS && ev->button == INPUT_BTN_C) {
+        s_message.last_err = message_delete_latest_outbox_path();
     }
 }
 

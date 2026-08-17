@@ -25,13 +25,13 @@ enum {
     FFT_CFG_SAMPLE_RATE_HZ = 16000,
     FFT_CFG_HOP_SAMPLES    = 256,   // 16 ms hop
     FFT_CFG_SIZE           = 1024,  // 64 ms window
-    FFT_CFG_NOVELTY_WIN    = 32,    // local mean window for novelty (~0.5 s)
+    FFT_CFG_NOVELTY_WIN    = 32,    // local mean window for flux display (~0.5 s)
     FFT_CFG_NOV_RING_FRAMES =
-        (6 * FFT_CFG_SAMPLE_RATE_HZ + (FFT_CFG_HOP_SAMPLES / 2)) / FFT_CFG_HOP_SAMPLES, // ~6 s
-    FFT_CFG_BPM_MIN        = 32,
-    FFT_CFG_BPM_MAX        = 255,
-    FFT_CFG_TARGET_BPM_MIN = 64,
-    FFT_CFG_TARGET_BPM_MAX = 127
+        (6 * FFT_CFG_SAMPLE_RATE_HZ + (FFT_CFG_HOP_SAMPLES / 2)) / FFT_CFG_HOP_SAMPLES, // ~6 s analysis history
+    FFT_CFG_BPM_MIN        = 80,
+    FFT_CFG_BPM_MAX        = 159,
+    FFT_CFG_TARGET_BPM_MIN = 80,
+    FFT_CFG_TARGET_BPM_MAX = 159
 };
 
 typedef enum {
@@ -84,6 +84,8 @@ void fft_beat_lock_set(bool locked);
 void fft_beat_lock_toggle(void);
 void fft_beat_enable_set(bool enabled);
 void fft_beat_enable_toggle(void);
+void fft_led_export_enable(bool enabled);
+bool fft_led_export_enabled(void);
 
 // Enable or disable OLED rendering; beat detection and sampling keep running.
 void fft_set_display_enabled(bool enabled);

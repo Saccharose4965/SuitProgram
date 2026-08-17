@@ -15,8 +15,11 @@ Current limitations:
 - GUI requires `PySide6`
 - waveform loader currently supports WAV input only
 - audio playback depends on Qt multimedia working on the local machine
-- no firmware renderer yet
-- exporter only packs a minimal runtime structure
+- firmware playback supports the current compiled effect set, role-local
+  rendering, and synchronized transport
+- exporter/runtime format v1.1 carries BPM, beat offset, and compact per-clip
+  hold/linear/smooth/cycle colors; numeric automation curves and richer
+  editor-only abstractions still need explicit compilation
 - effect authoring still relies on the clip inspector and raw params JSON rather than dedicated per-effect widgets
 
 ## Example

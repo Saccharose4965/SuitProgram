@@ -52,6 +52,7 @@ static const led_mode_desc_t s_modes[] = {
     { "chase_bg" },
     { "chase_pair_bg" },
     { "chase_swarm_bg" },
+    { "fire"    },
     { "random"  },
 };
 static const int kModeCount = sizeof(s_modes) / sizeof(s_modes[0]);
@@ -61,6 +62,9 @@ static volatile int s_mode = 0;
 static volatile bool s_enabled = false;
 static TaskHandle_t s_task = NULL;
 static bool s_sync_enabled = true;
+static bool s_sync_clock_active = false;
+static float s_sync_time_sec = 0.0f;
+static portMUX_TYPE s_sync_clock_mux = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t s_brightness = 96;
 static volatile uint8_t s_speed_percent = 100;
 static uint8_t s_primary_r = 0;
@@ -134,6 +138,28 @@ static int pick_shuffle_mode(int prev_mode)
     return picked;
 }
 
+static uint32_t shuffle_hash(uint32_t value)
+{
+    value ^= value >> 16;
+    value *= UINT32_C(0x7FEB352D);
+    value ^= value >> 15;
+    value *= UINT32_C(0x846CA68B);
+    return value ^ (value >> 16);
+}
+
+static int pick_synced_shuffle_mode(uint32_t epoch)
+{
+    const int first = 2;
+    const int count = kShuffleModeIndex - first;
+    if (count <= 0) return 1;
+    int picked = first + (int)(shuffle_hash(epoch) % (uint32_t)count);
+    if (epoch > 0 && count > 1) {
+        int previous = first + (int)(shuffle_hash(epoch - 1u) % (uint32_t)count);
+        if (picked == previous) picked = first + ((picked - first + 1) % count);
+    }
+    return picked;
+}
+
 int led_modes_count(void) { return kModeCount; }
 const char *led_modes_name(int idx) { return (idx >= 0 && idx < kModeCount) ? s_modes[idx].name : NULL; }
 int led_modes_current(void) { return s_mode; }
@@ -142,6 +168,27 @@ void led_modes_enable(bool enabled) { s_enabled = enabled; }
 bool led_modes_enabled(void) { return s_enabled; }
 void led_modes_set_sync(bool enabled) { s_sync_enabled = enabled; }
 bool led_modes_sync_enabled(void) { return s_sync_enabled; }
+void led_modes_set_sync_clock(bool active, float time_sec)
+{
+    if (!isfinite(time_sec) || time_sec < 0.0f) {
+        time_sec = 0.0f;
+    }
+    portENTER_CRITICAL(&s_sync_clock_mux);
+    s_sync_time_sec = time_sec;
+    s_sync_clock_active = active;
+    portEXIT_CRITICAL(&s_sync_clock_mux);
+}
+bool led_modes_get_sync_clock(float *time_sec)
+{
+    bool active;
+    float value;
+    portENTER_CRITICAL(&s_sync_clock_mux);
+    active = s_sync_clock_active;
+    value = s_sync_time_sec;
+    portEXIT_CRITICAL(&s_sync_clock_mux);
+    if (time_sec) *time_sec = value;
+    return active;
+}
 void led_modes_set_brightness(uint8_t level) { s_brightness = level; }
 uint8_t led_modes_get_brightness(void) { return s_brightness; }
 void led_modes_set_speed_percent(uint8_t percent) {
@@ -842,6 +889,66 @@ static void render_contour(uint8_t *buf, size_t count,
     }
 }
 
+static void render_fire(uint8_t *buf, size_t count,
+                        const led_layout_config_t *cfg,
+                        const layout_stats_t *stats,
+                        float t_sec, uint8_t r, uint8_t g, uint8_t b)
+{
+    (void)cfg;
+    if (!stats || count == 0) return;
+
+    uint8_t sr = 0, sg = 0, sb = 0;
+    led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
+
+    float span_x = stats->max_x - stats->min_x;
+    float span_y = stats->max_y - stats->min_y;
+    float span_z = stats->max_z - stats->min_z;
+    if (span_x < 1.0f) span_x = 1.0f;
+    if (span_y < 1.0f) span_y = 1.0f;
+    if (span_z < 1.0f) span_z = 1.0f;
+
+    float inv_x = 1.0f / (0.30f * span_x + 1.0f);
+    float inv_z = 1.0f / (0.34f * span_z + 1.0f);
+
+    for (size_t i = 0; i < count; ++i) {
+        if (!s_spatial_point_valid[i]) continue;
+        const led_point_t *p = &s_spatial_points[i];
+        float lift = (p->y - stats->min_y) / span_y;
+        if (lift < 0.0f) lift = 0.0f;
+        if (lift > 1.0f) lift = 1.0f;
+        float fuel = 1.0f - lift;
+        float nx = (p->x - stats->avg_x) * inv_x;
+        float nz = (p->z - stats->avg_z) * inv_z;
+        float core = expf(-(nx * nx + 0.75f * nz * nz));
+        float curl0 = 0.5f + 0.5f * sinf(0.28f * p->x - t_sec * 2.4f +
+                                         5.6f * lift + 0.7f * sinf(0.18f * p->z + t_sec * 1.2f));
+        float curl1 = 0.5f + 0.5f * sinf(-0.20f * p->x - t_sec * 1.7f +
+                                         7.4f * lift + 0.4f * sinf(0.14f * p->y + t_sec * 0.9f));
+        float sway = 0.5f + 0.5f * sinf(0.34f * p->z + t_sec * 1.5f - 3.0f * nx + 8.5f * lift);
+        curl0 *= curl0;
+        curl1 *= curl1;
+        sway *= sway;
+
+        float ember = fuel * fuel * (0.18f + 0.22f * core);
+        float flame = fuel * (0.10f + 0.90f * core) * (0.25f + 0.75f * curl0);
+        flame += 0.35f * fuel * fuel * (0.15f + 0.85f * curl1);
+        flame *= 0.30f + 0.70f * sway;
+        flame -= 0.32f * lift * lift;
+        if (flame < 0.01f && ember < 0.01f) continue;
+
+        float spark_phase = 0.5f + 0.5f * sinf(1.2f * p->x + 1.8f * p->z - t_sec * 9.0f + 18.0f * lift);
+        float spark = (spark_phase > 0.985f) ? (fuel * (spark_phase - 0.985f) * 65.0f) : 0.0f;
+        float primary_w = 0.20f * ember + 0.34f * flame * (1.0f - curl1) + 0.10f * core * fuel;
+        float secondary_w = 0.28f * ember + 0.92f * flame + 0.18f * core * fuel;
+        float white_w = 0.08f * ember + 0.16f * flame * flame + spark;
+
+        add_mixed_color(buf, i, r, g, b, sr, sg, sb,
+                        primary_w,
+                        secondary_w,
+                        white_w);
+    }
+}
+
 static void render_orbit(uint8_t *buf, size_t count,
                          const led_layout_config_t *cfg,
                          const layout_stats_t *stats,
@@ -1315,31 +1422,48 @@ static void led_modes_task(void *arg)
         if (speed_scale < 0.10f) speed_scale = 0.10f;
         if (speed_scale > 2.50f) speed_scale = 2.50f;
         t_sec += dt_sec * speed_scale;
+        bool sync_clock_active;
+        float sync_time_sec;
+        portENTER_CRITICAL(&s_sync_clock_mux);
+        sync_clock_active = s_sync_clock_active;
+        sync_time_sec = s_sync_time_sec;
+        portEXIT_CRITICAL(&s_sync_clock_mux);
+        bool use_sync_clock = s_sync_enabled && sync_clock_active;
+        if (!isfinite(sync_time_sec) || sync_time_sec < 0.0f) {
+            sync_time_sec = 0.0f;
+            use_sync_clock = false;
+        }
 
         size_t count = custom_render_pixels();
         memset(frame, 0, sizeof(frame));
-        uint8_t pr = 0, pg = 0, pb = 0;
-        led_modes_sample_color(t_sec, &pr, &pg, &pb);
-
         int mode = clamp_mode(s_mode);
         int effective_mode = mode;
-        float render_t_sec = t_sec;
+        float render_t_sec = use_sync_clock ? (sync_time_sec * speed_scale) : t_sec;
         if (mode == kShuffleModeIndex) {
-            int64_t now_us = esp_timer_get_time();
-            if (shuffle_mode < 0 || now_us >= shuffle_next_switch_us) {
-                shuffle_mode = pick_shuffle_mode(shuffle_mode);
-                shuffle_next_switch_us = now_us + LED_MODES_SHUFFLE_INTERVAL_US;
-                shuffle_t_sec = 0.0f;
+            if (use_sync_clock) {
+                const float interval_sec = (float)LED_MODES_SHUFFLE_INTERVAL_US / 1000000.0f;
+                uint32_t epoch = (uint32_t)floorf(render_t_sec / interval_sec);
+                effective_mode = pick_synced_shuffle_mode(epoch);
+                render_t_sec = fmodf(render_t_sec, interval_sec);
             } else {
-                shuffle_t_sec += dt_sec * speed_scale;
+                int64_t now_us = esp_timer_get_time();
+                if (shuffle_mode < 0 || now_us >= shuffle_next_switch_us) {
+                    shuffle_mode = pick_shuffle_mode(shuffle_mode);
+                    shuffle_next_switch_us = now_us + LED_MODES_SHUFFLE_INTERVAL_US;
+                    shuffle_t_sec = 0.0f;
+                } else {
+                    shuffle_t_sec += dt_sec * speed_scale;
+                }
+                effective_mode = shuffle_mode;
+                render_t_sec = shuffle_t_sec;
             }
-            effective_mode = shuffle_mode;
-            render_t_sec = shuffle_t_sec;
         } else {
             shuffle_mode = -1;
             shuffle_next_switch_us = 0;
             shuffle_t_sec = 0.0f;
         }
+        uint8_t pr = 0, pg = 0, pb = 0;
+        led_modes_sample_color(render_t_sec, &pr, &pg, &pb);
         layout_stats_t stats = {0};
         bool use_layout_mode = mode_uses_layout(effective_mode);
         if (use_layout_mode) {
@@ -1382,6 +1506,7 @@ static void led_modes_task(void *arg)
             case 22: render_chase_config(frame, count, render_t_sec, pr, pg, pb, 0, true); break;
             case 23: render_chase_config(frame, count, render_t_sec, pr, pg, pb, 1, true); break;
             case 24: render_chase_config(frame, count, render_t_sec, pr, pg, pb, 2, true); break;
+            case 25: render_fire(frame, count, &s_render_layout, &stats, render_t_sec, pr, pg, pb); break;
             default: render_fill(frame, count, 0, 0, 0); break;
         }
 

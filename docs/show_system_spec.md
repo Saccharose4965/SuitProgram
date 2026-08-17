@@ -21,6 +21,15 @@ This is a v1 engineering spec. It should optimize for:
 - no live frame streaming between costumes
 - compact SD-backed playback
 
+Implementation snapshot (2026-08-17): the silent LED vertical slice is now
+implemented. The exporter writes format `1.1`; firmware performs full bounds
+and CRC validation, loads the selected role and buckets, resolves local layout
+semantics, renders the compiled effect catalog and per-clip color programs,
+arbitrates LED ownership, and
+synchronizes play/pause/stop with ping-derived peer clock offsets. Audio,
+authenticated control, seek UI, long-duration drift tests, and extraction of a
+shared clock-sync component remain open.
+
 ## Guiding Decisions
 
 ### 1. Compile convenience into runtime simplicity
@@ -147,10 +156,18 @@ Current torso and arm IDs:
 
 Reserved future IDs for legs:
 
-- `left_upper_leg`
-- `left_lower_leg`
-- `right_upper_leg`
-- `right_lower_leg`
+- `left_thigh_front`
+- `left_thigh_back`
+- `left_shin_f_in`
+- `left_shin_f_out`
+- `left_shin_b_in`
+- `left_shin_b_out`
+- `right_thigh_front`
+- `right_thigh_back`
+- `right_shin_f_in`
+- `right_shin_f_out`
+- `right_shin_b_in`
+- `right_shin_b_out`
 
 ### Canonical group IDs
 
@@ -219,7 +236,7 @@ The container is binary and read-optimized.
 typedef struct __attribute__((packed)) {
     uint32_t magic;              // 'SWS1'
     uint16_t version_major;      // 1
-    uint16_t version_minor;      // 0
+    uint16_t version_minor;      // 1
     uint32_t header_bytes;
     uint32_t file_bytes;
     uint32_t crc32;
@@ -243,9 +260,19 @@ typedef struct __attribute__((packed)) {
 
 Notes:
 
-- `show_uid` is a stable hash of the show identity.
+- `show_uid` is a stable hash of the complete editable show content.
 - `crc32` validates the compiled package.
 - `bucket_ms` defines the seek/index granularity.
+
+Format `1.1` appends this timing extension between the base header and role
+table while retaining the v1 base header:
+
+```c
+typedef struct __attribute__((packed)) {
+    uint32_t tempo_millibpm;
+    int32_t beat_offset_ms;
+} sws_timing_v1_1_t;
+```
 
 ### Role table
 
@@ -328,6 +355,12 @@ Effect-specific parameters are stored in a packed blob.
 This avoids inflating the fixed clip structure while keeping export flexible.
 
 Each effect kind owns the meaning of its parameter block.
+
+In format `1.1`, a solid or spatial parameter block may carry an optional
+compact color-program suffix: mode (`linear`, `smooth`, or `cycle`), timing
+flags/rate, and up to 16 RGBA stops. No suffix means a static hold color. This
+keeps common clips small while making exported editor color behavior explicit
+instead of silently flattening it.
 
 ## Effect Model
 
@@ -509,7 +542,7 @@ When a show is selected, the runtime should:
 3. validate header and CRC
 4. resolve the selected role program
 5. load or map the role clip stream into RAM or PSRAM
-6. open `track.wav` path for optional local audio playback
+6. open `track.wav` path for optional local audio playback (not implemented yet)
 7. build local section/group resolution tables from `led_layout`
 
 ### Memory strategy
@@ -561,7 +594,7 @@ Each LED frame:
 3. filter clips where `start_ms <= playhead_ms < end_ms`
 4. sort/evaluate them by layer
 5. render into the LED framebuffer using local layout resolution
-6. submit frame with `led_show_pixels`
+6. submit through the show owner with `led_show_pixels_owned`
 
 ### Clip evaluation model
 
@@ -606,7 +639,7 @@ exists in the transport model.
 
 ### Clock sync
 
-Show sync should not invent a second independent clock-sync mechanism.
+Long term, show sync should not keep a second independent clock-sync mechanism.
 
 Instead, the existing master/slave clock alignment logic should be extracted
 into a reusable service, for example:
@@ -620,7 +653,9 @@ Responsibilities:
 - offset estimate
 - one-way latency estimate
 
-The show player then consumes this service.
+The current vertical slice keeps ping/pong offset estimation inside
+`show_runtime.c`; extracting the common math used by Master Control is a named
+refactor, not a protocol behavior change.
 
 ### Transport authority
 
@@ -816,7 +851,7 @@ Deliver:
 - basic 3D preview
 - export skeleton that writes a valid `show.bin`
 
-### Phase 2: Firmware show loader
+### Phase 2: Firmware show loader — implemented
 
 Deliver:
 
@@ -826,13 +861,13 @@ Deliver:
 - basic clip playback for a small effect set
 - dedicated `show_player` shell app
 
-### Phase 3: Multi-suit sync
+### Phase 3: Multi-suit sync — core transport implemented
 
 Deliver:
 
-- reusable clock sync service
+- reusable clock sync service (private implementation exists; extraction open)
 - show transport packets
-- arm/play/pause/seek/restart
+- play/pause/restart/stop (seek UI remains open)
 - catch-up for late joiners
 
 ### Phase 4: Audio ownership
@@ -852,20 +887,9 @@ Deliver:
 - advanced sweep and palette tools
 - stronger 3D preview and layout refinement workflow
 
-## Immediate Build Target
+## Next Build Target
 
-The first coding target after this spec should be:
-
-1. build the editor scaffold in `tools/show_editor/`
-2. define the canonical section/group enums in code
-3. write a tiny exporter that emits a minimal valid `show.bin`
-4. add a firmware-side loader that can inspect and validate the package
-
-That gives a clean vertical slice:
-
-- editor project
-- export
-- SD package
-- firmware load
-
-before tackling the full effect engine and sync layer.
+The editor/export/SD/renderer/sync vertical slice exists. The next target is a
+physical three-suit rehearsal with the same exported packages, followed by
+golden/corrupt package tests, measured long-song drift, seek controls, and
+single-owner `track.wav` playback with audio-delay calibration.

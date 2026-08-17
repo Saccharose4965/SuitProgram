@@ -12,12 +12,14 @@ idf_component_register(
         "app_settings.c"
         "app_led_support.c"
         "app_leds.c"
+        "app_led_source.c"
         "app_led_color.c"
         "app_led_layout.c"
         "app_manual_bpm.c"
         "app_fft.c"
         "app_fft_sync.c"
         "app_music.c"
+        "app_show_player.c"
         "app_bt.c"
         "app_message.c"
         "app_file_rx.c"
@@ -35,5 +37,5 @@ idf_component_register(
         "shell_audio.c"
         "shell_profiler.c"
     INCLUDE_DIRS "."
-    REQUIRES state input oled hw ui_shell flappy twenty48 tetris audio audio_player fft keyboard storage_sd gps led_modes led_layout power link audio_rx bt_audio snake pong threedee fluid orientation bad_apple calculator logo microphone telemetry
+    REQUIRES state input oled hw ui_shell flappy twenty48 tetris audio audio_player fft keyboard storage_sd gps led_modes led_layout power link audio_rx bt_audio snake pong threedee fluid orientation bad_apple calculator logo microphone telemetry show
 )

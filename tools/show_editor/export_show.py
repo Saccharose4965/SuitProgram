@@ -3,16 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import hashlib
+import json
 import shutil
 import struct
 import zlib
 
 from .canonical_layout import GROUP_IDS, ROLE_NAMES, SECTION_IDS
-from .project_model import ShowClip, ShowProject
+from .color_palettes import parse_palette_text_even, resolve_palette_text
+from .project_model import ShowClip, ShowProject, project_to_obj
 
 SHOW_FILE_MAGIC_V1 = 0x31535753
 SHOW_FILE_VERSION_MAJOR_V1 = 1
-SHOW_FILE_VERSION_MINOR_V1 = 0
+SHOW_FILE_VERSION_MINOR_V1 = 1
 
 SHOW_TARGET_KIND_ALL = 1
 SHOW_TARGET_KIND_SECTION = 2
@@ -45,11 +47,21 @@ SHOW_EFFECT_GROUND_ENERGY = 16
 SHOW_EFFECT_RADIAL_RAY = 17
 
 HEADER_STRUCT = struct.Struct("<IHHIIIQIHHHHHHIIIIIII")
+TIMING_STRUCT = struct.Struct("<Ii")
 ROLE_STRUCT = struct.Struct("<BBHIIII")
 BUCKET_STRUCT = struct.Struct("<IIHH")
 CLIP_STRUCT = struct.Struct("<IIHBBBBIHHHHIHH")
 SOLID_PARAM_STRUCT = struct.Struct("<BBBBHH")
 SPATIAL_PARAM_STRUCT = struct.Struct("<BBBBBBBBBBHHHHHHHHHH")
+COLOR_ANIM_STRUCT = struct.Struct("<BBBBI")
+COLOR_STOP_STRUCT = struct.Struct("<HBBBB")
+
+SHOW_COLOR_MODE_LINEAR = 1
+SHOW_COLOR_MODE_SMOOTH = 2
+SHOW_COLOR_MODE_CYCLE = 3
+SHOW_COLOR_FLAG_TEMPO_SYNC = 1 << 0
+SHOW_COLOR_FLAG_FIT_CLIP = 1 << 1
+SHOW_SPATIAL_OPTION_RANDOM_CROSS_X = 1 << 15
 
 BLEND_IDS = {
     "replace": SHOW_BLEND_REPLACE,
@@ -112,11 +124,20 @@ class ExportResult:
 
 
 def _show_uid(project: ShowProject) -> int:
-    digest = hashlib.blake2b(
-        f"{project.slug}\n{project.title}\n{project.duration_ms}".encode("utf-8"),
-        digest_size=8,
-    ).digest()
+    canonical = json.dumps(
+        project_to_obj(project), sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    digest = hashlib.blake2b(canonical, digest_size=8).digest()
     return int.from_bytes(digest, "little")
+
+
+def _clip_seed(clip: ShowClip) -> int:
+    payload = (
+        f"{clip.effect}|{clip.target_kind}|{clip.target}|"
+        f"{clip.layer}|{clip.start_ms}|{clip.end_ms}"
+    ).encode("utf-8")
+    return zlib.crc32(payload) & 0xFFFF
 
 
 def _target_names(target: str) -> list[str]:
@@ -154,8 +175,60 @@ def _clip_targets(clip: ShowClip) -> list[tuple[int, int]]:
     raise ShowExportError(f"unknown target kind: {clip.target_kind}")
 
 
-def _solid_param_bytes(clip: ShowClip) -> bytes:
-    color = clip.params.get("color", [255, 255, 255, 255])
+def _rgba_param(clip: ShowClip, key: str, fallback: list[int]) -> list[int]:
+    value = clip.params.get(key, fallback)
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        raise ShowExportError(f"{key} must contain 4 channels")
+    return [max(0, min(255, int(channel))) for channel in value]
+
+
+def _color_param_bytes(project: ShowProject, clip: ShowClip) -> tuple[list[int], list[int], bytes]:
+    fallback = _rgba_param(clip, "color", [255, 255, 255, 255])
+    color_from = _rgba_param(clip, "color_from", fallback)
+    color_to = _rgba_param(clip, "color_to", color_from)
+    mode_name = str(clip.params.get("color_mode", "hold")).strip().lower()
+    mode = {
+        "linear": SHOW_COLOR_MODE_LINEAR,
+        "smooth": SHOW_COLOR_MODE_SMOOTH,
+        "cycle": SHOW_COLOR_MODE_CYCLE,
+    }.get(mode_name)
+    if mode is None:
+        return color_from, color_to, b""
+
+    stops: list[tuple[float, tuple[int, int, int, int]]]
+    if mode == SHOW_COLOR_MODE_CYCLE:
+        palette_text = resolve_palette_text(
+            project.palettes,
+            str(clip.params.get("color_palette_preset", "")),
+            str(clip.params.get("palette_text", "")),
+        )
+        stops = parse_palette_text_even(palette_text)
+    else:
+        stops = []
+    if not stops:
+        stops = [(0.0, tuple(color_from)), (1.0, tuple(color_to))]
+    if len(stops) > 16:
+        raise ShowExportError("color animation supports at most 16 stops")
+
+    flags = 0
+    if bool(clip.params.get("color_tempo_sync", True)):
+        flags |= SHOW_COLOR_FLAG_TEMPO_SYNC
+    if bool(clip.params.get("color_fit_to_clip", False)):
+        flags |= SHOW_COLOR_FLAG_FIT_CLIP
+    rate = max(0.0, float(clip.params.get("color_rate", 1.0)))
+    suffix = bytearray(COLOR_ANIM_STRUCT.pack(
+        mode, flags, len(stops), 0,
+        max(0, min(0xFFFFFFFF, int(round(rate * 1000000.0)))),
+    ))
+    for position, rgba in stops:
+        suffix.extend(COLOR_STOP_STRUCT.pack(
+            _u16_scaled(max(0.0, min(1.0, position))), *rgba,
+        ))
+    return color_from, color_to, bytes(suffix)
+
+
+def _solid_param_bytes(project: ShowProject, clip: ShowClip) -> bytes:
+    color, _to_color, color_suffix = _color_param_bytes(project, clip)
     if len(color) != 4:
         raise ShowExportError("solid.color must contain 4 channels")
     intensity = float(clip.params.get("intensity", 1.0))
@@ -170,7 +243,7 @@ def _solid_param_bytes(clip: ShowClip) -> bytes:
         int(color[3]) & 0xFF,
         int(round(intensity * 1024.0)) & 0xFFFF,
         0,
-    )
+    ) + color_suffix
 
 
 def _u16_scaled(value: float, scale: float = 1024.0) -> int:
@@ -192,16 +265,14 @@ def _clip_axis_random_mix(clip: ShowClip) -> float:
     return int.from_bytes(digest, "little") / 65535.0
 
 
-def _spatial_param_bytes(clip: ShowClip) -> bytes:
-    color = clip.params.get("color", [255, 255, 255, 255])
-    to_color = clip.params.get("to_color", [0, 0, 0, 255])
-    if not isinstance(color, (list, tuple)) or len(color) != 4:
-        raise ShowExportError("color must contain 4 channels")
-    if not isinstance(to_color, (list, tuple)) or len(to_color) != 4:
-        raise ShowExportError("to_color must contain 4 channels")
+def _spatial_param_bytes(project: ShowProject, clip: ShowClip) -> bytes:
+    color, to_color, color_suffix = _color_param_bytes(project, clip)
     axis = str(clip.params.get("axis", "y"))
     if axis not in AXIS_IDS:
         raise ShowExportError(f"unknown axis: {axis}")
+    softness_value = float(clip.params.get("softness", 0.16))
+    if clip.effect == "blink":
+        softness_value = float(clip.params.get("decay", 0.0))
     return SPATIAL_PARAM_STRUCT.pack(
         int(color[0]) & 0xFF,
         int(color[1]) & 0xFF,
@@ -215,18 +286,20 @@ def _spatial_param_bytes(clip: ShowClip) -> bytes:
         1 if bool(clip.params.get("reverse", False)) else 0,
         _u16_scaled(float(clip.params.get("intensity", 1.0))),
         _u16_scaled(float(clip.params.get("width", 0.22))),
-        _u16_scaled(float(clip.params.get("softness", 0.16))),
+        _u16_scaled(softness_value),
         _u16_scaled(float(clip.params.get("frequency_hz", 1.0))),
         _u16_scaled(float(clip.params.get("phase", 0.0))),
         max(0, min(0xFFFF, int(clip.params.get("repeats", 1)))),
         _u16_scaled(float(clip.params.get("duty_cycle", 0.5))),
         _u16_scaled(float(clip.params.get("min_intensity", 0.0))),
         _u16_scaled(float(clip.params.get("max_intensity", 1.0))),
-        _u16_scaled(_clip_axis_random_mix(clip)),
-    )
+        _u16_scaled(_clip_axis_random_mix(clip)) |
+        (SHOW_SPATIAL_OPTION_RANDOM_CROSS_X
+         if bool(clip.params.get("random_cross_x", False)) else 0),
+    ) + color_suffix
 
 
-def _compile_clips(clip: ShowClip) -> list[CompiledClip]:
+def _compile_clips(project: ShowProject, clip: ShowClip) -> list[CompiledClip]:
     if clip.end_ms <= clip.start_ms:
         raise ShowExportError("clip end_ms must be greater than start_ms")
     if clip.effect not in EFFECT_IDS:
@@ -237,7 +310,8 @@ def _compile_clips(clip: ShowClip) -> list[CompiledClip]:
     targets = _clip_targets(clip)
     if not targets:
         return []
-    param_bytes = _solid_param_bytes(clip) if clip.effect == "solid" else _spatial_param_bytes(clip)
+    param_bytes = (_solid_param_bytes(project, clip) if clip.effect == "solid"
+                   else _spatial_param_bytes(project, clip))
     clip_flags = SHOW_CLIP_FLAG_TEMPO_SYNC if bool(clip.params.get("tempo_sync", False)) else 0
 
     return [
@@ -254,7 +328,7 @@ def _compile_clips(clip: ShowClip) -> list[CompiledClip]:
             fade_in_ms_div10=0,
             fade_out_ms_div10=0,
             param_bytes=param_bytes,
-            seed=0,
+            seed=_clip_seed(clip),
         )
         for target_kind, target_id in targets
     ]
@@ -265,7 +339,7 @@ def _role_clips(project: ShowProject, role: str) -> list[CompiledClip]:
     items.extend(project.role_clips.get(role, []))
     compiled: list[CompiledClip] = []
     for clip in items:
-        compiled.extend(_compile_clips(clip))
+        compiled.extend(_compile_clips(project, clip))
     compiled.sort(key=lambda item: (item.start_ms, item.layer, item.end_ms))
     return compiled
 
@@ -296,7 +370,8 @@ def export_show(project: ShowProject, output_dir: str | Path, copy_audio: bool =
         for role in ROLE_NAMES
     }
 
-    role_table_offset = HEADER_STRUCT.size
+    header_bytes = HEADER_STRUCT.size + TIMING_STRUCT.size
+    role_table_offset = header_bytes
     palette_table_offset = role_table_offset + len(ROLE_NAMES) * ROLE_STRUCT.size
     group_table_offset = palette_table_offset
     bucket_table_offset = group_table_offset
@@ -391,7 +466,7 @@ def export_show(project: ShowProject, output_dir: str | Path, copy_audio: bool =
         SHOW_FILE_MAGIC_V1,
         SHOW_FILE_VERSION_MAJOR_V1,
         SHOW_FILE_VERSION_MINOR_V1,
-        HEADER_STRUCT.size,
+        header_bytes,
         file_bytes,
         0,
         _show_uid(project),
@@ -412,6 +487,12 @@ def export_show(project: ShowProject, output_dir: str | Path, copy_audio: bool =
     )
     payload = bytearray()
     payload.extend(header)
+    payload.extend(
+        TIMING_STRUCT.pack(
+            max(0, min(0xFFFFFFFF, int(round(project.tempo_bpm * 1000.0)))),
+            max(-0x80000000, min(0x7FFFFFFF, int(project.beat_offset_ms))),
+        )
+    )
     payload.extend(role_blob)
     payload.extend(bucket_blob)
     payload.extend(patched_clip_blob)
@@ -422,7 +503,7 @@ def export_show(project: ShowProject, output_dir: str | Path, copy_audio: bool =
         SHOW_FILE_MAGIC_V1,
         SHOW_FILE_VERSION_MAJOR_V1,
         SHOW_FILE_VERSION_MINOR_V1,
-        HEADER_STRUCT.size,
+        header_bytes,
         file_bytes,
         crc32,
         _show_uid(project),

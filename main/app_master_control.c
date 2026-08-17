@@ -19,7 +19,7 @@ const shell_legend_t MASTER_CONTROL_LEGEND = {
 };
 
 enum {
-    MASTER_CTRL_PROTO_VER = 4,
+    MASTER_CTRL_PROTO_VER = 5,
     MASTER_CTRL_PKT_PING_REQ = 1,
     MASTER_CTRL_PKT_PING_RESP = 2,
     MASTER_CTRL_PKT_STATE = 3,
@@ -119,6 +119,8 @@ typedef struct __attribute__((packed)) {
     uint8_t secondary_g;
     uint8_t secondary_b;
     int64_t anchor_beat_us;
+    int64_t animation_sample_us;
+    uint32_t animation_time_ms;
     uint32_t seq;
 } master_ctrl_state_pkt_t;
 
@@ -160,6 +162,7 @@ typedef struct {
     int64_t last_ping_us;
     int64_t last_state_us;
     int64_t last_source_next_beat_us;
+    int64_t animation_anchor_us;
     uint32_t token_seq;
     uint32_t state_seq;
     master_ctrl_peer_t peers[MASTER_CTRL_MAX_PEERS];
@@ -177,6 +180,8 @@ typedef struct {
     int64_t sync_trim_us;
     int64_t queued_resync_beat_us;
     int64_t next_beat_us;
+    int64_t animation_sample_us;
+    uint32_t animation_time_ms;
     int64_t last_update_us;
     uint8_t source_kind;
     uint8_t source_flags;
@@ -753,6 +758,13 @@ static void master_ctrl_send_state_updates(int64_t now_us, const master_ctrl_sou
         period_us = master_ctrl_period_us_from_bpm(target_bpm);
     }
     bool beat_clock_valid = state->beat_active && period_us > 0 && state->next_beat_us > 0;
+    float animation_time_sec = 0.0f;
+    if (!led_modes_get_sync_clock(&animation_time_sec) ||
+        !isfinite(animation_time_sec) || animation_time_sec < 0.0f) {
+        animation_time_sec = (float)(now_us - s_master.animation_anchor_us) / 1000000.0f;
+        if (animation_time_sec < 0.0f) animation_time_sec = 0.0f;
+    }
+    uint32_t animation_time_ms = (uint32_t)llroundf(animation_time_sec * 1000.0f);
 
     for (size_t i = 0; i < MASTER_CTRL_MAX_PEERS; ++i) {
         master_ctrl_peer_t *peer = &s_master.peers[i];
@@ -795,6 +807,8 @@ static void master_ctrl_send_state_updates(int64_t now_us, const master_ctrl_sou
             .secondary_g = state->secondary_g,
             .secondary_b = state->secondary_b,
             .anchor_beat_us = beat_clock_valid ? (anchor_master_us + peer->offset_us) : 0,
+            .animation_sample_us = now_us + peer->offset_us,
+            .animation_time_ms = animation_time_ms,
             .seq = ++s_master.state_seq,
         };
 
@@ -838,6 +852,7 @@ static void master_ctrl_begin_master_session(void)
     s_master.last_ping_us = 0;
     s_master.last_state_us = 0;
     s_master.last_source_next_beat_us = 0;
+    s_master.animation_anchor_us = esp_timer_get_time();
     s_master.token_seq = 0;
     s_master.state_seq = 0;
     master_ctrl_clear_slave();
@@ -880,6 +895,13 @@ static void master_ctrl_master_tick(int64_t now_us)
     master_ctrl_apply_master_color_policy();
     master_ctrl_source_state_t state = {0};
     master_ctrl_capture_source_state(now_us, &state);
+    if (state.custom_active) {
+        float sync_time_sec = 0.0f;
+        if (!led_modes_get_sync_clock(&sync_time_sec)) {
+            sync_time_sec = (float)(now_us - s_master.animation_anchor_us) / 1000000.0f;
+            led_modes_set_sync_clock(true, sync_time_sec);
+        }
+    }
     uint8_t state_flags = 0;
     if (state.beat_active) state_flags |= MASTER_CTRL_STATE_FLAG_BEAT_ACTIVE;
     if (state.custom_active) state_flags |= MASTER_CTRL_STATE_FLAG_CUSTOM_ACTIVE;
@@ -978,6 +1000,11 @@ static void master_ctrl_slave_tick(int64_t now_us)
     master_ctrl_apply_slave_colors(s_slave.color_mode,
                                    s_slave.primary_r, s_slave.primary_g, s_slave.primary_b,
                                    s_slave.secondary_r, s_slave.secondary_g, s_slave.secondary_b);
+    if (s_slave.custom_active && s_slave.animation_sample_us > 0) {
+        float sync_time_sec = (float)s_slave.animation_time_ms / 1000.0f +
+                              (float)(now_us - s_slave.animation_sample_us) / 1000000.0f;
+        led_modes_set_sync_clock(true, sync_time_sec);
+    }
 
     if (s_slave.beat_flash_ticks > 0) {
         s_slave.beat_flash_ticks--;
@@ -1145,6 +1172,8 @@ static void master_ctrl_apply_slave_state(const uint8_t *src_mac,
         : (uint8_t)MASTER_CTRL_SOURCE_NONE;
     s_slave.source_flags = pkt->source_flags;
     s_slave.phase_offset = master_ctrl_phase_offset_unpack(pkt->phase_offset_milli);
+    s_slave.animation_sample_us = pkt->animation_sample_us;
+    s_slave.animation_time_ms = pkt->animation_time_ms;
     if (beat_active && period_us > 0) {
         s_slave.target_period_us = period_us;
         if (fresh_session || s_slave.period_us <= 0) {

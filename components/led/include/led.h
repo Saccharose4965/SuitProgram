@@ -58,6 +58,18 @@ esp_err_t led_set(bool on);
 // Missing pixels will be cleared; excess is ignored.
 esp_err_t led_show_pixels(const uint8_t *frame, size_t count);
 
+typedef enum {
+    LED_OUTPUT_OWNER_BASE = 0,
+    LED_OUTPUT_OWNER_SHOW = 1,
+} led_output_owner_t;
+
+// Exclusive output ownership prevents independent renderer tasks from racing.
+esp_err_t led_output_claim(led_output_owner_t owner);
+void led_output_release(led_output_owner_t owner);
+bool led_output_is_owned_by(led_output_owner_t owner);
+esp_err_t led_show_pixels_owned(led_output_owner_t owner,
+                                const uint8_t *frame, size_t count);
+
 // Optional helper to toggle the current state.
 esp_err_t led_toggle(void);
 

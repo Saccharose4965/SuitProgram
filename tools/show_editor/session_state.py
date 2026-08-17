@@ -16,6 +16,7 @@ class EditorSessionState:
     preview_scope: str = "Active"
     view_mode: str = "2d"
     show_body: bool = False
+    show_glow: bool = False
     snap_enabled: bool = True
     snap_divisor: int = 1
     camera_preset: str = "iso"
@@ -48,6 +49,7 @@ def save_editor_session(state: EditorSessionState) -> Path:
             "preview_scope": state.preview_scope,
             "view_mode": state.view_mode,
             "show_body": state.show_body,
+            "show_glow": state.show_glow,
             "snap_enabled": bool(state.snap_enabled),
             "snap_divisor": int(state.snap_divisor),
             "camera_preset": state.camera_preset,
@@ -78,6 +80,7 @@ def load_editor_session() -> EditorSessionState | None:
         preview_scope=str(ui.get("preview_scope", "Active")),
         view_mode=str(ui.get("view_mode", "2d")),
         show_body=bool(ui.get("show_body", False)),
+        show_glow=bool(ui.get("show_glow", False)),
         snap_enabled=bool(ui.get("snap_enabled", True)),
         snap_divisor=max(1, int(ui.get("snap_divisor", 1))),
         camera_preset=str(ui.get("camera_preset", "iso")),

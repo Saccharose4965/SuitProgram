@@ -22,6 +22,8 @@ bool        led_modes_enabled(void);
 // Sync control: when disabled, beat-reactive modes fall back to free-run.
 void led_modes_set_sync(bool enabled);
 bool led_modes_sync_enabled(void);
+void led_modes_set_sync_clock(bool active, float time_sec);
+bool led_modes_get_sync_clock(float *time_sec);
 
 // Global brightness scale (0–255). Default 96.
 void led_modes_set_brightness(uint8_t level);

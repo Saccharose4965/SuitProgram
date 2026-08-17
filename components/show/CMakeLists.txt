@@ -2,8 +2,14 @@ idf_component_register(
     SRCS
         "show_layout_ids.c"
         "show_package.c"
+        "show_renderer.c"
+        "show_runtime.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
         storage_sd
+        led
+        led_layout
+        led_modes
+        link
 )

@@ -68,7 +68,7 @@ if PYSIDE_AVAILABLE:
 
     EFFECT_LIBRARY = (
         ("Solid", "solid", "group", "all", "max", 1000, {"color": [255, 255, 255, 255], "intensity": 1.0}, ("Suit Effects", "Basic")),
-        ("Blink", "blink", "group", "all", "max", 1000, {"color": [255, 255, 255, 255], "intensity": 1.0, "frequency_hz": 2.0}, ("Suit Effects", "Basic")),
+        ("Blink", "blink", "group", "all", "max", 1000, {"color": [255, 255, 255, 255], "intensity": 1.0, "frequency_hz": 2.0, "decay": 0.0}, ("Suit Effects", "Basic")),
         ("Pulse", "pulse", "group", "all", "max", 1200, {"color": [255, 255, 255, 255], "intensity": 0.8, "frequency_hz": 1.5}, ("Suit Effects", "Basic")),
         ("Sweep", "sweep", "group", "all", "max", 1600, {"color": [255, 255, 255, 255], "intensity": 1.0, "axis": "y", "width": 0.25, "softness": 0.18}, ("Suit Effects", "Motion")),
         ("Mirror Sweep", "mirror_sweep", "group", "all", "max", 1600, {"color": [255, 255, 255, 255], "intensity": 1.0, "axis": "y", "width": 0.25, "softness": 0.18}, ("Suit Effects", "Motion")),
@@ -136,6 +136,7 @@ if PYSIDE_AVAILABLE:
     EFFECT_FIELDS_PHASE = frozenset({"blink", "pulse", "sweep", "mirror_sweep", "chase", "sparkle", "fanout", "global_sweep", "traveling_orb", "radialray", "ground_energy"})
     EFFECT_FIELDS_REPEATS = frozenset({"chase"})
     EFFECT_FIELDS_DUTY = frozenset({"blink"})
+    EFFECT_FIELDS_DECAY = frozenset({"blink"})
     EFFECT_FIELDS_MIN_MAX = frozenset({"pulse"})
     EFFECT_FIELDS_REVERSE = frozenset({"sweep", "mirror_sweep", "fanout", "global_sweep", "traveling_orb", "radialray", "ground_energy"})
     EFFECT_FIELDS_RANDOM_CROSS_X = frozenset({"traveling_orb"})
@@ -1985,6 +1986,7 @@ if PYSIDE_AVAILABLE:
             self._active_role = "A"
             self._show_all_roles = False
             self._show_body = False
+            self._show_glow = False
             self._view_mode = "2d"
             self._yaw_deg = 28.0
             self._pitch_deg = -18.0
@@ -2002,6 +2004,7 @@ if PYSIDE_AVAILABLE:
             self._role_body_depth_cache: dict[str, float] = {}
             self._projected_role_label_cache: dict[str, QtCore.QPointF] = {}
             self._dot_pen_cache: dict[tuple[int, int, int, int], QtGui.QPen] = {}
+            self._glow_pen_cache: dict[tuple[int, int, int, int, int], QtGui.QPen] = {}
             self._gl_program = None
             self._gl_vbo = None
             self._gl_attr_pos = -1
@@ -2058,6 +2061,9 @@ if PYSIDE_AVAILABLE:
 
         def show_body(self) -> bool:
             return self._show_body
+
+        def show_glow(self) -> bool:
+            return self._show_glow
 
         def interaction_hint(self) -> str:
             if self._view_mode == "3d":
@@ -2208,6 +2214,13 @@ if PYSIDE_AVAILABLE:
             self._projection_draw_key = None
             self.update()
 
+        def set_show_glow(self, show_glow: bool) -> None:
+            show_glow = bool(show_glow)
+            if show_glow == self._show_glow:
+                return
+            self._show_glow = show_glow
+            self.update()
+
         def set_camera_preset(self, preset: str) -> None:
             self._view_mode = "3d"
             if preset == "front":
@@ -2307,6 +2320,30 @@ if PYSIDE_AVAILABLE:
                 return pen
             pen = QtGui.QPen(QtGui.QColor(*rgba), 7.2, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap, QtCore.Qt.RoundJoin)
             self._dot_pen_cache[rgba] = pen
+            return pen
+
+        def _glow_pen(self, rgba: tuple[int, int, int, int], pass_index: int) -> QtGui.QPen:
+            cache_key = (rgba[0], rgba[1], rgba[2], rgba[3], int(pass_index))
+            pen = self._glow_pen_cache.get(cache_key)
+            if pen is not None:
+                return pen
+            brightness = max(rgba[0], rgba[1], rgba[2]) / 255.0
+            opacity = rgba[3] / 255.0
+            glow_strength = max(0.12, min(1.0, brightness * opacity))
+            if pass_index <= 0:
+                alpha = max(4, min(36, int(42.0 * glow_strength)))
+                width = 5.0 + 13.0 * glow_strength
+            else:
+                alpha = max(8, min(64, int(76.0 * glow_strength)))
+                width = 4.0 + 8.4 * glow_strength
+            pen = QtGui.QPen(
+                QtGui.QColor(rgba[0], rgba[1], rgba[2], alpha),
+                width,
+                QtCore.Qt.SolidLine,
+                QtCore.Qt.RoundCap,
+                QtCore.Qt.RoundJoin,
+            )
+            self._glow_pen_cache[cache_key] = pen
             return pen
 
         def _role_offset(self, role: str) -> tuple[float, float, float]:
@@ -2512,6 +2549,26 @@ if PYSIDE_AVAILABLE:
                     continue
                 painter.setPen(self._dot_pen(color_key))
                 painter.drawPoints(QtGui.QPolygonF(points))
+
+        def _draw_glow_point_groups(
+            self,
+            painter: QtGui.QPainter,
+            point_groups: dict[tuple[int, int, int, int], list[QtCore.QPointF]],
+        ) -> None:
+            if not self._show_glow:
+                return
+            painter.save()
+            painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            painter.setCompositionMode(QtGui.QPainter.CompositionMode_SourceOver)
+            for color_key, points in point_groups.items():
+                if not points or color_key[:3] == (0, 0, 0):
+                    continue
+                polygon = QtGui.QPolygonF(points)
+                painter.setPen(self._glow_pen(color_key, 0))
+                painter.drawPoints(polygon)
+                painter.setPen(self._glow_pen(color_key, 1))
+                painter.drawPoints(polygon)
+            painter.restore()
 
         def _rebuild_projected_draw_cache(self, visible_roles: tuple[str, ...]) -> None:
             projection_key = (
@@ -2719,8 +2776,10 @@ if PYSIDE_AVAILABLE:
                     threshold = self._role_body_depth_cache.get(role, 0.0)
                     target_groups = front_point_groups if depth >= threshold else back_point_groups
                     target_groups.setdefault(color_key, []).append(mapped_point)
+                self._draw_glow_point_groups(painter, back_point_groups)
                 self._draw_point_groups(painter, back_point_groups)
                 self._paint_body_shapes(painter)
+                self._draw_glow_point_groups(painter, front_point_groups)
                 self._draw_point_groups(painter, front_point_groups)
                 return
 
@@ -2730,6 +2789,7 @@ if PYSIDE_AVAILABLE:
                 if color_key is None:
                     continue
                 point_groups.setdefault(color_key, []).append(mapped_point)
+            self._draw_glow_point_groups(painter, point_groups)
             self._draw_point_groups(painter, point_groups)
 
         def wheelEvent(self, event) -> None:  # type: ignore[override]
@@ -3120,6 +3180,10 @@ if PYSIDE_AVAILABLE:
             self.clip_duty_cycle_spin.setRange(0.0, 1.0)
             self.clip_duty_cycle_spin.setSingleStep(0.05)
             self.clip_duty_cycle_spin.setDecimals(3)
+            self.clip_decay_spin = SliderFieldWidget()
+            self.clip_decay_spin.setRange(0.0, 1.0)
+            self.clip_decay_spin.setSingleStep(0.05)
+            self.clip_decay_spin.setDecimals(3)
             self.clip_min_intensity_spin = SliderFieldWidget()
             self.clip_min_intensity_spin.setRange(0.0, 4.0)
             self.clip_min_intensity_spin.setSingleStep(0.05)
@@ -3225,6 +3289,7 @@ if PYSIDE_AVAILABLE:
             clip_form.addRow("Phase", self.clip_phase_spin)
             clip_form.addRow("Repeats", self.clip_repeats_spin)
             clip_form.addRow("Duty Cycle", self.clip_duty_cycle_spin)
+            clip_form.addRow("Decay", self.clip_decay_spin)
             clip_form.addRow("Min Intensity", self.clip_min_intensity_spin)
             clip_form.addRow("Max Intensity", self.clip_max_intensity_spin)
             clip_form.addRow("", self.clip_reverse_checkbox)
@@ -3368,6 +3433,7 @@ if PYSIDE_AVAILABLE:
             self.preview_combo = QtWidgets.QComboBox()
             self.preview_combo.addItems(list(PREVIEW_OPTIONS))
             self.preview_body_checkbox = QtWidgets.QCheckBox("Body")
+            self.preview_glow_checkbox = QtWidgets.QCheckBox("Glow")
             self.mode_combo = QtWidgets.QComboBox()
             self.mode_combo.addItems(["2D", "3D"])
             self.tempo_bpm_spin = QtWidgets.QDoubleSpinBox()
@@ -3415,6 +3481,7 @@ if PYSIDE_AVAILABLE:
             transport_layout.addWidget(QtWidgets.QLabel("Preview"))
             transport_layout.addWidget(self.preview_combo)
             transport_layout.addWidget(self.preview_body_checkbox)
+            transport_layout.addWidget(self.preview_glow_checkbox)
             transport_layout.addSpacing(12)
             transport_layout.addWidget(self.snap_checkbox)
             transport_layout.addWidget(self.snap_division_combo)
@@ -3508,6 +3575,7 @@ if PYSIDE_AVAILABLE:
             self.time_slider.sliderReleased.connect(self._on_time_slider_released)
             self.preview_combo.currentTextChanged.connect(self._on_preview_combo_changed)
             self.preview_body_checkbox.toggled.connect(self._on_preview_body_toggled)
+            self.preview_glow_checkbox.toggled.connect(self._on_preview_glow_toggled)
             self.mode_combo.currentTextChanged.connect(self._on_mode_combo_changed)
             self.mode_combo.currentTextChanged.connect(lambda *_: self._schedule_session_save())
             self.tempo_bpm_spin.valueChanged.connect(self._on_tempo_changed)
@@ -3572,6 +3640,7 @@ if PYSIDE_AVAILABLE:
                 self.clip_phase_spin,
                 self.clip_repeats_spin,
                 self.clip_duty_cycle_spin,
+                self.clip_decay_spin,
                 self.clip_min_intensity_spin,
                 self.clip_max_intensity_spin,
                 self.clip_color_rate_spin,
@@ -3785,6 +3854,11 @@ if PYSIDE_AVAILABLE:
             self.preview_view.update()
             self._schedule_session_save()
 
+        def _on_preview_glow_toggled(self, checked: bool) -> None:
+            self.preview_view.set_show_glow(bool(checked))
+            self.preview_view.update()
+            self._schedule_session_save()
+
         def _on_preview_combo_changed(self, text: str) -> None:
             if text in ROLE_NAMES:
                 self._last_single_preview_role = text
@@ -3839,6 +3913,7 @@ if PYSIDE_AVAILABLE:
                 preview_scope="All" if self._show_all_preview_roles() else "Active",
                 view_mode=self.preview_view.view_mode(),
                 show_body=self.preview_view.show_body(),
+                show_glow=self.preview_view.show_glow(),
                 snap_enabled=self.snap_checkbox.isChecked(),
                 snap_divisor=max(1, int(self.snap_division_combo.currentData() or 1)),
                 layout_kind=self._layout_source_kind,
@@ -3919,6 +3994,7 @@ if PYSIDE_AVAILABLE:
         def _apply_editor_session_state(self, session: EditorSessionState) -> None:
             self.preview_combo.blockSignals(True)
             self.preview_body_checkbox.blockSignals(True)
+            self.preview_glow_checkbox.blockSignals(True)
             self.mode_combo.blockSignals(True)
             self.snap_checkbox.blockSignals(True)
             self.snap_division_combo.blockSignals(True)
@@ -3927,6 +4003,7 @@ if PYSIDE_AVAILABLE:
                 self._last_single_preview_role = role
                 self.preview_combo.setCurrentText("All" if session.preview_scope == "All" else role)
                 self.preview_body_checkbox.setChecked(bool(session.show_body))
+                self.preview_glow_checkbox.setChecked(bool(getattr(session, "show_glow", False)))
                 view_mode = "3d" if session.view_mode == "3d" else "2d"
                 self.mode_combo.setCurrentText("3D" if view_mode == "3d" else "2D")
                 self.snap_checkbox.setChecked(bool(getattr(session, "snap_enabled", True)))
@@ -3937,6 +4014,7 @@ if PYSIDE_AVAILABLE:
             finally:
                 self.preview_combo.blockSignals(False)
                 self.preview_body_checkbox.blockSignals(False)
+                self.preview_glow_checkbox.blockSignals(False)
                 self.mode_combo.blockSignals(False)
                 self.snap_checkbox.blockSignals(False)
                 self.snap_division_combo.blockSignals(False)
@@ -3961,6 +4039,7 @@ if PYSIDE_AVAILABLE:
 
             self._set_preview_mode("3d" if session.view_mode == "3d" else "2d")
             self.preview_view.set_show_body(bool(session.show_body))
+            self.preview_view.set_show_glow(bool(getattr(session, "show_glow", False)))
             self._refresh_custom_color_swatches()
             self._set_timeline_position(int(session.current_time_ms), sync_player=False)
             self._refresh_timeline()
@@ -3985,6 +4064,7 @@ if PYSIDE_AVAILABLE:
                 self.clip_phase_spin,
                 self.clip_repeats_spin,
                 self.clip_duty_cycle_spin,
+                self.clip_decay_spin,
                 self.clip_min_intensity_spin,
                 self.clip_max_intensity_spin,
                 self.clip_reverse_checkbox,
@@ -4037,6 +4117,7 @@ if PYSIDE_AVAILABLE:
             self._set_clip_form_row_visible(self.clip_phase_spin, effect_id in EFFECT_FIELDS_PHASE)
             self._set_clip_form_row_visible(self.clip_repeats_spin, effect_id in EFFECT_FIELDS_REPEATS)
             self._set_clip_form_row_visible(self.clip_duty_cycle_spin, effect_id in EFFECT_FIELDS_DUTY)
+            self._set_clip_form_row_visible(self.clip_decay_spin, effect_id in EFFECT_FIELDS_DECAY)
             show_min_max = effect_id in EFFECT_FIELDS_MIN_MAX
             self._set_clip_form_row_visible(self.clip_min_intensity_spin, show_min_max)
             self._set_clip_form_row_visible(self.clip_max_intensity_spin, show_min_max)
@@ -5395,6 +5476,7 @@ if PYSIDE_AVAILABLE:
             self.clip_phase_spin.setValue(float(params.get("phase", 0.0)))
             self.clip_repeats_spin.setValue(int(params.get("repeats", 4)))
             self.clip_duty_cycle_spin.setValue(float(params.get("duty_cycle", 0.5)))
+            self.clip_decay_spin.setValue(float(params.get("decay", 0.0)))
             self.clip_min_intensity_spin.setValue(float(params.get("min_intensity", 0.15)))
             self.clip_max_intensity_spin.setValue(float(params.get("max_intensity", 1.0)))
             self.clip_reverse_checkbox.setChecked(bool(params.get("reverse", False)))
@@ -5438,6 +5520,7 @@ if PYSIDE_AVAILABLE:
                 self.clip_phase_spin,
                 self.clip_repeats_spin,
                 self.clip_duty_cycle_spin,
+                self.clip_decay_spin,
                 self.clip_min_intensity_spin,
                 self.clip_max_intensity_spin,
                 self.clip_reverse_checkbox,
@@ -5466,6 +5549,7 @@ if PYSIDE_AVAILABLE:
             merged["phase"] = float(self.clip_phase_spin.value())
             merged["repeats"] = int(self.clip_repeats_spin.value())
             merged["duty_cycle"] = float(self.clip_duty_cycle_spin.value())
+            merged["decay"] = float(self.clip_decay_spin.value())
             merged["min_intensity"] = float(self.clip_min_intensity_spin.value())
             merged["max_intensity"] = float(self.clip_max_intensity_spin.value())
             merged["reverse"] = bool(self.clip_reverse_checkbox.isChecked())

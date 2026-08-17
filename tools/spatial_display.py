@@ -56,6 +56,10 @@ def display_point_2d(section_name: str,
         return (x + FLAT_FRONT_X_OFFSET, posed_y + FLAT_FRONT_Y_OFFSET, 0.0)
     if section_name.startswith("back_"):
         return (x + FLAT_BACK_X_OFFSET, posed_y + FLAT_BACK_Y_OFFSET, 0.0)
+    if section_name.endswith("thigh_front") or "_shin_f_" in section_name:
+        return (posed_x + FLAT_FRONT_X_OFFSET, posed_y + FLAT_FRONT_Y_OFFSET, 0.0)
+    if section_name.endswith("thigh_back") or "_shin_b_" in section_name:
+        return (posed_x + FLAT_BACK_X_OFFSET, posed_y + FLAT_BACK_Y_OFFSET, 0.0)
     if section_name.endswith("upper_arm"):
         side_sign = 1.0 if section_name.startswith("left_") else -1.0
         is_front_half = posed_z >= 0.0

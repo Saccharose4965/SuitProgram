@@ -43,6 +43,10 @@ static uint16_t s_seq = 1;
 #define LINK_ACK_BIT (1<<0)
 #define LINK_HDR_LEN 4
 #define LINK_MAX_PAYLOAD 200
+static portMUX_TYPE s_ack_mux = portMUX_INITIALIZER_UNLOCKED;
+static bool s_ack_waiting = false;
+static uint16_t s_ack_sequence = 0;
+static uint8_t s_ack_peer[ESP_NOW_ETH_ALEN] = {0};
 static TaskHandle_t s_info_task = NULL;
 static uint32_t s_info_period_ms = 0;
 
@@ -122,9 +126,16 @@ static void espnow_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data,
 
         // ACK handling
         if (flags & 0x80){ // ACK frame
-            if (s_ack_eg){
+            bool matches = false;
+            portENTER_CRITICAL(&s_ack_mux);
+            matches = s_ack_waiting && seq == s_ack_sequence &&
+                (mac_is_broadcast(s_ack_peer) ||
+                 (src_mac && memcmp(src_mac, s_ack_peer, ESP_NOW_ETH_ALEN) == 0));
+            portEXIT_CRITICAL(&s_ack_mux);
+            if (matches && s_ack_eg){
                 xEventGroupSetBits(s_ack_eg, LINK_ACK_BIT);
             }
+            return;
         } else if (flags & 0x40){ // ACK requested
             uint8_t ack[LINK_HDR_LEN] = { type, 0x80, 0, 0 };
             memcpy(ack + 2, &seq, 2);
@@ -203,16 +214,25 @@ static void udp_rx_task(void *arg){
 
     uint8_t buf[1500];
     while (1){
-        ssize_t n = recv(sock, buf, sizeof(buf), 0);
+        struct sockaddr_in source = {0};
+        socklen_t source_len = sizeof(source);
+        ssize_t n = recvfrom(sock, buf, sizeof(buf), 0,
+                             (struct sockaddr *)&source, &source_len);
         if (n <= 0) continue;
-        if (s_rx_cb){
+        if (n >= LINK_HDR_LEN && s_frame_cb) {
+            uint8_t source_id[6] = {0};
+            memcpy(source_id, &source.sin_addr.s_addr, 4);
+            memcpy(source_id + 4, &source.sin_port, 2);
+            s_frame_cb((link_msg_type_t)buf[0], source_id,
+                       buf + LINK_HDR_LEN, (size_t)n - LINK_HDR_LEN, s_frame_ctx);
+        } else if (s_rx_cb){
             s_rx_cb(buf, (size_t)n, s_rx_ctx);
         }
     }
 }
 
 static void maybe_start_udp_rx(void){
-    if (s_udp_rx_task || !s_rx_cb || !s_wifi_ready) return;
+    if (s_udp_rx_task || (!s_rx_cb && !s_frame_cb) || !s_wifi_ready) return;
     xTaskCreatePinnedToCore(udp_rx_task, "link_udp_rx", 3072, NULL, 4, &s_udp_rx_task, BG_TASK_CORE);
 }
 
@@ -337,10 +357,18 @@ static esp_err_t send_with_ack_to(const uint8_t *dest, const uint8_t *frame, siz
     if (!s_send_lock) return ESP_ERR_INVALID_STATE;
     if (xSemaphoreTake(s_send_lock, pdMS_TO_TICKS(200)) != pdTRUE) return ESP_ERR_TIMEOUT;
     esp_err_t err = ESP_FAIL;
+    uint16_t sequence = 0;
+    if (len >= LINK_HDR_LEN) memcpy(&sequence, frame + 2, sizeof(sequence));
+    const uint8_t *ack_peer = dest ? dest : s_peer_mac;
     for (int attempt = 0; attempt < 3; ++attempt){
+        xEventGroupClearBits(s_ack_eg, LINK_ACK_BIT);
+        portENTER_CRITICAL(&s_ack_mux);
+        s_ack_sequence = sequence;
+        memcpy(s_ack_peer, ack_peer, ESP_NOW_ETH_ALEN);
+        s_ack_waiting = true;
+        portEXIT_CRITICAL(&s_ack_mux);
         err = link_send_espnow_to(dest, frame, len);
         if (err != ESP_OK) continue;
-        xEventGroupClearBits(s_ack_eg, LINK_ACK_BIT);
         EventBits_t bits = xEventGroupWaitBits(s_ack_eg, LINK_ACK_BIT, pdTRUE, pdTRUE, pdMS_TO_TICKS(60));
         if (bits & LINK_ACK_BIT){
             err = ESP_OK;
@@ -349,6 +377,9 @@ static esp_err_t send_with_ack_to(const uint8_t *dest, const uint8_t *frame, siz
             err = ESP_ERR_TIMEOUT;
         }
     }
+    portENTER_CRITICAL(&s_ack_mux);
+    s_ack_waiting = false;
+    portEXIT_CRITICAL(&s_ack_mux);
     xSemaphoreGive(s_send_lock);
     return err;
 }

@@ -113,6 +113,78 @@ LEFT_ARM_GROUPS_3D: dict[str, tuple[Point3, ...]] = {
     ),
 }
 
+LEFT_LEG_GROUPS_3D: dict[str, tuple[Point3, ...]] = {
+    "thigh_front": (),
+    "thigh_back": (),
+    "shin_f_in": (
+        (9.1, 80.5, 2.4),
+        (8.8, 71.5, 2.4),
+        (8.4, 63.8, 2.5),
+        (6.8, 58.4, 3.7),
+    ),
+    "shin_f_out": (
+        (11.9, 80.5, 2.7),
+        (12.2, 71.5, 2.8),
+        (12.7, 63.8, 3.0),
+        (14.8, 58.4, 4.5),
+    ),
+    "shin_b_in": (
+        (9.2, 80.5, -2.4),
+        (8.9, 71.5, -2.6),
+        (8.5, 63.8, -2.9),
+        (6.9, 58.4, -4.1),
+    ),
+    "shin_b_out": (
+        (12.0, 80.5, -2.8),
+        (12.3, 71.5, -3.1),
+        (12.8, 63.8, -3.5),
+        (14.9, 58.4, -5.0),
+    ),
+}
+
+
+def _leg_c_points(front: bool) -> tuple[Point3, ...]:
+    center_x = 10.7
+    radius_x = 3.35
+    radius_z = 5.8
+    edge_angle_deg = 10.0
+    mid_angle_deg = 48.0
+    peak_angle_deg = 84.0
+    wrap_radius = 0.5 * (radius_x + radius_z)
+    diagonal_drop = wrap_radius * math.radians(peak_angle_deg - mid_angle_deg)
+    vertical_drop = 13.6
+    y0 = 36.8
+    y1 = y0
+    y2 = y1 + diagonal_drop
+    y3 = y2 + vertical_drop
+    y4 = y3 + diagonal_drop
+    y5 = y4
+    ys = (y0, y1, y2, y3, y4, y5)
+    angles_deg = (
+        edge_angle_deg,
+        mid_angle_deg,
+        peak_angle_deg,
+        peak_angle_deg,
+        mid_angle_deg,
+        edge_angle_deg,
+    )
+    z_sign = 1.0 if front else -1.0
+    points: list[Point3] = []
+    for y, angle_deg in zip(ys, angles_deg):
+        angle_rad = math.radians(angle_deg)
+        points.append(
+            (
+                center_x + radius_x * math.cos(angle_rad),
+                y,
+                z_sign * radius_z * math.sin(angle_rad),
+            )
+        )
+    return tuple(points)
+
+
+LEFT_LEG_GROUPS_3D["thigh_front"] = _leg_c_points(front=True)
+LEFT_LEG_GROUPS_3D["thigh_back"] = _leg_c_points(front=False)
+
 DEFAULT_FRONT_PROFILE = SuitProfile(
     name="chest_front_v1",
     section_led_counts=(("front_left_ring", 35),),
@@ -361,6 +433,40 @@ def right_arm_geometry() -> list[GeometrySection]:
     return sections
 
 
+def left_leg_geometry() -> list[GeometrySection]:
+    sections = [
+        polyline_section("left_thigh_front", 0, LEFT_LEG_GROUPS_3D["thigh_front"]),
+        polyline_section("left_shin_f_in", 0, LEFT_LEG_GROUPS_3D["shin_f_in"]),
+        polyline_section("left_shin_f_out", 0, LEFT_LEG_GROUPS_3D["shin_f_out"]),
+        polyline_section("left_thigh_back", 0, LEFT_LEG_GROUPS_3D["thigh_back"]),
+        polyline_section("left_shin_b_in", 0, LEFT_LEG_GROUPS_3D["shin_b_in"]),
+        polyline_section("left_shin_b_out", 0, LEFT_LEG_GROUPS_3D["shin_b_out"]),
+    ]
+
+    for section in sections:
+        ensure_name_fits(section.name, "section name")
+    return sections
+
+
+def right_leg_geometry() -> list[GeometrySection]:
+    right = {
+        name: tuple(mirror_point(point) for point in points)
+        for name, points in LEFT_LEG_GROUPS_3D.items()
+    }
+    sections = [
+        polyline_section("right_thigh_front", 1, right["thigh_front"]),
+        polyline_section("right_shin_f_in", 1, right["shin_f_in"]),
+        polyline_section("right_shin_f_out", 1, right["shin_f_out"]),
+        polyline_section("right_thigh_back", 1, right["thigh_back"]),
+        polyline_section("right_shin_b_in", 1, right["shin_b_in"]),
+        polyline_section("right_shin_b_out", 1, right["shin_b_out"]),
+    ]
+
+    for section in sections:
+        ensure_name_fits(section.name, "section name")
+    return sections
+
+
 def front_geometry() -> list[GeometrySection]:
     return left_front_geometry() + left_arm_geometry() + right_front_geometry() + right_arm_geometry()
 
@@ -372,9 +478,11 @@ def back_geometry() -> list[GeometrySection]:
 def chestplate_geometry() -> list[GeometrySection]:
     sections = (
         left_front_geometry() +
+        left_leg_geometry() +
         left_back_geometry() +
         left_arm_geometry() +
         right_front_geometry() +
+        right_leg_geometry() +
         right_back_geometry() +
         right_arm_geometry()
     )

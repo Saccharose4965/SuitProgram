@@ -371,7 +371,7 @@ void fft_render_update_tempo_spectrum(const float *bpm_spec_bc){
     }
 
     for (int x=0; x < PANEL_W; ++x){
-        // Display only 64..127 BPM; on 128px panels this gives exactly 2 px per BPM.
+        // Display the configured detector target BPM range across the panel.
         int disp_idx = (PANEL_W > 0) ? (x * disp_bpm_count) / PANEL_W : 0;
         if (disp_idx < 0) disp_idx = 0;
         if (disp_idx >= disp_bpm_count) disp_idx = disp_bpm_count - 1;

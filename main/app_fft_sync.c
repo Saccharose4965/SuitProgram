@@ -1,4 +1,4 @@
-#include "app_shell.h"
+#include "shell_apps.h"
 #include "shell_audio.h"
 
 #include <math.h>
@@ -83,6 +83,7 @@ void fft_sync_app_init(shell_app_context_t *ctx)
     (void)ctx;
     s_fft_sync_start_err = ESP_OK;
     fft_sync_update_legend();
+    led_source_mode_set(LED_SOURCE_FFT);
     if (!shell_audio_init_if_needed()) {
         ESP_LOGE(TAG, "audio_init failed; FFT sync unavailable");
         s_fft_sync_start_err = ESP_ERR_INVALID_STATE;
@@ -91,9 +92,9 @@ void fft_sync_app_init(shell_app_context_t *ctx)
     }
 
     fft_set_display_enabled(false);
-    s_fft_sync_start_err = fft_visualizer_start();
-    if (s_fft_sync_start_err != ESP_OK) {
-        ESP_LOGE(TAG, "fft_visualizer_start failed: %s", esp_err_to_name(s_fft_sync_start_err));
+    led_source_service_tick(0.0f);
+    if (!fft_visualizer_running()) {
+        s_fft_sync_start_err = ESP_ERR_INVALID_STATE;
     }
     fft_sync_update_legend();
 }

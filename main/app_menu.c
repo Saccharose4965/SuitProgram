@@ -30,6 +30,7 @@ static const menu_entry_t g_menu_root_entries[] = {
     { "menu_sim",      "Simulations" },
     { "menu_comm",     "Comm"        },
     { "music",         "Music"       },
+    { "show_player",   "Shows"       },
     { "menu_misc",     "Misc"        },
 };
 static const menu_entry_t g_menu_settings_entries[] = {
@@ -67,13 +68,12 @@ static const menu_entry_t g_menu_comm_entries[] = {
     { "file_rx",   "File RX"   },
 };
 static const menu_entry_t g_menu_led_entries[] = {
-    { "menu_root",   "Back"           },
-    { "leds_audio",  "Audio Reactive" },
-    { "leds_custom", "Custom"         },
-    { "leds_color",  "Color"          },
-    { "manual_bpm",  "Manual BPM"     },
-    { "fft_sync",    "FFT Sync"       },
-    { "leds_layout", "Layout Edit"    },
+    { "menu_root",       "Back"           },
+    { "leds_animations", "Animations"     },
+    { "leds_source",     "Source"         },
+    { "leds_color",      "Color"          },
+    { "master_control",  "Master Control" },
+    { "leds_layout",     "Layout Edit"    },
 };
 static const menu_entry_t g_menu_misc_entries[] = {
     { "menu_root",  "Back"       },

@@ -404,7 +404,8 @@ def _clip_seed(clip: ShowClip) -> int:
         f"{clip.effect}|{clip.target_kind}|{clip.target}|"
         f"{clip.layer}|{clip.start_ms}|{clip.end_ms}"
     ).encode("utf-8")
-    return zlib.crc32(payload) & 0xFFFFFFFF
+    # The v1 runtime record stores a 16-bit deterministic seed.
+    return zlib.crc32(payload) & 0xFFFF
 
 
 def _hash_u32_fast(seed: int, role_index: int, led_index: int, cycle_index: int, salt: int) -> int:
@@ -937,8 +938,15 @@ def _build_preview_frame(
         if effect == "blink":
             frequency_hz = _param_float(clip, "frequency_hz", 2.0, clip_t)
             duty_cycle = _clamp01(_param_float(clip, "duty_cycle", 0.5, clip_t))
+            decay = _clamp01(_param_float(clip, "decay", 0.0, clip_t))
             phase = _param_float(clip, "phase", 0.0, clip_t)
-            on = 1.0 if _effect_phase(project, clip, time_ms, frequency_hz, phase) < duty_cycle else 0.0
+            cycle_phase = _effect_phase(project, clip, time_ms, frequency_hz, phase) % 1.0
+            if cycle_phase < duty_cycle:
+                on = 1.0
+            elif decay > 1e-6 and cycle_phase < min(1.0, duty_cycle + decay):
+                on = _clamp01(1.0 - ((cycle_phase - duty_cycle) / decay))
+            else:
+                on = 0.0
             scale = intensity * on
             _blend_uniform(
                 blend_mode,

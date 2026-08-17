@@ -30,6 +30,7 @@
 #include "bt_audio.h"
 #include "orientation_service.h"
 #include "pong.h"
+#include "show_runtime.h"
 
 static const char *TAG = "shell";
 enum { OLED_FB_BYTES = PANEL_W * PANEL_H / 8 };
@@ -377,6 +378,7 @@ static void shell_graceful_restart(void)
         app->deinit(&s_ctx);
     }
 
+    show_runtime_stop(true);
     led_modes_enable(false);
     led_beat_enable(false);
 
@@ -427,6 +429,7 @@ static void link_frame_handler(link_msg_type_t type, const uint8_t *src_mac,
 {
     (void)user_ctx;
     if (type == LINK_MSG_CONTROL && payload && len >= 2) {
+        show_runtime_handle_link_frame(type, src_mac, payload, len);
         master_control_handle_link_frame(type, src_mac, payload, len);
     } else if (type == LINK_MSG_GAME && payload && len >= 2){
         pong_handle_link_frame(type, payload, len);
@@ -554,26 +557,26 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .draw   = calculator_app_draw,
     },
     {
-        .id     = "leds_audio",
-        .name   = "LED Audio",
+        .id     = "leds_animations",
+        .name   = "LED Animations",
         .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
         .legend = &LEDS_LEGEND,
-        .init   = leds_audio_app_init,
+        .init   = leds_animations_app_init,
         .deinit = leds_app_deinit,
         .tick   = leds_app_tick,
         .handle_input = leds_app_handle_input,
         .draw   = leds_app_draw,
     },
     {
-        .id     = "leds_custom",
-        .name   = "LED Custom",
+        .id     = "leds_source",
+        .name   = "LED Source",
         .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
-        .legend = &LEDS_LEGEND,
-        .init   = leds_custom_app_init,
-        .deinit = leds_app_deinit,
-        .tick   = leds_app_tick,
-        .handle_input = leds_app_handle_input,
-        .draw   = leds_app_draw,
+        .legend = &LED_SOURCE_LEGEND,
+        .init   = led_source_app_init,
+        .deinit = NULL,
+        .tick   = NULL,
+        .handle_input = led_source_app_handle_input,
+        .draw   = led_source_app_draw,
     },
     {
         .id     = "leds_color",
@@ -629,6 +632,17 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .tick   = NULL,
         .handle_input = music_app_handle_input,
         .draw   = music_app_draw,
+    },
+    {
+        .id     = "show_player",
+        .name   = "Shows",
+        .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &SHOW_PLAYER_LEGEND,
+        .init   = show_player_app_init,
+        .deinit = NULL,
+        .tick   = NULL,
+        .handle_input = show_player_app_handle_input,
+        .draw   = show_player_app_draw,
     },
     {
         .id     = "bt",
@@ -889,11 +903,13 @@ static void shell_setup_link(void)
     if (mac_str && mac_str[0] && parse_mac_string(mac_str, s_peer_mac_cfg)){
         peer_mac = s_peer_mac_cfg;
     }
+    // Keep shell boot on ESP-NOW only. Wi-Fi telemetry and file transfer
+    // are still available from apps that start them on demand.
     link_config_t link_cfg = {
-        .ssid   = CONFIG_LINK_WIFI_SSID,
-        .pass   = CONFIG_LINK_WIFI_PASS,
-        .pc_ip  = CONFIG_LINK_WIFI_PC_IP,
-        .pc_port= CONFIG_LINK_WIFI_PC_PORT,
+        .ssid   = NULL,
+        .pass   = NULL,
+        .pc_ip  = NULL,
+        .pc_port= 0,
         .espnow_peer_mac = peer_mac,
     };
     bool link_ok = false;
@@ -973,7 +989,11 @@ static void shell_run_loop(void)
             continue;
         }
 
-        master_control_service_tick(dt_sec);
+        show_runtime_service_tick(dt_sec);
+        if (!show_runtime_owns_leds()) {
+            led_source_service_tick(dt_sec);
+            master_control_service_tick(dt_sec);
+        }
 
         if (app->tick && !master_control_service_blocks_app_tick(app->id)) {
             int64_t t0 = esp_timer_get_time();
@@ -1048,6 +1068,12 @@ void app_shell_start(void)
         esp_err_t layout_err = led_layout_init();
         if (layout_err != ESP_OK) {
             ESP_LOGW(TAG, "led_layout init warning: %s", esp_err_to_name(layout_err));
+        }
+    }
+    {
+        esp_err_t show_err = show_runtime_init();
+        if (show_err != ESP_OK) {
+            ESP_LOGW(TAG, "show runtime init warning: %s", esp_err_to_name(show_err));
         }
     }
     // (void)led_modes_start();     // temporarily disabled

@@ -218,6 +218,7 @@ static TaskHandle_t s_tx_task = NULL;
 static uint8_t *s_tx_shadow = NULL;
 static size_t s_tx_len_bytes = 0;
 static uint8_t *s_output_frames[LED_OUTPUT_COUNT] = { NULL, NULL };
+static led_output_owner_t s_output_owner = LED_OUTPUT_OWNER_BASE;
 
 // Travelling pulse visualization state
 typedef struct {
@@ -327,12 +328,24 @@ static uint8_t s_spark_energy[LED_COUNT];
 static float s_pulse_period_sec = 60.0f / 120.0f; // default 120 BPM
 static int64_t s_last_pulse_spawn_us = 0;
 static EXT_RAM_BSS_ATTR led_layout_config_t s_output_layout = {0};
+static EXT_RAM_BSS_ATTR led_layout_config_t s_output_map_layout = {0};
+static EXT_RAM_BSS_ATTR led_layout_mapping_t s_output_map[LED_COUNT];
+static EXT_RAM_BSS_ATTR uint8_t s_output_map_valid[LED_COUNT];
+static size_t s_output_map_count = 0;
+static bool s_output_map_ready = false;
+static size_t s_output_lengths[LED_OUTPUT_COUNT] = {0};
 #define LED_GEO_RING_SLOTS 32
 #define LED_GEO_PLANE_SLOTS 8
 static EXT_RAM_BSS_ATTR float s_geo_ring_distance_cache[LED_COUNT];
+static EXT_RAM_BSS_ATTR led_point_t s_geo_points_cache[LED_COUNT];
+static EXT_RAM_BSS_ATTR uint8_t s_geo_point_valid[LED_COUNT];
 static led_ring_pulse_t s_ring_pulses[LED_GEO_RING_SLOTS];
 static led_plane_sweep_t s_plane_sweeps[LED_GEO_PLANE_SLOTS];
 static EXT_RAM_BSS_ATTR led_layout_config_t s_effect_layout = {0};
+static EXT_RAM_BSS_ATTR led_layout_config_t s_geo_cache_layout = {0};
+static EXT_RAM_BSS_ATTR led_geo_layout_stats_t s_geo_cached_stats = {0};
+static size_t s_geo_cache_count = 0;
+static bool s_geo_cache_valid = false;
 
 // Pulse tuning: tempo-synced travel, no damping
 static const float kLedPulseWidth = 10.0f;
@@ -691,12 +704,48 @@ static size_t led_active_count(void)
     return count;
 }
 
+static void led_rebuild_output_map_locked(void)
+{
+    size_t count = s_output_layout.total_leds;
+    if (count > LED_COUNT) count = LED_COUNT;
+    if (s_output_map_ready && s_output_map_count == count &&
+        memcmp(&s_output_map_layout, &s_output_layout, sizeof(s_output_layout)) == 0) {
+        return;
+    }
+
+    memset(s_output_map_valid, 0, sizeof(s_output_map_valid));
+    memset(s_output_lengths, 0, sizeof(s_output_lengths));
+    for (size_t strip = 0; strip < LED_OUTPUT_COUNT; ++strip) {
+        if (strip < s_output_layout.strip_count) {
+            size_t length = s_output_layout.strip_lengths[strip];
+            s_output_lengths[strip] = length > LED_COUNT ? LED_COUNT : length;
+        }
+    }
+    for (size_t logical = 0; logical < count; ++logical) {
+        led_layout_mapping_t map;
+        if (!led_layout_map_logical_from_config(&s_output_layout, logical, &map) ||
+            map.strip >= LED_OUTPUT_COUNT || map.physical_index >= LED_COUNT) {
+            continue;
+        }
+        s_output_map[logical] = map;
+        s_output_map_valid[logical] = 1;
+        size_t required = (size_t)map.physical_index + 1u;
+        if (required > s_output_lengths[map.strip]) {
+            s_output_lengths[map.strip] = required;
+        }
+    }
+    s_output_map_layout = s_output_layout;
+    s_output_map_count = count;
+    s_output_map_ready = true;
+}
+
 static void led_split_frame(const uint8_t *rgb, size_t logical_pixels)
 {
     led_layout_snapshot(&s_output_layout);
     if (s_output_layout.total_leds == 0 || s_output_layout.total_leds > LED_COUNT) {
         s_output_layout.total_leds = (uint16_t)led_active_count();
     }
+    led_rebuild_output_map_locked();
 
     for (size_t strip = 0; strip < LED_OUTPUT_COUNT; ++strip) {
         if (s_output_frames[strip]) {
@@ -710,8 +759,8 @@ static void led_split_frame(const uint8_t *rgb, size_t logical_pixels)
     }
 
     for (size_t logical = 0; logical < logical_pixels; ++logical) {
-        led_layout_mapping_t map;
-        if (!led_layout_map_logical_from_config(&s_output_layout, logical, &map)) continue;
+        if (!s_output_map_valid[logical]) continue;
+        led_layout_mapping_t map = s_output_map[logical];
         if (map.strip >= LED_OUTPUT_COUNT) continue;
         if (map.physical_index >= LED_COUNT || !s_output_frames[map.strip]) continue;
 
@@ -745,18 +794,22 @@ static esp_err_t led_retry_outputs_locked(bool lock_held)
     }
     rmt_transmit_config_t tx_cfg = { .loop_count = 0 };
     esp_err_t err = ESP_OK;
+    bool submitted[LED_OUTPUT_COUNT] = {false};
     for (size_t strip = 0; strip < LED_OUTPUT_COUNT; ++strip) {
+        if (s_output_lengths[strip] == 0) continue;
         err = rmt_transmit(s_outputs[strip].chan,
                            s_outputs[strip].encoder,
                            s_output_frames[strip],
-                           LED_COUNT * 3u,
+                           s_output_lengths[strip] * 3u,
                            &tx_cfg);
         if (err != ESP_OK) {
             break;
         }
+        submitted[strip] = true;
     }
     if (err == ESP_OK) {
         for (size_t strip = 0; strip < LED_OUTPUT_COUNT; ++strip) {
+            if (!submitted[strip]) continue;
             err = rmt_tx_wait_all_done(s_outputs[strip].chan, pdMS_TO_TICKS(LED_RMT_TX_TIMEOUT_MS));
             if (err != ESP_OK) {
                 break;
@@ -824,24 +877,25 @@ static esp_err_t led_submit_async_locked(const uint8_t *grb, size_t len_bytes){
     return ESP_OK;
 }
 
-static esp_err_t led_submit_async(const uint8_t *grb, size_t len_bytes){
-    ESP_RETURN_ON_ERROR(led_lock(), "led", "lock");
-    esp_err_t err = led_submit_async_locked(grb, len_bytes);
-    led_unlock();
-    return err;
-}
-
 static void led_tx_task(void *arg){
     (void)arg;
-    const int64_t wire_frame_us = ((int64_t)LED_COUNT * 30LL) + 300LL; // 24 bits @1.25us + reset
-    const int64_t fps_frame_us = 1000000LL / (int64_t)LED_MAX_FPS;
-    const int64_t min_frame_us = (wire_frame_us > fps_frame_us) ? wire_frame_us : fps_frame_us;
     int64_t next_tx_us = 0;
     while (1){
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
         // Coalesce bursts: we'll send the most recent frame only.
         while (ulTaskNotifyTake(pdTRUE, 0) > 0) {}
+
+        size_t wire_pixels = 0;
+        for (size_t strip = 0; strip < LED_OUTPUT_COUNT; ++strip) {
+            size_t length = led_layout_strip_length((int)strip);
+            if (length > wire_pixels) wire_pixels = length;
+        }
+        if (wire_pixels == 0 || wire_pixels > LED_COUNT) wire_pixels = led_active_count();
+        const int64_t wire_frame_us = ((int64_t)wire_pixels * 30LL) + 300LL;
+        const int64_t fps_frame_us = 1000000LL / (int64_t)LED_MAX_FPS;
+        const int64_t min_frame_us = wire_frame_us > fps_frame_us
+            ? wire_frame_us : fps_frame_us;
 
         int64_t now_us = esp_timer_get_time();
         if (next_tx_us > now_us){
@@ -867,8 +921,9 @@ static void led_tx_task(void *arg){
         }
 
         // Single TX task owns the channel; don't hold the shared state lock while waiting.
+        int64_t tx_start_us = esp_timer_get_time();
         (void)led_flush_locked(s_tx_shadow, len_bytes, false);
-        next_tx_us = esp_timer_get_time() + min_frame_us;
+        next_tx_us = tx_start_us + min_frame_us;
     }
 }
 
@@ -883,6 +938,10 @@ static esp_err_t led_test_show_prefix(uint8_t r, uint8_t g, uint8_t b, size_t li
     size_t active = led_active_count();
     if (lit_count > active) lit_count = active;
     ESP_RETURN_ON_ERROR(led_lock(), "led", "lock");
+    if (s_output_owner != LED_OUTPUT_OWNER_BASE) {
+        led_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
     memset(s_frame, 0, LED_COUNT * 3);
     for (size_t i = 0; i < lit_count; ++i){
         led_set_pixel_rgb(s_frame, i, r, g, b);
@@ -896,6 +955,10 @@ static esp_err_t led_test_show_chase(uint8_t r, uint8_t g, uint8_t b, size_t spa
     size_t active = led_active_count();
     if (span > active) span = active;
     ESP_RETURN_ON_ERROR(led_lock(), "led", "lock");
+    if (s_output_owner != LED_OUTPUT_OWNER_BASE) {
+        led_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
     memset(s_frame, 0, LED_COUNT * 3);
     if (span > 0){
         size_t p = pos % span;
@@ -1062,6 +1125,10 @@ esp_err_t led_init(void){
 static esp_err_t led_send_all(uint8_t r, uint8_t g, uint8_t b){
     size_t active = led_active_count();
     ESP_RETURN_ON_ERROR(led_lock(), "led", "lock");
+    if (s_output_owner != LED_OUTPUT_OWNER_BASE) {
+        led_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
     memset(s_frame, 0, LED_COUNT * 3);
     for (size_t i = 0; i < active; ++i){
         led_set_pixel_rgb(s_frame, i, r, g, b);
@@ -1086,10 +1153,54 @@ esp_err_t led_toggle(void){
 }
 
 esp_err_t led_show_pixels(const uint8_t *frame, size_t count){
+    return led_show_pixels_owned(LED_OUTPUT_OWNER_BASE, frame, count);
+}
+
+esp_err_t led_output_claim(led_output_owner_t owner)
+{
+    if (owner == LED_OUTPUT_OWNER_BASE) return ESP_ERR_INVALID_ARG;
+    ESP_RETURN_ON_ERROR(led_lock(), "led", "lock");
+    esp_err_t err = ESP_OK;
+    if (s_output_owner != LED_OUTPUT_OWNER_BASE && s_output_owner != owner) {
+        err = ESP_ERR_INVALID_STATE;
+    } else {
+        s_output_owner = owner;
+    }
+    led_unlock();
+    return err;
+}
+
+void led_output_release(led_output_owner_t owner)
+{
+    if (owner == LED_OUTPUT_OWNER_BASE || led_lock() != ESP_OK) return;
+    if (s_output_owner == owner) s_output_owner = LED_OUTPUT_OWNER_BASE;
+    led_unlock();
+}
+
+bool led_output_is_owned_by(led_output_owner_t owner)
+{
+    bool result = false;
+    if (led_lock() == ESP_OK) {
+        result = s_output_owner == owner;
+        led_unlock();
+    }
+    return result;
+}
+
+esp_err_t led_show_pixels_owned(led_output_owner_t owner,
+                                const uint8_t *frame, size_t count)
+{
     if (!frame) return ESP_ERR_INVALID_ARG;
     size_t active = led_active_count();
     if (count > active) count = active;
-    return led_submit_async(frame, count * 3);
+    ESP_RETURN_ON_ERROR(led_lock(), "led", "lock");
+    if (s_output_owner != owner) {
+        led_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = led_submit_async_locked(frame, count * 3u);
+    led_unlock();
+    return err;
 }
  
 static bool led_pulse_lock(void){
@@ -1331,6 +1442,15 @@ static void led_geo_layout_stats(const led_layout_config_t *cfg, size_t count,
                                  led_geo_layout_stats_t *stats)
 {
     if (!cfg || !stats) return;
+    if (count > LED_COUNT) count = LED_COUNT;
+
+    if (s_geo_cache_valid &&
+        s_geo_cache_count == count &&
+        memcmp(cfg, &s_geo_cache_layout, sizeof(*cfg)) == 0) {
+        *stats = s_geo_cached_stats;
+        return;
+    }
+
     memset(stats, 0, sizeof(*stats));
     stats->min_x = stats->min_y = stats->min_z = FLT_MAX;
     stats->max_x = stats->max_y = stats->max_z = -FLT_MAX;
@@ -1348,7 +1468,10 @@ static void led_geo_layout_stats(const led_layout_config_t *cfg, size_t count,
     for (size_t i = 0; i < count; ++i) {
         led_point_t p;
         s_geo_ring_distance_cache[i] = FLT_MAX;
+        s_geo_point_valid[i] = 0;
         if (!led_layout_get_from_config(cfg, (int)i, &p)) continue;
+        s_geo_points_cache[i] = p;
+        s_geo_point_valid[i] = 1;
         have_point = true;
         if (p.x < stats->min_x) stats->min_x = p.x;
         if (p.x > stats->max_x) stats->max_x = p.x;
@@ -1366,6 +1489,10 @@ static void led_geo_layout_stats(const led_layout_config_t *cfg, size_t count,
         s_geo_ring_distance_cache[i] = ring_wave;
         if (ring_wave > stats->ring_wave_max) stats->ring_wave_max = ring_wave;
     }
+    for (size_t i = count; i < s_geo_cache_count && i < LED_COUNT; ++i) {
+        s_geo_ring_distance_cache[i] = FLT_MAX;
+        s_geo_point_valid[i] = 0;
+    }
 
     if (!have_point) {
         stats->min_x = stats->min_y = stats->min_z = -1.0f;
@@ -1379,6 +1506,11 @@ static void led_geo_layout_stats(const led_layout_config_t *cfg, size_t count,
     if (stats->ring_wave_max < 1.0f) {
         stats->ring_wave_max = stats->radial_max;
     }
+
+    s_geo_cache_layout = *cfg;
+    s_geo_cache_count = count;
+    s_geo_cached_stats = *stats;
+    s_geo_cache_valid = true;
 }
 
 static float led_geo_compact_wave(float distance, float front, float width)
@@ -1643,6 +1775,7 @@ static bool led_geo_plane_render_locked(const led_layout_config_t *cfg, size_t c
                                         float brightness_scale)
 {
     if (!cfg || !stats || count == 0) return false;
+    (void)cfg;
     bool rendered = false;
     float white_scale = led_beat_highlight_scale();
     bool background_enabled = s_beat_plane_background_enabled;
@@ -1657,11 +1790,11 @@ static bool led_geo_plane_render_locked(const led_layout_config_t *cfg, size_t c
         float extent = led_geo_projection_extent(stats, sweep->nx, sweep->ny, sweep->nz);
 
         for (size_t i = 0; i < count; ++i) {
-            led_point_t p;
-            if (!led_layout_get_from_config(cfg, (int)i, &p)) continue;
-            float proj = (p.x - cx) * sweep->nx +
-                         (p.y - cy) * sweep->ny +
-                         (p.z - cz) * sweep->nz;
+            if (!s_geo_point_valid[i]) continue;
+            const led_point_t *p = &s_geo_points_cache[i];
+            float proj = (p->x - cx) * sweep->nx +
+                         (p->y - cy) * sweep->ny +
+                         (p->z - cz) * sweep->nz;
             float crest = sweep->span_mode
                 ? expf(-fabsf(proj - sweep->offset) / sweep->width)
                 : led_geo_compact_wave(proj, sweep->offset, sweep->width);
@@ -2097,13 +2230,12 @@ static void led_pulse_task(void *arg){
             led_pulse_unlock();
         }
         if (active){
-            // Push the pulse frame directly (no intermediate memcpy path).
-            if (led_submit_async(s_pulse_frame, count * 3u) == ESP_OK){
+            if (led_show_pixels_owned(LED_OUTPUT_OWNER_BASE, s_pulse_frame, count) == ESP_OK){
                 s_pulse_was_on = true;
             }
         } else if (s_pulse_was_on){
             memset(s_pulse_frame, 0, LED_COUNT * 3);
-            if (led_submit_async(s_pulse_frame, count * 3u) == ESP_OK){
+            if (led_show_pixels_owned(LED_OUTPUT_OWNER_BASE, s_pulse_frame, count) == ESP_OK){
                 s_pulse_was_on = false;
             }
         }

@@ -29,10 +29,18 @@ static const show_name_map_t kSectionNames[] = {
     { SHOW_SECTION_BACK_RIGHT_TOP, "back_right_top" },
     { SHOW_SECTION_RIGHT_UPPER_ARM, "right_upper_arm" },
     { SHOW_SECTION_RIGHT_FOREARM, "right_forearm" },
-    { SHOW_SECTION_LEFT_UPPER_LEG, "left_upper_leg" },
-    { SHOW_SECTION_LEFT_LOWER_LEG, "left_lower_leg" },
-    { SHOW_SECTION_RIGHT_UPPER_LEG, "right_upper_leg" },
-    { SHOW_SECTION_RIGHT_LOWER_LEG, "right_lower_leg" },
+    { SHOW_SECTION_LEFT_THIGH_FRONT, "left_thigh_front" },
+    { SHOW_SECTION_LEFT_SHIN_F_IN, "left_shin_f_in" },
+    { SHOW_SECTION_LEFT_SHIN_F_OUT, "left_shin_f_out" },
+    { SHOW_SECTION_LEFT_THIGH_BACK, "left_thigh_back" },
+    { SHOW_SECTION_LEFT_SHIN_B_IN, "left_shin_b_in" },
+    { SHOW_SECTION_LEFT_SHIN_B_OUT, "left_shin_b_out" },
+    { SHOW_SECTION_RIGHT_THIGH_FRONT, "right_thigh_front" },
+    { SHOW_SECTION_RIGHT_SHIN_F_IN, "right_shin_f_in" },
+    { SHOW_SECTION_RIGHT_SHIN_F_OUT, "right_shin_f_out" },
+    { SHOW_SECTION_RIGHT_THIGH_BACK, "right_thigh_back" },
+    { SHOW_SECTION_RIGHT_SHIN_B_IN, "right_shin_b_in" },
+    { SHOW_SECTION_RIGHT_SHIN_B_OUT, "right_shin_b_out" },
 };
 
 static const show_name_map_t kGroupNames[] = {
@@ -51,6 +59,10 @@ static const show_name_map_t kGroupNames[] = {
     { SHOW_GROUP_LEGS_ALL, "legs_all" },
     { SHOW_GROUP_LEFT_LEG_ALL, "left_leg_all" },
     { SHOW_GROUP_RIGHT_LEG_ALL, "right_leg_all" },
+    { SHOW_GROUP_LEFT_THIGH_ALL, "left_thigh_all" },
+    { SHOW_GROUP_LEFT_SHIN_ALL, "left_shin_all" },
+    { SHOW_GROUP_RIGHT_THIGH_ALL, "right_thigh_all" },
+    { SHOW_GROUP_RIGHT_SHIN_ALL, "right_shin_all" },
 };
 
 static const char *lookup_name(const show_name_map_t *map, size_t count, uint32_t id)

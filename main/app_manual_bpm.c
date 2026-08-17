@@ -4,7 +4,6 @@
 #include <math.h>
 #include <stdio.h>
 
-#include "fft.h"
 #include "led.h"
 #include "led_modes.h"
 #include "oled.h"
@@ -14,19 +13,12 @@ const shell_legend_t MANUAL_BPM_LEGEND = {
 };
 
 typedef struct {
-    bool active;
-    float bpm;
-    float cycle_phase;
-    float phase_offset;
+    float prev_phase;
+    bool have_prev_phase;
     int beat_flash_ticks;
-} manual_bpm_state_t;
+} manual_bpm_ui_state_t;
 
-static manual_bpm_state_t s_manual_bpm = {
-    .bpm = 120.0f,
-    .cycle_phase = 0.0f,
-    .phase_offset = 0.0f,
-    .beat_flash_ticks = 0,
-};
+static manual_bpm_ui_state_t s_manual_ui = {0};
 
 static inline void fb_pset(uint8_t *fb, int x, int y)
 {
@@ -73,13 +65,6 @@ static void fb_rect_outline(uint8_t *fb, int x0, int y0, int w, int h)
     }
 }
 
-static float clamp_bpm(float bpm)
-{
-    if (bpm < 32.0f) bpm = 32.0f;
-    if (bpm > 255.0f) bpm = 255.0f;
-    return bpm;
-}
-
 static float wrap01(float v)
 {
     while (v < 0.0f) v += 1.0f;
@@ -87,18 +72,7 @@ static float wrap01(float v)
     return v;
 }
 
-static void manual_bpm_trigger_beat(void)
-{
-    led_trigger_beat(255, 96, 0);
-    s_manual_bpm.beat_flash_ticks = 3;
-}
-
-static void manual_bpm_shift_phase(float delta)
-{
-    s_manual_bpm.phase_offset = wrap01(s_manual_bpm.phase_offset + delta);
-}
-
-static int manual_bpm_beat_count_between(float start_phase, float end_phase, float trigger_phase)
+static int beat_count_between(float start_phase, float end_phase, float trigger_phase)
 {
     float start_rel = start_phase - trigger_phase;
     float end_rel = end_phase - trigger_phase;
@@ -110,25 +84,18 @@ static int manual_bpm_beat_count_between(float start_phase, float end_phase, flo
 void manual_bpm_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
-    s_manual_bpm.active = true;
-    s_manual_bpm.bpm = clamp_bpm(s_manual_bpm.bpm);
-    s_manual_bpm.cycle_phase = wrap01(s_manual_bpm.cycle_phase);
-    s_manual_bpm.phase_offset = wrap01(s_manual_bpm.phase_offset);
-    s_manual_bpm.beat_flash_ticks = 0;
+    led_source_mode_set(LED_SOURCE_MANUAL);
 
-    fft_set_display_enabled(false);
-    if (fft_visualizer_running()) {
-        fft_visualizer_stop();
-    }
-
-    led_modes_enable(false);
-    led_beat_enable(true);
+    manual_bpm_sync_state_t st = {0};
+    (void)led_source_manual_state_get(&st);
+    s_manual_ui.prev_phase = st.cycle_phase;
+    s_manual_ui.have_prev_phase = true;
+    s_manual_ui.beat_flash_ticks = 0;
 }
 
 void manual_bpm_app_deinit(shell_app_context_t *ctx)
 {
     (void)ctx;
-    s_manual_bpm.active = false;
 }
 
 void manual_bpm_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
@@ -143,16 +110,16 @@ void manual_bpm_app_handle_input(shell_app_context_t *ctx, const input_event_t *
 
     switch (ev->button) {
         case INPUT_BTN_A:
-            s_manual_bpm.bpm = clamp_bpm(s_manual_bpm.bpm - bpm_step);
+            led_source_manual_bpm_adjust(-bpm_step);
             break;
         case INPUT_BTN_B:
-            s_manual_bpm.bpm = clamp_bpm(s_manual_bpm.bpm + bpm_step);
+            led_source_manual_bpm_adjust(bpm_step);
             break;
         case INPUT_BTN_C:
-            manual_bpm_shift_phase(-phase_step);
+            led_source_manual_phase_adjust(-phase_step);
             break;
         case INPUT_BTN_D:
-            manual_bpm_shift_phase(phase_step);
+            led_source_manual_phase_adjust(phase_step);
             break;
         default:
             break;
@@ -162,18 +129,24 @@ void manual_bpm_app_handle_input(shell_app_context_t *ctx, const input_event_t *
 void manual_bpm_app_tick(shell_app_context_t *ctx, float dt_sec)
 {
     (void)ctx;
-    if (dt_sec <= 0.0f) return;
+    (void)dt_sec;
 
-    float start_phase = s_manual_bpm.cycle_phase;
-    float end_phase = start_phase + dt_sec * (s_manual_bpm.bpm / 60.0f);
-    int beats = manual_bpm_beat_count_between(start_phase, end_phase, s_manual_bpm.phase_offset);
-    while (beats-- > 0) {
-        manual_bpm_trigger_beat();
+    manual_bpm_sync_state_t st = {0};
+    if (!led_source_manual_state_get(&st)) return;
+
+    if (!s_manual_ui.have_prev_phase) {
+        s_manual_ui.prev_phase = st.cycle_phase;
+        s_manual_ui.have_prev_phase = true;
+    } else {
+        int beats = beat_count_between(s_manual_ui.prev_phase, st.cycle_phase, st.phase_offset);
+        if (beats > 0) {
+            s_manual_ui.beat_flash_ticks = 3;
+        }
+        s_manual_ui.prev_phase = st.cycle_phase;
     }
-    s_manual_bpm.cycle_phase = wrap01(end_phase);
 
-    if (s_manual_bpm.beat_flash_ticks > 0) {
-        s_manual_bpm.beat_flash_ticks--;
+    if (s_manual_ui.beat_flash_ticks > 0) {
+        s_manual_ui.beat_flash_ticks--;
     }
 }
 
@@ -183,27 +156,38 @@ void manual_bpm_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, in
     (void)h;
     if (!fb) return;
 
+    manual_bpm_sync_state_t st = {0};
+    if (!led_source_manual_state_get(&st)) {
+        oled_draw_text3x5(fb, x + 2, y + 2, "MANUAL BPM");
+        oled_draw_text3x5(fb, x + 2, y + 12, "state unavailable");
+        return;
+    }
+
     char line[32];
-    const char *mode = led_beat_anim_name((int)led_beat_anim_get());
+    const char *mode = led_modes_enabled()
+        ? led_modes_name(led_modes_current())
+        : led_beat_anim_name((int)led_beat_anim_get());
     if (!mode) mode = "?";
 
     oled_draw_text3x5(fb, x + 2, y + 2, "MANUAL BPM");
 
-    snprintf(line, sizeof(line), "mode:%s", mode);
+    snprintf(line, sizeof(line), "%s:%s",
+             led_modes_enabled() ? "sync" : "beat",
+             mode);
     oled_draw_text3x5(fb, x + 2, y + 10, line);
 
-    snprintf(line, sizeof(line), "bpm:%3u", (unsigned)lroundf(s_manual_bpm.bpm));
+    snprintf(line, sizeof(line), "bpm:%3u", (unsigned)lroundf(st.bpm));
     oled_draw_text3x5(fb, x + 2, y + 18, line);
 
-    snprintf(line, sizeof(line), "ofs:%3u%%", (unsigned)lroundf(s_manual_bpm.phase_offset * 100.0f));
+    snprintf(line, sizeof(line), "ofs:%3u%%", (unsigned)lroundf(wrap01(st.phase_offset) * 100.0f));
     oled_draw_text3x5(fb, x + 2, y + 26, line);
 
     int bar_x = x + 2;
     int bar_w = w - 8;
-    int phase_fill = (int)lroundf((float)(bar_w - 2) * s_manual_bpm.cycle_phase);
+    int phase_fill = (int)lroundf((float)(bar_w - 2) * wrap01(st.cycle_phase));
     if (phase_fill < 0) phase_fill = 0;
     if (phase_fill > bar_w - 2) phase_fill = bar_w - 2;
-    int marker_x = bar_x + 1 + (int)lroundf((float)(bar_w - 3) * s_manual_bpm.phase_offset);
+    int marker_x = bar_x + 1 + (int)lroundf((float)(bar_w - 3) * wrap01(st.phase_offset));
     if (marker_x < bar_x + 1) marker_x = bar_x + 1;
     if (marker_x > bar_x + bar_w - 2) marker_x = bar_x + bar_w - 2;
     fb_rect_outline(fb, bar_x, y + 35, bar_w, 6);
@@ -212,18 +196,12 @@ void manual_bpm_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, in
     }
     fb_rect_fill(fb, marker_x, y + 34, 1, 8);
 
-    if (s_manual_bpm.beat_flash_ticks > 0) {
+    if (s_manual_ui.beat_flash_ticks > 0) {
         fb_rect_fill(fb, x + w - 8, y + 2, 5, 5);
     }
-
 }
 
 bool manual_bpm_get_sync_state(manual_bpm_sync_state_t *out)
 {
-    if (!out) return false;
-    out->active = s_manual_bpm.active;
-    out->bpm = clamp_bpm(s_manual_bpm.bpm);
-    out->cycle_phase = wrap01(s_manual_bpm.cycle_phase);
-    out->phase_offset = wrap01(s_manual_bpm.phase_offset);
-    return true;
+    return led_source_manual_state_get(out);
 }
