@@ -12,17 +12,17 @@
 
 static const char *TAG = "fft_sync";
 static esp_err_t s_fft_sync_start_err = ESP_OK;
+enum { CONTROL_PHASE, CONTROL_BPM, CONTROL_RATIO, CONTROL_OFFBEAT,
+       CONTROL_OUTPUT, CONTROL_EARLIER, CONTROL_LATER, CONTROL_COUNT };
+static unsigned s_control;
 
 shell_legend_t FFT_SYNC_LEGEND = {
-    .slots = { SHELL_ICON_LEFT, SHELL_ICON_RIGHT, SHELL_ICON_LOCK, SHELL_ICON_PLAY },
+    .slots = { SHELL_ICON_LEFT, SHELL_ICON_RIGHT, SHELL_ICON_SELECT, SHELL_ICON_REFRESH },
 };
 
 static void fft_sync_update_legend(void)
 {
-    fft_sync_state_t st = {0};
-    fft_get_sync_state(&st);
-    FFT_SYNC_LEGEND.slots[2] = SHELL_ICON_LOCK;
-    FFT_SYNC_LEGEND.slots[3] = st.beat_enabled ? SHELL_ICON_PAUSE : SHELL_ICON_PLAY;
+    FFT_SYNC_LEGEND.slots[2] = s_control <= CONTROL_BPM ? SHELL_ICON_LOCK : SHELL_ICON_SELECT;
 }
 
 static inline void fb_pset(uint8_t *fb, int x, int y)
@@ -82,6 +82,7 @@ void fft_sync_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
     s_fft_sync_start_err = ESP_OK;
+    s_control = CONTROL_PHASE;
     fft_sync_update_legend();
     led_source_mode_set(LED_SOURCE_FFT);
     if (!shell_audio_init_if_needed()) {
@@ -108,21 +109,28 @@ void fft_sync_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev
 {
     (void)ctx;
     if (!ev) return;
-    if (ev->type != INPUT_EVENT_PRESS && ev->type != INPUT_EVENT_LONG_PRESS) return;
+    if (ev->type != INPUT_EVENT_PRESS) return; // a long press already emitted PRESS
 
-    float phase_step = (ev->type == INPUT_EVENT_LONG_PRESS) ? 0.10f : 0.02f;
     switch (ev->button) {
         case INPUT_BTN_A:
-            fft_beat_phase_offset_add(-phase_step);
+            s_control = (s_control + CONTROL_COUNT - 1) % CONTROL_COUNT;
             break;
         case INPUT_BTN_B:
-            fft_beat_phase_offset_add(phase_step);
+            s_control = (s_control + 1) % CONTROL_COUNT;
             break;
         case INPUT_BTN_C:
-            fft_beat_lock_toggle();
+            switch (s_control) {
+                case CONTROL_PHASE: fft_phase_lock_toggle(); break;
+                case CONTROL_BPM: fft_beat_lock_toggle(); break;
+                case CONTROL_RATIO: fft_beat_ratio_cycle(); break;
+                case CONTROL_OFFBEAT: fft_beat_offbeat_toggle(); break;
+                case CONTROL_OUTPUT: fft_beat_enable_toggle(); break;
+                case CONTROL_EARLIER: fft_beat_phase_offset_add(-0.02f); break;
+                case CONTROL_LATER: fft_beat_phase_offset_add(0.02f); break;
+            }
             break;
         case INPUT_BTN_D:
-            fft_beat_enable_toggle();
+            fft_detector_reset();
             break;
         default:
             break;
@@ -136,7 +144,7 @@ void fft_sync_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int 
     (void)h;
     if (!fb) return;
 
-    if (s_fft_sync_start_err != ESP_OK) {
+    if (s_fft_sync_start_err != ESP_OK && !fft_visualizer_running()) {
         char line[24];
         oled_draw_text3x5(fb, x + 2, y + 2, "FFT SYNC FAIL");
         snprintf(line, sizeof(line), "err:%s", esp_err_to_name(s_fft_sync_start_err));
@@ -146,24 +154,27 @@ void fft_sync_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int 
 
     fft_sync_state_t st = {0};
     fft_get_sync_state(&st);
-    FFT_SYNC_LEGEND.slots[3] = st.beat_enabled ? SHELL_ICON_PAUSE : SHELL_ICON_PLAY;
 
     char line[32];
-    oled_draw_text3x5(fb, x + 2, y + 2, "FFT SYNC");
+    snprintf(line, sizeof(line), "held:%3u out:%3u", (unsigned)lroundf(st.held_bpm), (unsigned)lroundf(st.bpm));
+    oled_draw_text3x5(fb, x + 2, y + 2, line);
 
-    snprintf(line, sizeof(line), "b:%3u d:%3u",
-             (unsigned)lroundf(st.bpm),
-             (unsigned)lroundf(st.detected_bpm));
+    snprintf(line, sizeof(line), "cand:%3u x%u%s", (unsigned)lroundf(st.detected_bpm),
+             st.ratio, st.offbeat ? " offbeat" : "");
     oled_draw_text3x5(fb, x + 2, y + 10, line);
 
-    snprintf(line, sizeof(line), "L:%s E:%s",
-             st.bpm_locked ? "on" : "off",
-             st.beat_enabled ? "on" : "off");
+    snprintf(line, sizeof(line), "conf:%.2f ev:%.2f", st.confidence, st.evidence);
     oled_draw_text3x5(fb, x + 2, y + 18, line);
 
-    snprintf(line, sizeof(line), "ofs:%+d%% c:%02u",
-             fft_sync_signed_offset_percent(st.phase_offset),
-             (unsigned)lroundf(st.confidence * 99.0f));
+    switch (s_control) {
+        case CONTROL_PHASE: snprintf(line, sizeof(line), ">phase lock: %s", st.phase_locked ? "on" : "off"); break;
+        case CONTROL_BPM: snprintf(line, sizeof(line), ">BPM force: %s", st.bpm_locked ? "on" : "off"); break;
+        case CONTROL_RATIO: snprintf(line, sizeof(line), ">pulse ratio: x%u", st.ratio); break;
+        case CONTROL_OFFBEAT: snprintf(line, sizeof(line), ">offbeat: %s", st.offbeat ? "on" : "off"); break;
+        case CONTROL_OUTPUT: snprintf(line, sizeof(line), ">output: %s", st.beat_enabled ? "on" : "paused"); break;
+        default: snprintf(line, sizeof(line), ">%s: %+d%%", s_control == CONTROL_EARLIER ? "earlier" : "later",
+                          fft_sync_signed_offset_percent(st.phase_offset)); break;
+    }
     oled_draw_text3x5(fb, x + 2, y + 26, line);
 
     int bar_x = x + 2;

@@ -324,10 +324,12 @@ Master Control (`main/app_master_control.c`):
 - `free` leaves colors local on each device while still syncing mode/timing
 
 FFT Sync (`main/app_fft_sync.c`):
-- `A/B`: shift FFT beat trigger phase backward/forward
-- `C`: lock/unlock current BPM
-- `D`: enable/disable FFT beat export
-- Shows effective BPM, detected BPM, confidence, current cycle position, and trigger marker
+- `A/B`: select a control; `C`: apply it; `D`: reset the detector for a new song
+- Controls: phase lock (also soft-locks BPM), forced BPM, 1x/2x/3x pulse ratio,
+  offbeat, beat output pause, and earlier/later phase trim
+- Shows held/base BPM, output BPM, candidate, decision confidence, evidence
+  quality (threshold 1), current cycle position, and trigger marker
+- Long presses do not toggle a control twice; global shell shortcuts are unchanged
 
 Calculator (`main/app_calculator.c` / `components/calculator/calculator.c`):
 - `A`: move left
@@ -493,13 +495,23 @@ Animation model notes:
 FFT/BPM pipeline and local benchmark
 ------------------------------------
 The firmware FFT component is a live microphone pipeline. It captures audio in
-the background, computes spectral/energy views, maintains novelty history, runs
-tempo/phase analysis in a worker, and exposes a beat clock to the LED source and
-Master Control. Current shared configuration is 16 kHz input, FFT size 1024,
-256-sample hop, and an 80..159 BPM search range.
+the background and exposes the same beat clock/audio-level APIs to LED modes
+and Master Control. It now ports the PC `../localFFT/LatestFFT.c` treble-weighted
+direct variance-comb detector: 44.1 kHz, 1024-sample non-overlapping FFT frames,
+32 bands, four seconds of audio history, and an 80..159 integer BPM range.
 
-Treat its BPM confidence and phase output as experimental. It is useful and
-feature-rich, but not reliable enough yet to be the final synchronization source.
+`components/fft/fft_detector.c` is the portable math/state machine;
+`components/fft/fft.c` owns I2S, task scheduling, controls and beat/LED export;
+`fft_render.c` remains display-only. Audio capture runs at about 43 frames/sec;
+the expensive comb is requested every 22 frames (~0.51 sec), not every frame.
+The low-priority worker yields between BPM batches and skips new jobs if busy.
+Do not lower capture rate or change band definitions to save CPU without a new
+PC comparison: that changes the feature on which the tracker was evaluated.
+
+See `docs/fft-detector.md` for exact parameters, controls, port differences,
+host tests, profiling logs and the board acceptance checklist. The port builds
+but still needs on-board latency/load, I2S, LED, playback and radio testing.
+Confidence/evidence are threshold-readiness measures, not accuracy probabilities.
 
 The sibling directory `../localFFT` is the PC-side research workbench for
 improving this pipeline. It is not part of the ESP-IDF build. In particular,
@@ -507,23 +519,34 @@ improving this pipeline. It is not part of the ESP-IDF build. In particular,
 - reads a manifest of labeled songs and decoded mono f32le inputs
 - evaluates tracks as one continuous stream so detector state crosses song
   boundaries like a live product
-- uses 22.05 kHz input, FFT size 512, 32 comb bands, an 8-second analysis window,
-  and an 80..159 BPM candidate range
+- supports direct, treble-weighted direct and onset-enhanced feature variants;
+  the port uses the selected four-second treble-weighted direct configuration,
+  not every alternative explored in the benchmark
+- can mix repeatable speech/babble and irregular high-crest-factor click noise
+- uses curated full songs plus approved excerpts, explicit label corrections,
+  octave-folded targets and a separate holdout; no blues, jazz or classical
+- excludes the first five seconds per song from scoring without telling the
+  detector where songs start; sliding-BPM songs are separate bonus evaluation
 - compares local, accumulated, and held/final BPM estimates
-- writes summary, trace, and per-BPM score CSV files
+- writes per-track and overall accuracy/error, stability, feature cost, and BPM
+  scoring cost; detailed trace and per-BPM score CSVs are optional
 - works with `benchmark/visualize_bpm.py` to plot BPM, stability, error, and
   score heatmaps
 
-The current benchmark has produced very good tempo results, but remains WIP and
-must be expanded before its strategy is ported back to the ESP32. Beat phase is
-the unresolved part: many songs do not expose one unambiguous phase peak.
+`../localFFT/benchmark/run_sweep.py` is the normal entry point. It builds the C
+runner, caches decoded audio, runs the selected window/noise matrix, and resets
+`benchmark/output/index.html` for each run. Results appear progressively there;
+audio listening and detailed feature exports are available with `--evidence`.
+Source songs stay visible in `benchmark/audio_pool/`; generated cache is separate.
+See `../localFFT/benchmark/README.md` and `EXPERIMENTS.md`. The user runs sweeps;
+do not automatically start another tuning/search campaign during the port.
 
-A likely product direction is explicit user correction rather than promising
-perfect automatic phase. Candidate controls, still to be discussed, include a
-phase choice such as `normal` / `offbeat` and tempo/subdivision choices such as
-`1x` / `2x` / `3x`. Phase offset and tempo multiplier are different concepts
-and should probably remain separate settings. Do not lock this API or UX without
-first reviewing benchmark evidence and real suit behavior.
+Phase stays automatic by default. Phase lock, offbeat and subdivision controls
+are now implemented, but fractional-BPM drift correction is NOT implemented.
+Following one spectral phase peak is not sufficient: a song can move its strong
+energy from beat to offbeat without actually changing tempo. Keep that research
+separate from this embedded port. The 30-second lost-pulse stop is independent
+of volume and still needs non-music/crowd testing on the physical microphone.
 
 
 Multi-suit show authoring system
@@ -694,26 +717,30 @@ Optimize measured hot paths:
   asset/storage space.
 
 FFT/BPM research:
-- [ ] Treat the live firmware FFT/BPM/phase pipeline as provisional and use
+- [x] Treat the live firmware FFT/BPM/phase pipeline as provisional and use
   `../localFFT/benchmark` as the decision environment.
 - [ ] Expand the labeled corpus across genres, intros, breakdowns, silence,
   tempo changes, noisy live input, ambiguous half/double tempo, and transitions
   between songs.
 - [ ] Add reproducible per-track and transition metrics: convergence time,
   strict BPM error, false switches, confidence calibration, CPU time, and memory.
-- [ ] Make benchmark parameters/configurations explicit so candidate strategies
+- [x] Make benchmark parameters/configurations explicit so candidate strategies
   share inputs, preprocessing, windows, and scoring.
+- [x] Automate analysis-window and clean/speech-babble SNR sweeps, cache decoded
+  inputs, resume completed variants, and rank aggregate results.
+- [ ] Replace/confirm synthetic multi-speaker babble with representative real
+  crowd/conversation recordings before choosing the production window length.
 - [ ] Compare tempo strategies against the current accumulated normalized comb
   score and hold/switch policy; preserve plots/traces for failed cases.
 - [ ] Investigate phase separately from BPM: onset/novelty phase stability,
   ambiguity scoring, drift, and tracks with multiple plausible peaks.
-- [ ] Discuss the intended manual correction UI before implementation. Current
-  ideas are `normal` / `offbeat` phase plus separate `1x` / `2x` / `3x`
-  tempo or subdivision selection; naming and semantics are not decided.
+- [x] Port the selected PC detector and add reset, forced BPM, automatic/locked
+  phase, independent phase/BPM soft-lock, offbeat and 1x/2x/3x pulse controls.
 - [ ] Decide when automatic phase is trustworthy, when to keep the previous
   phase, and when to ask the wearer for input.
-- [ ] Only port a benchmark strategy after measuring ESP32 real-time CPU, PSRAM,
-  latency, task interaction, and live-microphone behavior.
+- [ ] Validate the port on ESP32: real-time load, heap/stack headroom, capture
+  overflow, latency, task interaction and live-microphone behavior. Start with
+  `docs/fft-detector.md`; compile/host tests do not establish hardware performance.
 
 Multi-suit show system:
 - [ ] Continue the PC editor as the authoring source of truth; do not move its

@@ -12,6 +12,7 @@
 #include "driver/gpio.h"
 #include "driver/i2s_std.h"
 #include "esp_err.h"
+#include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
@@ -31,7 +32,12 @@ static const char* TAG = "audio";
 static i2s_chan_handle_t   s_tx = NULL;     // speaker (MAX98357A)
 static i2s_chan_handle_t   s_rx = NULL;     // microphone (INMP441)
 static audio_i2s_config_t  g_last_cfg = {0};
-static int                 s_curr_rate = 48000; // default boot rate
+static volatile int        s_curr_rate = 48000; // default boot rate
+static volatile bool       s_rate_changing;
+static volatile uint32_t   s_clock_revision = 0;
+static volatile uint32_t   s_rx_overflows = 0;
+static portMUX_TYPE        s_output_mux = portMUX_INITIALIZER_UNLOCKED;
+static unsigned            s_output_users;
 static int32_t             s_vol_q15   = 32767; // 1.0 in Q1.15
 static bool                s_tx_enabled = false;
 static bool                s_rx_enabled = false;
@@ -95,6 +101,13 @@ static size_t fread_retry(void *ptr, size_t sz, size_t cnt, FILE *f) {
 
 // ====================== Public API ======================
 
+static bool IRAM_ATTR audio_rx_overflow(i2s_chan_handle_t ch, i2s_event_data_t *event, void *user)
+{
+    (void)ch; (void)event; (void)user;
+    ++s_rx_overflows;
+    return false;
+}
+
 esp_err_t audio_init(const audio_i2s_config_t* cfg){
     if (!cfg) return ESP_ERR_INVALID_ARG;
     g_last_cfg  = *cfg;
@@ -139,6 +152,8 @@ esp_err_t audio_init(const audio_i2s_config_t* cfg){
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_tx, &tx_cfg), TAG, "init tx");
     if (cfg->din_gpio >= 0) {
         ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_rx, &rx_cfg), TAG, "init rx");
+        i2s_event_callbacks_t callbacks = { .on_recv_q_ovf = audio_rx_overflow };
+        ESP_RETURN_ON_ERROR(i2s_channel_register_event_callback(s_rx, &callbacks, NULL), TAG, "RX overflow monitor");
     } else {
         s_rx = NULL;
     }
@@ -165,11 +180,31 @@ static esp_err_t audio_reconfig_clock(i2s_chan_handle_t ch, int hz){
 
 esp_err_t audio_set_rate(int hz){
     if (hz <= 0) return ESP_ERR_INVALID_ARG;
-    s_curr_rate = hz;
+    s_rate_changing = true; // capture must discard windows spanning reconfiguration
+    ++s_clock_revision;
     ESP_RETURN_ON_ERROR(audio_reconfig_clock(s_tx, hz), TAG, "tx re-clock");
     ESP_RETURN_ON_ERROR(audio_reconfig_clock(s_rx, hz), TAG, "rx re-clock");
+    s_curr_rate = hz;
+    s_rate_changing = false;
     return ESP_OK;
 }
+
+int audio_get_rate(void) { return s_rate_changing ? 0 : s_curr_rate; }
+uint32_t audio_get_clock_revision(void) { return s_clock_revision; }
+uint32_t audio_get_rx_overflows(void) { return s_rx_overflows; }
+
+bool audio_output_active(void)
+{
+    portENTER_CRITICAL(&s_output_mux);
+    bool active = s_output_users > 0;
+    portEXIT_CRITICAL(&s_output_mux);
+    return active;
+}
+
+static void audio_output_enter(void)
+{ portENTER_CRITICAL(&s_output_mux); ++s_output_users; portEXIT_CRITICAL(&s_output_mux); }
+static esp_err_t audio_output_leave(esp_err_t err)
+{ portENTER_CRITICAL(&s_output_mux); --s_output_users; portEXIT_CRITICAL(&s_output_mux); return err; }
 
 esp_err_t audio_enable_tx(void){
     if (!s_tx) return ESP_ERR_INVALID_STATE;
@@ -339,7 +374,7 @@ static size_t ring_read(audio_ring_t *r, uint8_t *dst, size_t n){
 }
 
 // Local WAV playback using I2S speaker (mono PCM16 only)
-esp_err_t audio_play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
+static esp_err_t play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
 {
     if (!s_tx || !f || !info) {
         return ESP_ERR_INVALID_ARG;
@@ -511,7 +546,7 @@ esp_err_t audio_play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
 }
 
 
-esp_err_t audio_play_wav_file(const char* path){
+static esp_err_t play_wav_file(const char* path){
     if (!s_tx || !path) return ESP_ERR_INVALID_STATE;
 
     FILE* f = fopen(path, "rb");
@@ -632,7 +667,7 @@ esp_err_t audio_play_wav_file(const char* path){
 }
 
 // ====================== Memory variant (same format, mono only) ======================
-esp_err_t audio_play_wav_mem(const void* data, size_t size){
+static esp_err_t play_wav_mem(const void* data, size_t size){
     if (!s_tx || !data || size < sizeof(riff_t)) return ESP_ERR_INVALID_ARG;
 
     const uint8_t *p   = (const uint8_t*)data;
@@ -762,7 +797,7 @@ esp_err_t audio_play_embedded(void){
     return audio_play_wav_mem(start, sz);
 }
 
-esp_err_t audio_play_tone(int hz, int ms){
+static esp_err_t play_tone(int hz, int ms){
     if (!s_tx) return ESP_ERR_INVALID_STATE;
     if (hz <= 0) hz = 440;
     if (ms <= 0) ms = 250;
@@ -836,3 +871,14 @@ esp_err_t audio_play_tone(int hz, int ms){
     (void)audio_quiet_tail(12, 8);
     return ESP_OK;
 }
+
+// Track every local playback path, including the startup tone (which does not
+// go through audio_player). FFT must not steal its clock or mute its amplifier.
+esp_err_t audio_play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
+{ audio_output_enter(); return audio_output_leave(play_wav_local_stream(f, info)); }
+esp_err_t audio_play_wav_file(const char *path)
+{ audio_output_enter(); return audio_output_leave(play_wav_file(path)); }
+esp_err_t audio_play_wav_mem(const void *data, size_t size)
+{ audio_output_enter(); return audio_output_leave(play_wav_mem(data, size)); }
+esp_err_t audio_play_tone(int hz, int ms)
+{ audio_output_enter(); return audio_output_leave(play_tone(hz, ms)); }

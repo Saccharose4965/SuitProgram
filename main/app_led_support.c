@@ -2,6 +2,7 @@
 
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "fft.h"
 #include "led.h"
 #include "shell_audio.h"
@@ -28,10 +29,14 @@ void led_ui_fft_request(uint32_t client_mask, bool needed)
         }
 
         bool was_running = fft_visualizer_running();
-        fft_set_display_enabled(false);
+        if (!was_running) fft_set_display_enabled(false);
         esp_err_t err = fft_visualizer_start();
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "fft_visualizer_start failed: %s", esp_err_to_name(err));
+            static int64_t next_warning;
+            if (esp_timer_get_time() >= next_warning) {
+                ESP_LOGW(TAG, "FFT request pending (audio busy or unavailable): %s", esp_err_to_name(err));
+                next_warning = esp_timer_get_time() + 5000000;
+            }
             return;
         }
         if (!was_running) {

@@ -14,6 +14,7 @@ typedef struct {
     float logmag[FFT_RENDER_LOGMAG_BINS];
     float bpm_est;
     float bpm_conf;
+    float evidence;
     float bpm_phase;
 } fft_render_packet_t;
 

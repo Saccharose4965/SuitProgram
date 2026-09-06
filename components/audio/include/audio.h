@@ -23,6 +23,11 @@ typedef struct {
 
 esp_err_t audio_init(const audio_i2s_config_t* cfg);
 esp_err_t audio_set_rate(int hz);
+// Capture diagnostics: rate is zero while clock reconfiguration is incomplete.
+int       audio_get_rate(void);
+uint32_t  audio_get_clock_revision(void);
+uint32_t  audio_get_rx_overflows(void);
+bool      audio_output_active(void);
 esp_err_t audio_set_volume(float vol);
 float     audio_get_volume(void);
 

@@ -82,20 +82,11 @@ static void render_bpm_text(const fft_render_packet_t *pkt){
     float bpm_est = pkt ? pkt->bpm_est : 0.0f;
     if (!isfinite(bpm_est) || bpm_est < 0.0f) bpm_est = 0.0f;
 
-    // Smooth the displayed BPM so it's readable
-    static float s_bpm_display = 0.0f;
-    const float alpha = 0.15f; // smaller = smoother, larger = more responsive
-
-    if (s_bpm_display <= 0.0f)
-        s_bpm_display = bpm_est;
-    else
-        s_bpm_display = (1.0f - alpha) * s_bpm_display + alpha * bpm_est;
-
-    snprintf(l1, sizeof(l1), "BPM: %.1f", s_bpm_display);
-    snprintf(l2, sizeof(l2), "conf:%.2f ph:%.2f",
+    snprintf(l1, sizeof(l1), "BPM: %.0f", bpm_est);
+    snprintf(l2, sizeof(l2), "conf:%.2f ev:%.2f",
              pkt ? pkt->bpm_conf : 0.0f,
-             pkt ? pkt->bpm_phase : 0.0f);
-    snprintf(l3, sizeof(l3), "B:%c", flash);
+             pkt ? pkt->evidence : 0.0f);
+    snprintf(l3, sizeof(l3), "B:%c phase:%.2f", flash, pkt ? pkt->bpm_phase : 0.0f);
 
     render_three_lines_fb(l1, l2, l3);
 }

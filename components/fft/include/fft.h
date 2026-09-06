@@ -22,12 +22,12 @@ bool fft_visualizer_running(void);
 
 // Shared FFT pipeline configuration (single source of truth for fft.c/fft_render.c).
 enum {
-    FFT_CFG_SAMPLE_RATE_HZ = 16000,
-    FFT_CFG_HOP_SAMPLES    = 256,   // 16 ms hop
-    FFT_CFG_SIZE           = 1024,  // 64 ms window
-    FFT_CFG_NOVELTY_WIN    = 32,    // local mean window for flux display (~0.5 s)
+    FFT_CFG_SAMPLE_RATE_HZ = 44100,
+    FFT_CFG_HOP_SAMPLES    = 1024,  // 23.22 ms; same non-overlapping frames as PC
+    FFT_CFG_SIZE           = 1024,
+    FFT_CFG_NOVELTY_WIN    = 32,    // local mean for flux display (~0.74 s)
     FFT_CFG_NOV_RING_FRAMES =
-        (6 * FFT_CFG_SAMPLE_RATE_HZ + (FFT_CFG_HOP_SAMPLES / 2)) / FFT_CFG_HOP_SAMPLES, // ~6 s analysis history
+        (4 * FFT_CFG_SAMPLE_RATE_HZ + FFT_CFG_HOP_SAMPLES - 1) / FFT_CFG_HOP_SAMPLES,
     FFT_CFG_BPM_MIN        = 80,
     FFT_CFG_BPM_MAX        = 159,
     FFT_CFG_TARGET_BPM_MIN = 80,
@@ -35,12 +35,12 @@ enum {
 };
 
 typedef enum {
-    FFT_VIEW_BPM_TEXT = 0,   // existing 3-line BPM/delta/flash view
+    FFT_VIEW_BPM_TEXT = 0,   // held BPM, decision/evidence readiness, phase/flash
     FFT_VIEW_SPECTRUM,       // per-frame log-magnitude spectrum (bars)
     FFT_VIEW_SPECTROGRAM,    // rolling spectrogram over time
-    FFT_VIEW_NOVELTY_PEAKS,  // cleaned novelty (peaks) and local mean
-    FFT_VIEW_FLUX,           // raw spectral flux (positive-only derivative) over time
-    FFT_VIEW_TEMPO_RAW,      // temporal FFT spectrum (instantaneous)
+    FFT_VIEW_NOVELTY_PEAKS,  // raw spectral flux and local mean (display only)
+    FFT_VIEW_FLUX,           // flux above local mean (display only)
+    FFT_VIEW_TEMPO_RAW,      // normalized, averaged direct-comb BPM scores
     FFT_VIEW_PHASE_COMB,     // phase correlation vs comb filter aligned to BPM
     FFT_VIEW_COUNT           // number of valid render views
 } fft_view_t;
@@ -68,12 +68,22 @@ void fft_get_levels(fft_levels_t *out);
 
 typedef struct {
     float bpm;           // effective BPM currently driving beat export
-    float detected_bpm;  // raw BPM detected from novelty analysis
-    float confidence;    // 0..1 detection confidence
+    float detected_bpm;  // strongest smoothed BPM candidate
+    float confidence;    // decision readiness, capped at 1 for existing consumers
+    float held_bpm;      // base BPM before ratio
+    float evidence;      // ungated evidence quality, threshold 1
+    float lost_seconds;
+    float analysis_ms;   // last worker wall time, including cooperative yields
+    float capture_load;  // smoothed processing wall time / frame duration, percent
+    uint32_t skipped_jobs;
+    uint32_t capture_errors;
     float beat_phase;    // 0..1 current beat cycle position
     float trigger_phase; // 0..1 phase where a beat is emitted
     float phase_offset;  // 0..1 user offset added to trigger phase
     bool  bpm_locked;
+    bool  phase_locked;  // also enables the independent BPM soft-lock
+    unsigned ratio;      // output pulse multiplier: 1, 2, 3
+    bool offbeat;
     bool  beat_enabled;
     bool  running;
 } fft_sync_state_t;
@@ -82,6 +92,10 @@ void fft_get_sync_state(fft_sync_state_t *out);
 void fft_beat_phase_offset_add(float delta_cycles);
 void fft_beat_lock_set(bool locked);
 void fft_beat_lock_toggle(void);
+void fft_detector_reset(void);
+void fft_phase_lock_toggle(void);
+void fft_beat_ratio_cycle(void);
+void fft_beat_offbeat_toggle(void);
 void fft_beat_enable_set(bool enabled);
 void fft_beat_enable_toggle(void);
 void fft_led_export_enable(bool enabled);
