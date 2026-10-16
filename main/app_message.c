@@ -1,4 +1,5 @@
 #include "app_shell.h"
+#include "message_direct.h"
 
 #include <errno.h>
 #include <ctype.h>
@@ -25,6 +26,25 @@
 #include "oled.h"
 #include "storage_sd.h"
 #include "telemetry.h"
+#include "audio_wav.h"
+
+static bool message_valid_wav(const char *path)
+{
+    FILE *f=fopen(path,"rb");
+    if(!f)return false;
+    uint8_t header[12];
+    bool ok=fread(header,1,sizeof(header),f)==sizeof(header) &&
+            !memcmp(header,"RIFF",4) && !memcmp(header+8,"WAVE",4);
+    audio_wav_info_t info;
+    rewind(f);
+    ok=ok && audio_wav_parse_file(f,&info)==ESP_OK && info.data_size>0;
+    if(ok) {
+        fseek(f,0,SEEK_END);
+        long size=ftell(f);
+        ok=size>=0 && (uint64_t)info.data_offset+info.data_size<=(uint64_t)size;
+    }
+    fclose(f);return ok;
+}
 
 static const char *TAG = "app_message";
 
@@ -225,6 +245,9 @@ static esp_err_t message_scan_outbox(message_outbox_scan_t *out)
         if (!message_parse_outbox_number(ent->d_name, &num)) {
             continue;
         }
+        char path[256];
+        if(snprintf(path,sizeof(path),"%s/%s",s_message.outbox_dir,ent->d_name)>=(int)sizeof(path) ||
+           !message_valid_wav(path)) continue;
 
         out->count++;
         if (!out->latest_name[0] || num > out->latest_num) {
@@ -292,15 +315,25 @@ static esp_err_t message_select_random_outbox_path(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    message_outbox_scan_t scan = {0};
-    esp_err_t err = message_scan_outbox(&scan);
-    if (err != ESP_OK) return err;
-    if (!scan.random_name[0]) return ESP_ERR_NOT_FOUND;
-
-    if (audio_player_is_active()) {
-        audio_player_stop();
+    const char *dirs[]={s_message.outbox_dir,s_message.inbox_dir};
+    char chosen[sizeof(s_message.last_path)]={0};
+    unsigned count=0;
+    for(unsigned i=0;i<2;i++) {
+        DIR *dir=opendir(dirs[i]);if(!dir)continue;
+        struct dirent *entry;
+        while((entry=readdir(dir))) {
+            size_t n=strlen(entry->d_name);
+            if(n<4 || strcmp(entry->d_name+n-4,".wav"))continue;
+            char path[256];
+            int length=snprintf(path,sizeof(path),"%s/%s",dirs[i],entry->d_name);
+            if(length<0 || (size_t)length>=sizeof(chosen) || !message_valid_wav(path))continue;
+            if(esp_random()%++count==0)strcpy(chosen,path);
+        }
+        closedir(dir);
     }
-    return message_select_outbox_name(scan.random_name);
+    if(!count)return ESP_ERR_NOT_FOUND;
+    if(audio_player_is_active())audio_player_stop();
+    strcpy(s_message.last_path,chosen);return ESP_OK;
 }
 
 static esp_err_t message_delete_latest_outbox_path(void)
@@ -359,6 +392,9 @@ static void message_send_task(void *arg)
     s_message.send_sent = 0;
     s_message.send_total = 0;
 
+    err = message_direct_send(ctx->path, message_send_progress, NULL);
+    if (err != ESP_ERR_NOT_FOUND) goto done;
+    ESP_LOGI(TAG, "No direct message receiver; trying PC fallback");
     err = telemetry_start(&cfg);
     if (err == ESP_OK) {
         (void)message_start_receiver_if_possible();
@@ -369,6 +405,7 @@ static void message_send_task(void *arg)
                                          NULL);
     }
 
+done:
     s_message.send_err = err;
     s_message.last_err = err;
     s_message.send_active = false;
@@ -457,6 +494,7 @@ void message_app_init(shell_app_context_t *ctx)
     s_message.sd_ready = storage_sd_is_mounted();
     s_message.rec_started_us = 0;
     if (s_message.sd_ready || message_prepare_dirs()) {
+        (void)message_direct_init();
         message_restore_latest_outbox_path();
         (void)message_start_receiver_if_possible();
     }

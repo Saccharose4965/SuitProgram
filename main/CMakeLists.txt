@@ -22,6 +22,8 @@ idf_component_register(
         "app_show_player.c"
         "app_bt.c"
         "app_message.c"
+        "app_call.c"
+        "message_direct.c"
         "app_file_rx.c"
         "app_flappy.c"
         "app_t2048.c"

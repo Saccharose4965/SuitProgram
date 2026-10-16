@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <limits.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -21,6 +22,7 @@ typedef struct {
     show_role_program_v1_t roles[SHOW_MAX_ROLES];
     uint32_t bucket_total;
     uint32_t clip_total;
+    uint32_t formation_cue_count;
 } show_validated_file_t;
 
 static bool show_slug_valid(const char *slug)
@@ -81,17 +83,18 @@ static esp_err_t show_crc32_file(FILE *f, uint32_t file_bytes, uint32_t *out)
     return ESP_OK;
 }
 
-static size_t show_effect_base_param_bytes(uint8_t effect_kind)
+#include "show_animation.h"
+#include "show_color_grid.h"
+
+static size_t show_effect_base_param_bytes(uint8_t effect_kind, uint16_t minor)
 {
-    if (effect_kind == SHOW_EFFECT_SOLID) {
-        return sizeof(show_param_solid_v1_t);
+    if (minor >= 3u && effect_kind == SHOW_EFFECT_RADIAL_RAY)
+        return sizeof(show_param_spatial_v1_t) + sizeof(show_param_ray_v1_3_t);
+    if (effect_kind == SHOW_EFFECT_FILL) {
+        return sizeof(show_param_fill_v1_t)+(minor>=10 ? sizeof(show_fill_bounds_t) : 0);
     }
     switch (effect_kind) {
-        case SHOW_EFFECT_BLINK:
-        case SHOW_EFFECT_PULSE:
         case SHOW_EFFECT_SWEEP:
-        case SHOW_EFFECT_MIRROR_SWEEP:
-        case SHOW_EFFECT_CHASE:
         case SHOW_EFFECT_SPARKLE:
         case SHOW_EFFECT_FANOUT:
         case SHOW_EFFECT_GLOBAL_SWEEP:
@@ -104,10 +107,14 @@ static size_t show_effect_base_param_bytes(uint8_t effect_kind)
     }
 }
 
-static bool show_effect_param_size_valid(uint8_t effect_kind, uint16_t param_bytes)
+static bool show_effect_param_size_valid(uint8_t effect_kind, uint16_t param_bytes, uint16_t minor)
 {
-    size_t base_bytes = show_effect_base_param_bytes(effect_kind);
+    size_t base_bytes = show_effect_base_param_bytes(effect_kind, minor);
     if (base_bytes == 0) return false;
+    if (minor >= 6) return param_bytes >= base_bytes + sizeof(show_animation_header_t) + sizeof(show_spatial_color_t);
+    if (minor >= 5) return param_bytes >= base_bytes + sizeof(show_animation_header_t) + sizeof(show_spatial_color_t) &&
+        param_bytes <= base_bytes + sizeof(show_animation_header_t) + SHOW_ANIMATION_KEYS*sizeof(show_animation_t) +
+                       sizeof(show_spatial_color_t) + sizeof(show_color_anim_v1_1_t) + 16*sizeof(show_color_stop_v1_1_t);
     if (param_bytes == base_bytes) return true;
     if (param_bytes < base_bytes + sizeof(show_color_anim_v1_1_t)) return false;
     size_t stop_bytes = param_bytes - base_bytes - sizeof(show_color_anim_v1_1_t);
@@ -115,11 +122,98 @@ static bool show_effect_param_size_valid(uint8_t effect_kind, uint16_t param_byt
            stop_bytes / sizeof(show_color_stop_v1_1_t) <= 16u;
 }
 
-static bool show_color_extension_valid(FILE *f, const show_clip_v1_t *clip)
+static bool show_color_extension_valid(FILE *f, const show_clip_v1_t *clip, uint16_t minor)
 {
-    size_t base_bytes = show_effect_base_param_bytes(clip->effect_kind);
-    if (clip->param_bytes == base_bytes) return true;
+    size_t base_bytes = show_effect_base_param_bytes(clip->effect_kind, minor);
+    bool noise_mapping=false;
+    if (clip->effect_kind==SHOW_EFFECT_FILL && minor>=10) {
+        show_fill_bounds_t bounds;
+        if (show_read_exact(f,clip->param_offset+sizeof(show_param_fill_v1_t),&bounds,sizeof(bounds))!=ESP_OK ||
+            bounds.space>1 || bounds.reserved[0] || bounds.reserved[1] || bounds.reserved[2] ||
+            !isfinite(bounds.softness) || bounds.softness<0 || bounds.softness>2) return false;
+        for (unsigned i=0;i<6;++i)
+            if (!isfinite(bounds.limits[i]) || bounds.limits[i]<0 || bounds.limits[i]>1) return false;
+    }
+    if (clip->effect_kind != SHOW_EFFECT_FILL) {
+        show_param_spatial_v1_t spatial;
+        if (show_read_exact(f, clip->param_offset, &spatial, sizeof(spatial)) != ESP_OK ||
+            spatial.axis_kind > SHOW_AXIS_DIAGONAL_XY ||
+            (spatial.axis_kind == SHOW_AXIS_DIAGONAL_XY &&
+             (minor < 4u || clip->effect_kind != SHOW_EFFECT_TRAVELING_ORB))) return false;
+    }
+    if ((minor >= 3u && clip->effect_kind == SHOW_EFFECT_RADIAL_RAY)) {
+        show_param_ray_v1_3_t ray;
+        if (show_read_exact(f, clip->param_offset + sizeof(show_param_spatial_v1_t), &ray, sizeof(ray)) != ESP_OK ||
+            ray.space > 1 || ray.plane > 2 || ray.origin > 6 || ray.reserved ||
+            !isfinite(ray.x) || !isfinite(ray.y) || !isfinite(ray.z) ||
+            fabsf(ray.x) > 10000 || fabsf(ray.y) > 10000 || fabsf(ray.z) > 10000) return false;
+    }
+    if (minor >= 5) {
+        show_animation_header_t header;
+        if (show_read_exact(f, clip->param_offset+base_bytes, &header, sizeof(header)) != ESP_OK ||
+            header.reserved || header.count > SHOW_ANIMATION_KEYS) return false;
+        base_bytes += sizeof(header);
+        if (base_bytes + header.count*sizeof(show_animation_t) > clip->param_bytes) return false;
+        uint16_t seen=0;
+        for (uint16_t i=0; i<header.count; ++i) {
+            show_animation_t animation;
+            if (base_bytes+sizeof(animation)>clip->param_bytes ||
+                show_read_exact(f, clip->param_offset+base_bytes, &animation, sizeof(animation)) != ESP_OK ||
+                !show_animation_valid(&animation) || (seen & (1u<<animation.key)) ||
+                (animation.mode == 4 && minor < 6) ||
+                (animation.shape == 3 && minor < 8) ||
+                (animation.shape == 4 && minor < 11) ||
+                (animation.key == 9 && (minor < 7 || clip->effect_kind != SHOW_EFFECT_FILL)) ||
+                (animation.key>=10 && (minor<10 || clip->effect_kind!=SHOW_EFFECT_FILL)) ||
+                (clip->effect_kind == SHOW_EFFECT_FILL && animation.key != 0 && animation.key != 9 &&
+                 !(minor>=10 && (animation.key==2 || animation.key>=10))) ||
+                (animation.key >= 6 && animation.key <= 8 && clip->effect_kind != SHOW_EFFECT_RADIAL_RAY)) return false;
+            seen |= 1u<<animation.key;
+            base_bytes += sizeof(animation);
+            if (animation.mode == 4) {
+                show_amplitude_curve_t curve;
+                uint32_t duration=clip->end_ms-clip->start_ms;
+                if (base_bytes+sizeof(curve)>clip->param_bytes ||
+                    show_read_exact(f,clip->param_offset+base_bytes,&curve,sizeof(curve)) != ESP_OK ||
+                    curve.count<2 || curve.count>6001 || curve.step_ms<20 ||
+                    (uint32_t)(curve.count-1)*curve.step_ms<duration ||
+                    (uint32_t)(curve.count-2)*curve.step_ms>=duration) return false;
+                base_bytes += sizeof(curve)+(size_t)curve.count*2;
+                if (base_bytes>clip->param_bytes) return false;
+            }
+        }
+        show_spatial_color_t gradient;
+        if (base_bytes+sizeof(gradient)>clip->param_bytes ||
+            show_read_exact(f,clip->param_offset+base_bytes,&gradient,sizeof(gradient)) != ESP_OK ||
+            gradient.enabled>1 || gradient.mapping>6 || gradient.mapping==5 || gradient.reverse>1 || gradient.space>1 ||
+            (gradient.mapping==6 && minor<9)) return false;
+        noise_mapping=gradient.enabled && gradient.mapping==6;
+        base_bytes += sizeof(gradient);
+    }
+    if (clip->param_bytes == base_bytes) return !noise_mapping;
 
+    uint8_t mode;
+    if (show_read_exact(f,clip->param_offset+base_bytes,&mode,1)!=ESP_OK) return false;
+    if (noise_mapping && mode!=5) return false;
+    if (mode==4 || mode==5) {
+        show_color_grid_header_t grid;
+        if (minor<8 || base_bytes+sizeof(grid)>clip->param_bytes ||
+            show_read_exact(f,clip->param_offset+base_bytes,&grid,sizeof(grid))!=ESP_OK) return false;
+        size_t extra=0;
+        if (mode==5) {
+            show_noise_color_t noise;
+            extra=sizeof(noise);
+            if (minor<9 || base_bytes+sizeof(grid)+extra>clip->param_bytes ||
+                show_read_exact(f,clip->param_offset+base_bytes+sizeof(grid),&noise,sizeof(noise))!=ESP_OK ||
+                !isfinite(noise.scale) || noise.scale<.25f || noise.scale>32 ||
+                !isfinite(noise.width) || noise.width<.01f || noise.width>1 ||
+                !isfinite(noise.speed) || noise.speed<0 || noise.speed>4) return false;
+        }
+        return grid.rows>=1 && grid.rows<=8 && grid.columns>=1 && grid.columns<=16 &&
+            grid.loop<=1 && grid.time_blend<=2 && grid.space_blend<=2 && grid.tempo_sync<=1 && !grid.reserved &&
+            isfinite(grid.rate) && grid.rate>=0 && grid.rate<=40 &&
+            base_bytes+sizeof(grid)+extra+(size_t)grid.rows*grid.columns*4==clip->param_bytes;
+    }
     show_color_anim_v1_1_t animation;
     if (show_read_exact(f, clip->param_offset + (uint32_t)base_bytes,
                         &animation, sizeof(animation)) != ESP_OK ||
@@ -154,7 +248,7 @@ static bool show_clip_valid(const show_file_header_v1_t *hdr,
     if (!hdr || !clip) return false;
     if (clip->start_ms >= clip->end_ms || clip->end_ms > hdr->duration_ms) return false;
     if (clip->blend_mode > SHOW_BLEND_MAX) return false;
-    if (!show_effect_param_size_valid(clip->effect_kind, clip->param_bytes)) return false;
+    if (!show_effect_param_size_valid(clip->effect_kind, clip->param_bytes, hdr->version_minor)) return false;
     if (clip->param_offset < hdr->param_blob_offset ||
         !show_range_valid(clip->param_offset, clip->param_bytes, 1,
                           hdr->string_table_offset)) {
@@ -199,7 +293,8 @@ static esp_err_t show_validate_file(FILE *f, show_validated_file_t *out,
         hdr->header_bytes < sizeof(*hdr) ||
         hdr->file_bytes < hdr->header_bytes ||
         hdr->role_count == 0 || hdr->role_count > SHOW_MAX_ROLES ||
-        hdr->duration_ms == 0 || hdr->bucket_ms == 0) {
+        hdr->duration_ms == 0 || hdr->bucket_ms == 0 ||
+        (hdr->version_minor >= 2u && hdr->formation > SHOW_FORMATION_CIRCLE)) {
         return ESP_ERR_INVALID_RESPONSE;
     }
     if (hdr->version_minor >= 1u) {
@@ -209,6 +304,26 @@ static esp_err_t show_validate_file(FILE *f, show_validated_file_t *out,
         ESP_RETURN_ON_ERROR(show_read_exact(f, sizeof(*hdr), &out->timing,
                                             sizeof(out->timing)),
                             TAG, "read timing");
+    }
+
+    if (hdr->version_minor >= 3u) {
+        uint32_t offset = sizeof(*hdr) + sizeof(out->timing);
+        if (!show_range_valid(offset, 1, sizeof(uint32_t), hdr->header_bytes))
+            return ESP_ERR_INVALID_SIZE;
+        ESP_RETURN_ON_ERROR(show_read_exact(f, offset, &out->formation_cue_count, sizeof(uint32_t)), TAG, "read formation count");
+        offset += sizeof(uint32_t);
+        if (out->formation_cue_count > 256u ||
+            !show_range_valid(offset, out->formation_cue_count, sizeof(show_formation_cue_v1_3_t), hdr->header_bytes))
+            return ESP_ERR_INVALID_SIZE;
+        uint32_t previous = 0;
+        for (uint32_t i = 0; i < out->formation_cue_count; ++i) {
+            show_formation_cue_v1_3_t cue;
+            ESP_RETURN_ON_ERROR(show_read_exact(f, offset + i * sizeof(cue), &cue, sizeof(cue)), TAG, "read formation cue");
+            if (cue.time_ms <= previous || cue.time_ms >= hdr->duration_ms ||
+                cue.formation > SHOW_FORMATION_CIRCLE || cue.reserved)
+                return ESP_ERR_INVALID_RESPONSE;
+            previous = cue.time_ms;
+        }
     }
 
     if (fseek(f, 0, SEEK_END) != 0) return ESP_FAIL;
@@ -283,7 +398,7 @@ static esp_err_t show_validate_file(FILE *f, show_validated_file_t *out,
         uint32_t offset = hdr->clip_table_offset + i * sizeof(clip);
         ESP_RETURN_ON_ERROR(show_read_exact(f, offset, &clip, sizeof(clip)),
                             TAG, "read clip");
-        if (!show_clip_valid(hdr, &clip) || !show_color_extension_valid(f, &clip)) {
+        if (!show_clip_valid(hdr, &clip) || !show_color_extension_valid(f, &clip, hdr->version_minor)) {
             return ESP_ERR_INVALID_RESPONSE;
         }
     }
@@ -303,6 +418,7 @@ static esp_err_t show_validate_file(FILE *f, show_validated_file_t *out,
         info->bucket_ms = hdr->bucket_ms;
         info->palette_count = hdr->palette_count;
         info->group_count = hdr->group_count;
+        info->formation = hdr->version_minor >= 2u ? hdr->formation : SHOW_FORMATION_LINE;
         info->tempo_millibpm = out->timing.tempo_millibpm;
         info->beat_offset_ms = out->timing.beat_offset_ms;
         info->crc_checked = true;
@@ -358,6 +474,7 @@ void show_package_program_free(show_package_program_t *program)
     heap_caps_free(program->clips);
     heap_caps_free(program->buckets);
     heap_caps_free(program->param_blob);
+    heap_caps_free(program->formation_cues);
     memset(program, 0, sizeof(*program));
 }
 
@@ -397,8 +514,11 @@ esp_err_t show_package_load_program_from_path(const char *path, uint8_t role_id,
     out->buckets = show_alloc(buckets_bytes);
     out->clips = show_alloc(clips_bytes);
     out->param_blob = show_alloc(param_bytes);
+    size_t formation_bytes = valid.formation_cue_count * sizeof(show_formation_cue_v1_3_t);
+    out->formation_cues = show_alloc(formation_bytes);
+    out->formation_cue_count = valid.formation_cue_count;
     if ((buckets_bytes && !out->buckets) || (clips_bytes && !out->clips) ||
-        (param_bytes && !out->param_blob)) {
+        (param_bytes && !out->param_blob) || (formation_bytes && !out->formation_cues)) {
         fclose(f);
         show_package_program_free(out);
         return ESP_ERR_NO_MEM;
@@ -415,6 +535,10 @@ esp_err_t show_package_load_program_from_path(const char *path, uint8_t role_id,
     if (err == ESP_OK) {
         err = show_read_exact(f, valid.header.param_blob_offset,
                               out->param_blob, param_bytes);
+    }
+    if (err == ESP_OK && formation_bytes) {
+        err = show_read_exact(f, sizeof(show_file_header_v1_t) + sizeof(show_file_timing_v1_1_t) + sizeof(uint32_t),
+                             out->formation_cues, formation_bytes);
     }
     fclose(f);
     if (err != ESP_OK) {

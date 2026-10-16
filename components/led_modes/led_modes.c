@@ -1535,10 +1535,11 @@ esp_err_t led_modes_start(void)
     }
 
     uint32_t period_ms = (uint32_t)(custom_period_ticks() * portTICK_PERIOD_MS);
-    ESP_LOGI(TAG, "custom renderer ready: pixels=%u period=%ums default_brightness=%u",
-             (unsigned)custom_render_pixels(), (unsigned)period_ms, (unsigned)s_brightness);
-
     BaseType_t ok = xTaskCreatePinnedToCore(led_modes_task, "led_modes", 3072,
                                             NULL, LED_MODES_TASK_PRIORITY, &s_task, BG_TASK_CORE);
-    return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
+    if (ok != pdPASS) return ESP_ERR_NO_MEM;
+
+    ESP_LOGI(TAG, "custom renderer ready: pixels=%u period=%ums default_brightness=%u",
+             (unsigned)custom_render_pixels(), (unsigned)period_ms, (unsigned)s_brightness);
+    return ESP_OK;
 }

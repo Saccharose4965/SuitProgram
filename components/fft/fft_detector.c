@@ -5,14 +5,16 @@
 
 #define FRAME_RATE ((float)DETECTOR_SAMPLE_RATE / DETECTOR_FFT_SIZE)
 #define UPDATE_SECONDS ((float)DETECTOR_HOP_FRAMES / FRAME_RATE)
+#define REFERENCE_SECONDS ((float)DETECTOR_REFERENCE_HOP_FRAMES / FRAME_RATE)
+#define STABILITY_WINDOW_SECONDS (8.0f * REFERENCE_SECONDS)
 #define STABILITY_LIMIT 0.014f
 #define CONSISTENCY_LIMIT 0.95f
 #define RHYTHM_MIN 0.05f
-#define HELD_VISIBLE_MIN 0.03f
 #define SUPPORT_HALF_LIFE 6.0f
 #define SHOCK_LIMIT 0.004f
 #define SHOCK_CALM 3.0f
-#define LOST_TIMEOUT 30.0f
+#define LOST_TIMEOUT 40.0f
+#define LOST_MIN_HELD_RATIO 0.60f
 
 static float wrap(float x) { return x - floorf(x); }
 static float display_value(float x) { return isfinite(x) ? fminf(1.1f, fmaxf(0, x)) : 0; }
@@ -48,7 +50,8 @@ bool detector_filter_bands(detector_filter_t *f, const float *logmag,
     return impulse || suppress;
 }
 
-float detector_comb_score(const float *frames, int count, int bpm)
+float detector_comb_score_cooperative(const float *frames, int count, int bpm,
+                                      detector_yield_fn yield_fn, void *yield_ctx)
 {
     if (count < 3 || bpm < DETECTOR_BPM_MIN || bpm > DETECTOR_BPM_MAX) return 0;
     float step = FRAME_RATE * 60 / bpm;
@@ -79,8 +82,14 @@ float detector_comb_score(const float *frames, int count, int bpm)
         for (int b = 0; b < DETECTOR_BANDS; ++b)
             total += fmaxf(0, (squares[b] - sums[b] * sums[b] * inv_n) * inv_dof);
         evaluations += DETECTOR_BANDS;
+        if (yield_fn) yield_fn(yield_ctx);
     }
     return evaluations ? total / evaluations : 0;
+}
+
+float detector_comb_score(const float *frames, int count, int bpm)
+{
+    return detector_comb_score_cooperative(frames, count, bpm, NULL, NULL);
 }
 
 void detector_normalize(const float raw[DETECTOR_BPM_COUNT], float score[DETECTOR_BPM_COUNT])
@@ -118,63 +127,143 @@ static float support_at(const detector_t *d, int center)
     return sum;
 }
 
+static float support_credit(float elapsed, bool sustained)
+{
+    float credit_time = sustained && elapsed <= 1.5f * UPDATE_SECONDS
+        ? elapsed : fminf(elapsed, REFERENCE_SECONDS);
+    float lambda = logf(2.0f) / SUPPORT_HALF_LIFE;
+    return REFERENCE_SECONDS * (-expm1f(-lambda * credit_time)) /
+                               (-expm1f(-lambda * REFERENCE_SECONDS));
+}
+
+static float held_score_ratio(const float *scores, float held_bpm)
+{
+    if (!isfinite(held_bpm) || held_bpm < DETECTOR_BPM_MIN || held_bpm > DETECTOR_BPM_MAX)
+        return 0;
+    int held = (int)lroundf(held_bpm) - DETECTOR_BPM_MIN;
+    float maximum = 0, support = 0;
+    for (int i = 0; i < DETECTOR_BPM_COUNT - 1; ++i) {
+        float pair = scores[i] + scores[i + 1];
+        if (!isfinite(pair) || pair < 0) return 0;
+        maximum = fmaxf(maximum, pair);
+        if (i == held || i + 1 == held) support = fmaxf(support, pair);
+    }
+    return maximum > 0 ? support / maximum : 0;
+}
+
+static void reset_hold(detector_t *d)
+{
+    memset(d->support, 0, sizeof(d->support));
+    d->held_bpm = 0;
+    d->held_pair = 0;
+    d->hold_last_time = 0;
+    d->have_hold_time = false;
+    d->loss_last_time = 0;
+    d->have_loss_time = false;
+    d->have_variance = false;
+    d->previous_variance = 0;
+    d->cooldown = 0;
+    d->lost_seconds = 0;
+    d->previous_trusted = false;
+    d->previous_candidate = 0;
+}
+
 void detector_update(detector_t *d, const float scores[DETECTOR_BPM_COUNT], double time,
                      detector_control_t control, detector_result_t *out)
 {
     memset(out, 0, sizeof(*out));
-    float elapsed = d->have_time ? fmaxf(0, (float)(time - d->last_time)) : UPDATE_SECONDS;
+    float history_elapsed = d->have_time ? fmaxf(0, (float)(time - d->last_time)) : UPDATE_SECONDS;
+    float duration = d->have_time ? history_elapsed : UPDATE_SECONDS;
+    duration = fminf(duration, UPDATE_SECONDS + 1.0f / FRAME_RATE);
     d->last_time = time;
     d->have_time = true;
-    // Keep a four-second score memory even if jobs finish slower than requested.
-    while (d->count && time - d->history_time[(d->write - d->count + DETECTOR_HISTORY) % DETECTOR_HISTORY]
-           >= DETECTOR_HISTORY * UPDATE_SECONDS + 0.001) --d->count;
+    double cutoff = time - STABILITY_WINDOW_SECONDS;
+    while (d->count && d->history_end[(d->write - d->count + DETECTOR_HISTORY) % DETECTOR_HISTORY]
+           <= cutoff + 1e-9) --d->count;
     memcpy(d->history[d->write], scores, sizeof(d->history[0]));
-    d->history_time[d->write] = time;
+    d->history_start[d->write] = time - duration;
+    d->history_end[d->write] = time;
     d->write = (d->write + 1) % DETECTOR_HISTORY;
     if (d->count < DETECTOR_HISTORY) ++d->count;
+    float weights[DETECTOR_HISTORY] = {0};
+    float coverage = 0;
     for (int h = 0; h < d->count; ++h) {
         int slot = (d->write - 1 - h + DETECTOR_HISTORY) % DETECTOR_HISTORY;
-        for (int i = 0; i < DETECTOR_BPM_COUNT; ++i) out->scores[i] += d->history[slot][i] / d->count;
+        weights[slot] = fmaxf(0, (float)(d->history_end[slot] -
+                                      fmax(cutoff, d->history_start[slot])));
+        coverage += weights[slot];
+        for (int i = 0; i < DETECTOR_BPM_COUNT; ++i)
+            out->scores[i] += weights[slot] * d->history[slot][i];
     }
+    if (coverage > 0)
+        for (int i = 0; i < DETECTOR_BPM_COUNT; ++i) out->scores[i] /= coverage;
+    out->history_coverage = coverage;
     int pair = best_pair(out->scores), wins = 0;
+    float consistent_coverage = 0;
     for (int h = 0; h < d->count; ++h) {
         int slot = (d->write - 1 - h + DETECTOR_HISTORY) % DETECTOR_HISTORY;
         int winner = best_pair(d->history[slot]);
-        if (winner >= pair - 2 && winner <= pair + 2) ++wins;
+        if (winner >= pair - 2 && winner <= pair + 2) {
+            ++wins;
+            consistent_coverage += weights[slot];
+        }
         for (int i = 0; i < DETECTOR_BPM_COUNT; ++i) {
             float delta = d->history[slot][i] - out->scores[i];
-            out->variance += delta * delta / d->count;
+            if (coverage > 0) out->variance += weights[slot] / coverage * delta * delta;
         }
     }
-    out->consistency = (float)wins / d->count;
+    (void)wins;
+    out->consistency = coverage > 0 ? consistent_coverage / coverage : 0;
     int candidate = pair + (out->scores[pair + 1] > out->scores[pair]);
     out->candidate_bpm = DETECTOR_BPM_MIN + candidate;
     float pair_score = out->scores[pair] + out->scores[pair + 1];
 
+    if (control.reset_revision != d->reset_revision) {
+        reset_hold(d);
+        d->have_phase = false;
+        d->reset_revision = control.reset_revision;
+    }
     if (control.force_revision != d->force_revision) {
-        memset(d->support, 0, sizeof(d->support));
+        float retained_bpm = d->held_bpm;
+        int retained_pair = d->held_pair;
+        reset_hold(d);
         if (control.hard_lock && control.forced_bpm >= DETECTOR_BPM_MIN &&
             control.forced_bpm <= DETECTOR_BPM_MAX) {
             d->held_bpm = control.forced_bpm;
             int bin = (int)control.forced_bpm - DETECTOR_BPM_MIN;
             d->held_pair = bin < DETECTOR_BPM_COUNT - 1 ? bin : bin - 1;
+        } else if (retained_bpm >= DETECTOR_BPM_MIN && retained_bpm <= DETECTOR_BPM_MAX) {
+            d->held_bpm = retained_bpm;
+            d->held_pair = retained_pair;
         }
         d->force_revision = control.force_revision;
     }
+    float elapsed = d->have_hold_time ? fmaxf(0.001f, (float)(time - d->hold_last_time))
+                                      : REFERENCE_SECONDS;
+    d->hold_last_time = time;
+    d->have_hold_time = true;
     float decay = exp2f(-elapsed / SUPPORT_HALF_LIFE);
     for (int i = 0; i < DETECTOR_BPM_COUNT; ++i) d->support[i] *= decay;
-    bool shock = d->have_variance && fabsf(out->variance - d->previous_variance) >= SHOCK_LIMIT;
+    bool shock = d->have_variance &&
+        fabsf(out->variance - d->previous_variance) * REFERENCE_SECONDS /
+        fmaxf(REFERENCE_SECONDS, elapsed) >= SHOCK_LIMIT;
     d->cooldown = shock ? SHOCK_CALM : fmaxf(0, d->cooldown - elapsed);
     d->previous_variance = out->variance;
     d->have_variance = true;
-    float quality = fminf(pair_score / RHYTHM_MIN,
+    float evidence_quality = fminf(pair_score / RHYTHM_MIN,
                          fminf(STABILITY_LIMIT / fmaxf(out->variance, 1e-12f),
                                out->consistency / CONSISTENCY_LIMIT));
-    out->evidence = display_value(quality);
+    out->evidence = display_value(evidence_quality);
     // A delayed job is one observation, never seconds of uninterrupted support.
-    out->trusted = quality >= 1 && d->cooldown <= 0 && d->count >= 2;
-    if (out->trusted) d->support[candidate] += fminf(elapsed, UPDATE_SECONDS);
-    quality = out->trusted ? quality : 0;
+    out->trusted = evidence_quality >= 1 && d->cooldown <= 0;
+    if (out->trusted)
+        d->support[candidate] += support_credit(elapsed,
+            d->previous_trusted && d->previous_candidate == candidate);
+    d->previous_trusted = out->trusted;
+    d->previous_candidate = candidate;
+    // Readiness remains graded below acceptance, as in localFFT. Only shock
+    // cooldown forces it to zero; untrusted evidence simply earns no support.
+    float quality = d->cooldown <= 0 ? evidence_quality : 0;
     float challenger = support_at(d, candidate);
     float required = control.phase_lock ? 2 : 1;
     float release = control.phase_lock ? 0.25f : 0.5f;
@@ -187,28 +276,34 @@ void detector_update(detector_t *d, const float scores[DETECTOR_BPM_COUNT], doub
         if (distance < 0) distance = -distance;
         float held = support_at(d, held_bin);
         bool max_slide = distance == 1 && candidate == DETECTOR_BPM_COUNT - 1;
-        if (!distance) out->confidence = fminf(quality, held);
+        if (!distance) out->confidence = evidence_quality;
         else if (max_slide) out->confidence = fminf(quality, d->support[candidate] / required);
         else if (distance > 1)
             out->confidence = fminf(quality, fminf(challenger / required, release / fmaxf(held, 1e-12f)));
-        if (!control.hard_lock && out->confidence >= 1 && distance) {
+        if (!control.hard_lock && max_slide && out->trusted &&
+            d->support[DETECTOR_BPM_COUNT - 1] >= required) {
+            d->held_bpm = out->candidate_bpm;
+            d->held_pair = pair;
+        } else if (!control.hard_lock && distance > 1 && out->trusted &&
+                   challenger >= required && held <= release) {
             d->held_bpm = out->candidate_bpm;
             d->held_pair = pair;
         }
     }
     out->confidence = display_value(out->confidence);
-    float held_score = d->held_bpm ? out->scores[d->held_pair] + out->scores[d->held_pair + 1] : 0;
-    if (control.hard_lock || !d->held_bpm) d->lost_seconds = 0;
-    else if (out->trusted || held_score >= HELD_VISIBLE_MIN) d->lost_seconds = fmaxf(0, d->lost_seconds - 4 * elapsed);
-    else d->lost_seconds += elapsed;
+    float loss_elapsed = d->have_loss_time ? fmaxf(0.001f, (float)(time - d->loss_last_time)) : 0.5f;
+    d->loss_last_time = time;
+    d->have_loss_time = true;
+    if (control.hard_lock || !d->held_bpm ||
+        held_score_ratio(out->scores, d->held_bpm) >= LOST_MIN_HELD_RATIO) d->lost_seconds = 0;
+    else d->lost_seconds += loss_elapsed;
     out->lost_seconds = d->lost_seconds;
     out->held_bpm = d->held_bpm;
-    int oldest = (d->write - d->count + DETECTOR_HISTORY) % DETECTOR_HISTORY;
     out->phase_stable = d->count >= 2 &&
-        time - d->history_time[oldest] + elapsed >= DETECTOR_HISTORY * UPDATE_SECONDS - 0.001 &&
+        coverage >= STABILITY_WINDOW_SECONDS - 0.001 &&
         out->variance <= STABILITY_LIMIT;
     if (d->lost_seconds >= LOST_TIMEOUT) {
-        detector_reset(d);
+        reset_hold(d);
         out->held_bpm = 0;
         out->stopped = true;
         out->confidence = 0;
@@ -235,6 +330,12 @@ void detector_phase(detector_t *d, const float *frames, int count, double last_t
             ++n;
         }
         curve[p] = n ? sum / n : 0;
+    }
+    float floor_value = curve[0];
+    for (int p = 1; p < DETECTOR_PHASE_BINS; ++p)
+        floor_value = fminf(floor_value, curve[p]);
+    for (int p = 0; p < DETECTOR_PHASE_BINS; ++p) {
+        curve[p] = fmaxf(0, curve[p] - floor_value);
         if (curve[p] > curve[best]) best = p;
     }
     // Window-local bins must be mapped to the same absolute phase as the hold.
@@ -251,6 +352,8 @@ void detector_phase(detector_t *d, const float *frames, int count, double last_t
         if (delta <= 1 || delta >= DETECTOR_PHASE_BINS - 1 || curve[best] >= curve[held_index] * 1.2f)
             d->phase_fraction = candidate;
     }
+    out->candidate_phase = candidate;
+    out->accepted_phase = d->phase_fraction;
     d->phase_bpm = out->held_bpm;
     double period = 60.0 / out->held_bpm;
     out->beat_time = (floor(last_time / period - d->phase_fraction) + d->phase_fraction) * period;

@@ -119,6 +119,19 @@ static detector_result_t feed(detector_t *d, detector_control_t c, int bpm, int 
     return out;
 }
 
+static detector_result_t feed_unstable_loss(detector_t *d, detector_control_t c,
+                                             int updates, double interval)
+{
+    float scores[DETECTOR_BPM_COUNT];
+    detector_result_t out = {0};
+    for (int i = 0; i < updates; ++i) {
+        int sequence = (int)lround(d->last_time / interval);
+        make_scores(scores, (sequence & 1) ? 100 : 145);
+        detector_update(d, scores, d->last_time + interval, c, &out);
+    }
+    return out;
+}
+
 static void test_hold(void)
 {
     detector_t d = {0};
@@ -170,24 +183,24 @@ static void test_loss_and_scheduling(void)
     detector_control_t c = {0};
     detector_result_t out = feed(&d, c, 120, 30, HOP);
     assert(out.held_bpm == 120);
-    out = feed(&d, c, 0, 20, HOP);
+    out = feed_unstable_loss(&d, c, 20, HOP);
     assert(out.held_bpm == 120 && !out.stopped); // ten-second breakdown
     out = feed(&d, c, 120, 40, HOP);
     assert(out.held_bpm == 120 && out.lost_seconds == 0);
     bool stopped = false;
     for (int i = 0; i < 100; ++i) {
-        out = feed(&d, c, 0, 1, HOP);
+        out = feed_unstable_loss(&d, c, 1, HOP);
         if (out.stopped) { stopped = true; break; }
     }
     assert(stopped && out.held_bpm == 0);
-    out = feed(&d, c, 120, 8, HOP);
+    out = feed(&d, c, 120, 40, HOP);
     assert(out.held_bpm == 120);
     detector_reset(&d);
     out = feed(&d, c, 120, 2, 10);
-    assert(out.held_bpm == 0 && !out.trusted); // no support from stale observations
+    assert(out.held_bpm == 0 && out.trusted); // isolated delayed evidence never accumulates enough support
     detector_reset(&d);
     out = feed(&d, c, 120, 20, 2 * HOP);
-    assert(out.held_bpm == 120 && out.phase_stable && d.count < DETECTOR_HISTORY);
+    assert(out.held_bpm == 120 && d.count < DETECTOR_HISTORY);
 }
 
 static double phase_distance(double beat_time, int bpm, double desired)
@@ -210,6 +223,8 @@ static void test_phase(void)
     make_frames(120, 128.191, .67, 1);
     detector_phase(&d, frames, DETECTOR_FRAMES, 128.191, true, &out);
     assert(d.phase_fraction == held);
+    assert(fabsf(out.accepted_phase - (float)held) < 1e-6f);
+    assert(fabsf(out.candidate_phase - .67f) < .03f);
     detector_phase(&d, frames, DETECTOR_FRAMES, 128.191, false, &out);
     assert(phase_distance(out.beat_time, 120, .67) < .03);
     out.held_bpm = 105;

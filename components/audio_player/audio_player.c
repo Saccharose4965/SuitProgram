@@ -1,4 +1,5 @@
 #include "audio_player.h"
+#include "playback_diagnostics.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -20,8 +21,16 @@
 
 static const char *TAG = "audio_player";
 
+static void log_internal_heap(const char *stage)
+{
+    ESP_LOGI(TAG, "heap %s: internal=%u largest=%u", stage,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+}
+
 static volatile bool s_abort = false;
 static volatile bool s_paused = false;
+static bool s_allow_speaker_fallback;
 static TaskHandle_t s_player_task = NULL;
 static char s_current_path[128] = {0};
 
@@ -35,13 +44,12 @@ static volatile audio_player_mode_t s_play_mode = AUDIO_PLAYER_MODE_NONE;
 
 typedef struct {
     char path[128];
+    int64_t start_after_us;
 } audio_task_args_t;
 
 #define AUDIO_TASK_STACK (4 * 1024)
 #define AUDIO_TASK_STACK_RETRY (3 * 1024)
 #define AUDIO_TASK_PRIO  2
-#define BT_RESTART_GRACE_MS 300
-#define BT_RESTART_MIN_INTERVAL_MS 1500
 #define BT_PROGRESS_STALL_MS 1200
 #if configNUMBER_OF_CORES > 1
 #define AUDIO_TASK_CORE  1
@@ -60,17 +68,18 @@ static void audio_play_task(void *arg)
     char path[128];
     strncpy(path, a->path, sizeof(path) - 1);
     path[sizeof(path) - 1] = '\0';
+    int64_t start_after_us = a->start_after_us;
     free(a);
 
     // Remember current track (for toggle)
     strncpy(s_current_path, path, sizeof(s_current_path) - 1);
     s_current_path[sizeof(s_current_path) - 1] = '\0';
 
-    s_abort = false;
     s_paused = false;
     s_play_mode = AUDIO_PLAYER_MODE_NONE;
 
     ESP_LOGI(TAG, "audio_play_task started for '%s'", path);
+    log_internal_heap("before file open");
     ESP_LOGI(TAG, "audio_play_task stack high watermark: %u bytes",
              (unsigned)uxTaskGetStackHighWaterMark(NULL));
 
@@ -102,6 +111,9 @@ static void audio_play_task(void *arg)
 
     bool bt_used = false;
     bool skip_local = false;
+    // Let followers load their local package before the first PCM is delivered.
+    while (!s_abort && esp_timer_get_time() < start_after_us) vTaskDelay(pdMS_TO_TICKS(10));
+    if (s_abort) { fclose(f); goto finished; }
 
 #if CONFIG_BT_ENABLED && CONFIG_BT_A2DP_ENABLE && CONFIG_BT_CLASSIC_ENABLED
     if (bt_audio_can_stream()) {
@@ -115,8 +127,9 @@ static void audio_play_task(void *arg)
 
         if (bt_audio_media_cmd_pending()) {
             ESP_LOGW(TAG, "bt_audio_play_wav skipped (media ctrl pending)");
-            skip_local = true;
+            skip_local = !s_allow_speaker_fallback;
         } else {
+            playback_diagnostics_begin();
             err = bt_audio_play_wav(f,
                                     info.data_offset,
                                     info.data_size,
@@ -128,20 +141,29 @@ static void audio_play_task(void *arg)
                 s_play_mode = AUDIO_PLAYER_MODE_BT;
                 ESP_LOGI(TAG, "BT playback started");
                 bool drain_stop_requested = false;
-                int64_t stream_down_since_us = 0;
-                int64_t last_restart_req_us = 0;
+                bool stalled_reported = false;
+                bool disconnected = false;
                 int64_t last_progress_us = esp_timer_get_time();
                 size_t last_queued_frames = SIZE_MAX;
 
                 while (!s_abort) {
-                    if (s_paused) {
-                        vTaskDelay(pdMS_TO_TICKS(50));
-                        continue;
-                    }
                     bt_audio_status_t st = {0};
                     bt_audio_get_status(&st);
                     int64_t now_us = esp_timer_get_time();
+                    playback_diagnostics_sample(false);
+                    if (st.state != BT_AUDIO_STATE_CONNECTED && st.state != BT_AUDIO_STATE_STREAMING) {
+                        ESP_LOGW(TAG, "BT disconnected; ending playback");
+                        disconnected = true;
+                        break;
+                    }
+                    if (s_paused) {
+                        last_progress_us = now_us;
+                        vTaskDelay(pdMS_TO_TICKS(50));
+                        continue;
+                    }
                     if (last_queued_frames == SIZE_MAX || st.queued_frames < last_queued_frames) {
+                        if (stalled_reported) ESP_LOGI(TAG, "BT audio progress resumed");
+                        stalled_reported = false;
                         last_progress_us = now_us;
                     }
                     last_queued_frames = st.queued_frames;
@@ -154,56 +176,19 @@ static void audio_play_task(void *arg)
                             (void)bt_audio_stop_stream();
                             drain_stop_requested = true;
                         }
-                        stream_down_since_us = 0;
                     } else if (st.queued_frames > 0) {
                         drain_stop_requested = false;
                     }
 
-                    if (!st.streaming && st.queued_frames > 0) {
-                        if (stream_down_since_us == 0) {
-                            stream_down_since_us = now_us;
-                        }
-
-                        bool grace_elapsed =
-                            (now_us - stream_down_since_us) >= ((int64_t)BT_RESTART_GRACE_MS * 1000LL);
-                        bool restart_due =
-                            (last_restart_req_us == 0) ||
-                            ((now_us - last_restart_req_us) >= ((int64_t)BT_RESTART_MIN_INTERVAL_MS * 1000LL));
-
-                        if (grace_elapsed && restart_due && !bt_audio_media_cmd_pending()) {
-                            esp_err_t restart_err = bt_audio_start_stream();
-                            last_restart_req_us = now_us;
-                            if (restart_err != ESP_OK) {
-                                ESP_LOGW(TAG,
-                                         "BT stream restart request failed: %s "
-                                         "(queued=%u, streaming=%d)",
-                                         esp_err_to_name(restart_err),
-                                         (unsigned)st.queued_frames,
-                                         st.streaming ? 1 : 0);
-                            } else {
-                                ESP_LOGW(TAG,
-                                         "BT stream restarted after stall (queued=%u)",
-                                         (unsigned)st.queued_frames);
-                            }
-                        }
-                    } else if (st.streaming && st.queued_frames > 0) {
-                        bool stalled =
-                            (now_us - last_progress_us) >= ((int64_t)BT_PROGRESS_STALL_MS * 1000LL);
-                        bool restart_due =
-                            (last_restart_req_us == 0) ||
-                            ((now_us - last_restart_req_us) >= ((int64_t)BT_RESTART_MIN_INTERVAL_MS * 1000LL));
-                        if (stalled && restart_due && !bt_audio_media_cmd_pending()) {
-                            ESP_LOGW(TAG,
-                                     "BT stream progress stalled, kick restart "
-                                     "(queued=%u)", (unsigned)st.queued_frames);
-                            (void)bt_audio_pause_stream();
-                            vTaskDelay(pdMS_TO_TICKS(20));
-                            (void)bt_audio_start_stream();
-                            last_restart_req_us = now_us;
-                            last_progress_us = now_us;
-                        }
-                    } else {
-                        stream_down_since_us = 0;
+                    if (st.queued_frames > 0 && !stalled_reported &&
+                        now_us - last_progress_us >= (int64_t)BT_PROGRESS_STALL_MS * 1000) {
+                        // A slow/stalled stream is not permission to race Suspend/Start.
+                        // Leave recovery to the stack or explicit user controls.
+                        ESP_LOGW(TAG, "BT audio stalled (queued=%u, streaming=%d); no automatic restart",
+                                 (unsigned)st.queued_frames, st.streaming);
+                        bt_audio_log_stream_health();
+                        playback_diagnostics_sample(true);
+                        stalled_reported = true;
                     }
                     if (!st.streaming && st.queued_frames == 0) {
                         break;
@@ -211,8 +196,8 @@ static void audio_play_task(void *arg)
                     vTaskDelay(pdMS_TO_TICKS(100));
                 }
 
-                if (s_abort) {
-                    ESP_LOGW(TAG, "BT playback aborted via audio_player_stop");
+                if (s_abort || disconnected) {
+                    ESP_LOGI(TAG, "BT playback cleanup (%s)", disconnected ? "disconnected" : "stopped");
                     if (s_play_mode == AUDIO_PLAYER_MODE_BT || bt_audio_can_stream()) {
                         // Single-owner teardown: avoid racing stop requests from
                         // control/UI and worker contexts during rapid play spam.
@@ -220,7 +205,7 @@ static void audio_play_task(void *arg)
                     }
                 }
 
-            } else if (bt_audio_can_stream()) {
+            } else if (bt_audio_can_stream() && !s_allow_speaker_fallback) {
                 ESP_LOGW(TAG,
                          "bt_audio_play_wav failed (%s), skipping speaker fallback",
                          esp_err_to_name(err));
@@ -244,6 +229,10 @@ static void audio_play_task(void *arg)
         }
     }
 
+finished:
+    playback_diagnostics_end();
+    // Worker stack is still allocated here; compare like-for-like across runs.
+    log_internal_heap("after playback cleanup (worker still alive)");
     s_player_task = NULL;
     s_play_mode = AUDIO_PLAYER_MODE_NONE;
     s_paused = false;
@@ -253,7 +242,7 @@ static void audio_play_task(void *arg)
 
 // ------------------- Public control API -------------------
 
-esp_err_t audio_player_play(const char *path)
+static esp_err_t audio_player_play_internal(const char *path, bool fallback)
 {
     if (!path) return ESP_ERR_INVALID_ARG;
 
@@ -269,11 +258,14 @@ esp_err_t audio_player_play(const char *path)
         }
     }
 
+    s_allow_speaker_fallback = fallback;
+    audio_progress_reset();
     audio_task_args_t *a = (audio_task_args_t*)malloc(sizeof(audio_task_args_t));
     if (!a) return ESP_ERR_NO_MEM;
 
     strncpy(a->path, path, sizeof(a->path) - 1);
     a->path[sizeof(a->path) - 1] = '\0';
+    a->start_after_us = fallback ? esp_timer_get_time() + 1000000 : 0;
     s_abort = false;
 
     BaseType_t ok = xTaskCreatePinnedToCore(
@@ -352,6 +344,12 @@ esp_err_t audio_player_play(const char *path)
 
     return ESP_OK;
 }
+
+esp_err_t audio_player_play(const char *path)
+{ return audio_player_play_internal(path, false); }
+
+esp_err_t audio_player_play_show(const char *path)
+{ return audio_player_play_internal(path, true); }
 
 esp_err_t audio_player_set_current(const char *path)
 {

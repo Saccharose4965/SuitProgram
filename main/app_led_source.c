@@ -13,19 +13,20 @@ const shell_legend_t LED_SOURCE_LEGEND = {
 
 enum {
     LED_SOURCE_ENTRY_BACK = 0,
-    LED_SOURCE_ENTRY_MODE,
-    LED_SOURCE_ENTRY_MANUAL,
     LED_SOURCE_ENTRY_FFT,
+    LED_SOURCE_ENTRY_MANUAL,
+    LED_SOURCE_ENTRY_SHOW,
     LED_SOURCE_ENTRY_COUNT,
 };
 
 typedef struct {
     size_t selected;
-    char source_label[18];
+    char fft_label[18];
+    char manual_label[18];
 } led_source_app_state_t;
 
 static led_source_app_state_t s_source_app = {
-    .selected = LED_SOURCE_ENTRY_MODE,
+    .selected = LED_SOURCE_ENTRY_FFT,
 };
 
 static led_source_mode_t s_source_mode = LED_SOURCE_FFT;
@@ -39,6 +40,7 @@ static uint32_t s_manual_beat_count = 0;
 static bool s_fft_phase_valid = false;
 static float s_fft_prev_aligned_phase = 0.0f;
 static uint32_t s_fft_beat_count = 0;
+static led_timing_mode_t s_timing_mode = LED_TIMING_ON_BEAT;
 
 static float clamp_bpm(float bpm)
 {
@@ -70,8 +72,10 @@ static int beat_count_between(float start_phase, float end_phase, float trigger_
 
 static void led_source_refresh_labels(void)
 {
-    snprintf(s_source_app.source_label, sizeof(s_source_app.source_label),
-             "src:%s", led_source_mode_name(s_source_mode));
+    snprintf(s_source_app.fft_label, sizeof(s_source_app.fft_label),
+             "FFT%s", s_source_mode == LED_SOURCE_FFT ? " *" : "");
+    snprintf(s_source_app.manual_label, sizeof(s_source_app.manual_label),
+             "Manual%s", s_source_mode == LED_SOURCE_MANUAL ? " *" : "");
 }
 
 const char *led_source_mode_name(led_source_mode_t mode)
@@ -120,6 +124,31 @@ void led_source_manual_phase_adjust(float delta)
     s_manual.phase_offset = wrap01(s_manual.phase_offset + delta);
 }
 
+const char *led_source_timing_name(led_timing_mode_t mode)
+{
+    switch (mode) {
+        case LED_TIMING_OFFBEAT: return "offbeat";
+        case LED_TIMING_DOUBLE: return "2x";
+        default: return "on beat";
+    }
+}
+
+void led_source_timing_set(led_timing_mode_t mode)
+{
+    if (mode < LED_TIMING_ON_BEAT || mode > LED_TIMING_DOUBLE) {
+        mode = LED_TIMING_ON_BEAT;
+    }
+    s_timing_mode = mode;
+    s_manual.phase_offset = (mode == LED_TIMING_OFFBEAT) ? 0.5f : 0.0f;
+    fft_beat_offbeat_set(mode == LED_TIMING_OFFBEAT);
+    fft_beat_ratio_set(mode == LED_TIMING_DOUBLE ? 2u : 1u);
+}
+
+led_timing_mode_t led_source_timing_get(void)
+{
+    return s_timing_mode;
+}
+
 void led_source_service_tick(float dt_sec)
 {
     bool blocked = led_source_blocked_by_slave();
@@ -133,7 +162,7 @@ void led_source_service_tick(float dt_sec)
     }
 
     if (s_source_mode == LED_SOURCE_MANUAL) {
-        float bpm = clamp_bpm(s_manual.bpm);
+        float bpm = clamp_bpm(s_manual.bpm) * (s_timing_mode == LED_TIMING_DOUBLE ? 2.0f : 1.0f);
         if (dt_sec > 0.0f) {
             float start_phase = s_manual.cycle_phase;
             float end_phase = start_phase + dt_sec * (bpm / 60.0f);
@@ -182,8 +211,14 @@ void led_source_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
     led_source_refresh_labels();
-    s_source_app.selected = LED_SOURCE_ENTRY_MODE;
+    s_source_app.selected = LED_SOURCE_ENTRY_FFT;
     shell_ui_menu_reset(s_source_app.selected);
+}
+
+void led_source_app_tick(shell_app_context_t *ctx, float dt_sec)
+{
+    (void)ctx;
+    shell_ui_menu_tick(dt_sec, s_source_app.selected);
 }
 
 void led_source_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
@@ -208,22 +243,15 @@ void led_source_app_handle_input(shell_app_context_t *ctx, const input_event_t *
                 ctx->request_switch("menu", ctx->request_user_data);
             }
             break;
-        case LED_SOURCE_ENTRY_MODE:
-            led_source_mode_set((s_source_mode == LED_SOURCE_MANUAL)
-                                    ? LED_SOURCE_FFT
-                                    : LED_SOURCE_MANUAL);
+        case LED_SOURCE_ENTRY_FFT:
+            led_source_mode_set(LED_SOURCE_FFT);
             break;
         case LED_SOURCE_ENTRY_MANUAL:
             led_source_mode_set(LED_SOURCE_MANUAL);
-            if (ctx->request_switch) {
-                ctx->request_switch("manual_bpm", ctx->request_user_data);
-            }
+            if (ctx->request_switch) ctx->request_switch("manual_bpm", ctx->request_user_data);
             break;
-        case LED_SOURCE_ENTRY_FFT:
-            led_source_mode_set(LED_SOURCE_FFT);
-            if (ctx->request_switch) {
-                ctx->request_switch("fft_sync", ctx->request_user_data);
-            }
+        case LED_SOURCE_ENTRY_SHOW:
+            /* TODO: select the show/master timeline as an LED source. */
             break;
         default:
             break;
@@ -239,9 +267,9 @@ void led_source_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, in
 
     const shell_menu_entry_t entries[LED_SOURCE_ENTRY_COUNT] = {
         { .id = "back", .label = "Back" },
-        { .id = "mode", .label = s_source_app.source_label },
-        { .id = "manual_bpm", .label = "Manual BPM" },
-        { .id = "fft_sync", .label = "FFT Sync" },
+        { .id = "fft", .label = s_source_app.fft_label },
+        { .id = "manual", .label = s_source_app.manual_label },
+        { .id = "show", .label = "Show (TODO)" },
     };
 
     shell_menu_view_t view = {

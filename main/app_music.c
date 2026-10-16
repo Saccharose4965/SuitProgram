@@ -11,6 +11,7 @@
 
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_attr.h"
 
 #include "audio_player.h"
 #include "bt_audio.h"
@@ -29,7 +30,8 @@ typedef struct {
     bool mounted;
     bool tried_mount;
 } music_state_t;
-static music_state_t s_music = {0};
+// Filename catalogue is task-only data; preserve internal RAM for BT/DMA.
+static EXT_RAM_BSS_ATTR music_state_t s_music;
 static const char *TAG = "app_music";
 
 shell_legend_t MUSIC_LEGEND = {

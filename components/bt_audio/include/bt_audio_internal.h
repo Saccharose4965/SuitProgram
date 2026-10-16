@@ -1,5 +1,7 @@
 #pragma once
 
+// Internal interface shared by bt_audio's implementation files.
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

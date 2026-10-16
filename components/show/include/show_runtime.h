@@ -31,11 +31,19 @@ typedef struct {
     uint32_t playhead_ms;
     uint16_t peer_count;
     uint16_t best_rtt_ms;
+    uint8_t present_roles; /* A/B/C bitmask, including this suit */
+    uint8_t master_roles;
+    bool role_conflict;
+    bool role_ready;
+    bool role_pending;
     char slug[32];
     char error[32];
 } show_runtime_status_t;
 
 esp_err_t show_runtime_init(void);
+void show_runtime_set_menu_open(bool open);
+void show_runtime_set_bt_delay_ms(uint16_t delay_ms);
+uint16_t show_runtime_get_bt_delay_ms(void);
 esp_err_t show_runtime_load(const char *show_slug, uint8_t role_id);
 esp_err_t show_runtime_set_role(uint8_t role_id);
 esp_err_t show_runtime_start_master(void);

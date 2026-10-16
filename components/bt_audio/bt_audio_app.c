@@ -162,9 +162,7 @@ void bt_audio_app_draw(uint8_t *fb, int x, int y, int w, int h)
     if (visible < 0) visible = 0;
 
     int list_y = y + 18;
-    if (s_bt_ui.count == 0) {
-        oled_draw_text3x5(fb, x + 2, list_y, "Scanning...");
-    } else {
+    if (s_bt_ui.count > 0) {
         for (int i = 0; i < visible; ++i) {
             int idx = start + i;
             int yy = list_y + i * 8;

@@ -7,11 +7,12 @@
 #include "esp_log.h"
 #include "led.h"
 #include "led_modes.h"
+#include "oled.h"
 
 #include "app_led_support.h"
 
 const shell_legend_t LEDS_LEGEND = {
-    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_LEFT, SHELL_ICON_RIGHT },
+    .slots = { SHELL_ICON_LEFT, SHELL_ICON_RIGHT, SHELL_ICON_SELECT, SHELL_ICON_DOWN },
 };
 
 typedef enum {
@@ -86,15 +87,13 @@ static void format_mode_label(leds_backend_t backend, int mode_idx,
         ? led_beat_anim_name(mode_idx)
         : led_modes_name(mode_idx);
     if (!name) name = "?";
-
-    if (backend == LEDS_BACKEND_CUSTOM && strcmp(name, "off") == 0) {
-        snprintf(buf, buf_len, "off");
-        return;
-    }
-
-    snprintf(buf, buf_len, "%s:%s",
-             (backend == LEDS_BACKEND_BEAT) ? "beat" : "sync",
-             name);
+    if (backend == LEDS_BACKEND_BEAT) {
+        if (strcmp(name, "energy") == 0) name = "audio energy";
+        else if (strcmp(name, "breathe") == 0) name = "beat breathe";
+        else if (strcmp(name, "random") == 0) name = "random bursts";
+    } else if (strcmp(name, "random") == 0) name = "random motion";
+    snprintf(buf, buf_len, "%s", name);
+    for (char *p = buf; *p; ++p) if (*p == '_') *p = ' ';
 }
 
 static size_t append_mode_entries(size_t n, size_t cap, leds_backend_t backend)
@@ -122,6 +121,19 @@ static size_t build_entries(void)
 
     n = append_mode_entries(n, cap, LEDS_BACKEND_BEAT);
     n = append_mode_entries(n, cap, LEDS_BACKEND_CUSTOM);
+
+    // One catalogue across both renderers; metadata follows the visible label.
+    for (size_t i = 2; i < n; ++i) {
+        for (size_t j = i; j > 1 && strcmp(s_entry_labels[j - 1], s_entry_labels[j]) > 0; --j) {
+            char label[LEDS_LABEL_LEN];
+            memcpy(label, s_entry_labels[j], sizeof(label));
+            memcpy(s_entry_labels[j], s_entry_labels[j - 1], sizeof(label));
+            memcpy(s_entry_labels[j - 1], label, sizeof(label));
+            leds_menu_meta_t meta = s_meta[j];
+            s_meta[j] = s_meta[j - 1];
+            s_meta[j - 1] = meta;
+        }
+    }
 
     refresh_runtime_labels();
     if (n < cap) {
@@ -243,6 +255,11 @@ void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
         if (s_leds.selected + 1 < count) s_leds.selected++;
         return;
     }
+    if (ev->button == INPUT_BTN_D &&
+        s_meta[s_leds.selected].kind != LEDS_ENTRY_KIND_CFG_SPEED) {
+        s_leds.selected = (s_leds.selected + 2) % count;
+        return;
+    }
     if (ev->button != INPUT_BTN_C && ev->button != INPUT_BTN_D) {
         return;
     }
@@ -286,11 +303,23 @@ void leds_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, i
     size_t count = build_entries();
     s_leds.selected = clamp_sel(s_leds.selected, count);
 
-    shell_menu_view_t view = {
-        .entries = s_entries,
-        .count = count,
-        .selected = s_leds.selected,
-        .title = "LED / ANIMS",
-    };
-    shell_ui_draw_menu(fb, x, y, w, h, &view);
+    int rows = (h - 8) / 8;
+    if (rows < 1 || w < 16) return;
+    size_t page_size = (size_t)rows * 2;
+    size_t first = s_leds.selected / page_size * page_size;
+    char title[40];
+    snprintf(title, sizeof(title), "ANIMATION %u/%u", (unsigned)(first / page_size + 1),
+             (unsigned)((count + page_size - 1) / page_size));
+    oled_draw_text3x5(fb, x, y, title);
+    for (size_t i = first; i < count && i < first + page_size; ++i) {
+        int col = (int)((i - first) % 2), row = (int)((i - first) / 2);
+        char label[LEDS_LABEL_LEN];
+        bool active = s_meta[i].kind == LEDS_ENTRY_KIND_MODE &&
+            s_meta[i].backend == s_leds.current_backend && s_meta[i].value == s_leds.current_mode;
+        int limit = w / 8 - 2;
+        if (limit < 1) limit = 1;
+        snprintf(label, sizeof(label), "%c%.*s", i == s_leds.selected ? '>' : active ? '*' : ' ',
+                 limit, s_entries[i].label);
+        oled_draw_text3x5(fb, x + col * (w / 2), y + 8 + row * 8, label);
+    }
 }

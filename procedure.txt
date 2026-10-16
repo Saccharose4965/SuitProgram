@@ -1,3 +1,1 @@
-source /home/anotherone/Documents/suit/esp-idf/export.sh
-idf.py -p /dev/ttyUSB0 -b 115200 flash monitor
-
+bash -c 'source /home/jonas/Documents/suit/esp-idf/export.sh && idf.py -p /dev/ttyUSB0 -b 115200 flash monitor'

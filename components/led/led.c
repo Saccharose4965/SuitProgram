@@ -22,7 +22,9 @@
 // RMT resolution: 10 MHz -> 0.1 us per tick
 #define LED_RMT_RES_HZ       10000000
 #define LED_RMT_TX_TIMEOUT_MS 1000
-#define LED_RMT_MEM_SYMBOLS   128
+// ESP32 has 8 x 64 RMT symbols. The two LED outputs use four blocks each,
+// halving refill interrupts versus 128 symbols without consuming heap RAM.
+#define LED_RMT_MEM_SYMBOLS   256
 
 #ifndef LED_MAX_FPS
 #define LED_MAX_FPS 60
@@ -57,8 +59,9 @@ static const char *TAG = "led";
 #if CONFIG_FREERTOS_UNICORE
 #define LED_TASK_CORE 0
 #else
-// Keep LED workers off FFT's default core (core 1).
-#define LED_TASK_CORE 0
+// Keep LED work off the Bluetooth/Wi-Fi core. The TX task blocks while RMT
+// sends and coalesces pending frames; it must not compete with BT on CPU0.
+#define LED_TASK_CORE 1
 #endif
 
 // LED TX must not be lower priority than FFT producer, otherwise frame
@@ -772,87 +775,61 @@ static void led_split_frame(const uint8_t *rgb, size_t logical_pixels)
     }
 }
 
-static esp_err_t led_retry_outputs_locked(bool lock_held)
+// Caller owns s_tx_lock: physical buffers remain immutable until all channels drain.
+static esp_err_t led_drain_outputs_locked(void)
 {
+    esp_err_t result = ESP_OK;
     for (size_t strip = 0; strip < LED_OUTPUT_COUNT; ++strip) {
-        if (!s_outputs[strip].chan || !s_outputs[strip].encoder || !s_output_frames[strip]) {
-            return ESP_ERR_INVALID_STATE;
-        }
+        // IDF expects milliseconds here, not FreeRTOS ticks.
+        esp_err_t err = rmt_tx_wait_all_done(s_outputs[strip].chan, LED_RMT_TX_TIMEOUT_MS);
+        if (result == ESP_OK && err != ESP_OK) result = err;
     }
-
-    bool locked_here = false;
-    if (!lock_held) {
-        ESP_RETURN_ON_ERROR(led_lock(), "led", "lock");
-        locked_here = true;
-    }
-    esp_err_t lock_err = led_tx_lock_take();
-    if (lock_err != ESP_OK) {
-        if (locked_here) {
-            led_unlock();
-        }
-        return lock_err;
-    }
-    rmt_transmit_config_t tx_cfg = { .loop_count = 0 };
-    esp_err_t err = ESP_OK;
-    bool submitted[LED_OUTPUT_COUNT] = {false};
-    for (size_t strip = 0; strip < LED_OUTPUT_COUNT; ++strip) {
-        if (s_output_lengths[strip] == 0) continue;
-        err = rmt_transmit(s_outputs[strip].chan,
-                           s_outputs[strip].encoder,
-                           s_output_frames[strip],
-                           s_output_lengths[strip] * 3u,
-                           &tx_cfg);
-        if (err != ESP_OK) {
-            break;
-        }
-        submitted[strip] = true;
-    }
-    if (err == ESP_OK) {
-        for (size_t strip = 0; strip < LED_OUTPUT_COUNT; ++strip) {
-            if (!submitted[strip]) continue;
-            err = rmt_tx_wait_all_done(s_outputs[strip].chan, pdMS_TO_TICKS(LED_RMT_TX_TIMEOUT_MS));
-            if (err != ESP_OK) {
-                break;
-            }
-        }
-    }
-    led_tx_lock_give();
-    if (locked_here) {
-        led_unlock();
-    }
-    return err;
+    return result;
 }
 
-static esp_err_t led_flush_locked(const uint8_t *rgb, size_t len_bytes, bool lock_held){
+static esp_err_t led_transmit_outputs_locked(void)
+{
+    rmt_transmit_config_t tx_cfg = { .loop_count = 0 };
+    esp_err_t err = ESP_OK;
     for (size_t strip = 0; strip < LED_OUTPUT_COUNT; ++strip) {
-        if (!s_outputs[strip].chan || !s_outputs[strip].encoder || !s_output_frames[strip]) {
+        if (s_output_lengths[strip] == 0) continue;
+        err = rmt_transmit(s_outputs[strip].chan, s_outputs[strip].encoder,
+                           s_output_frames[strip], s_output_lengths[strip] * 3u, &tx_cfg);
+        if (err != ESP_OK) break;
+    }
+    // Drain earlier submissions even if a later channel failed to submit.
+    esp_err_t drained = led_drain_outputs_locked();
+    return err != ESP_OK ? err : drained;
+}
+
+static esp_err_t led_flush_frame(const uint8_t *rgb, size_t len_bytes)
+{
+    for (size_t strip = 0; strip < LED_OUTPUT_COUNT; ++strip) {
+        if (!s_outputs[strip].chan || !s_outputs[strip].encoder || !s_output_frames[strip])
             return ESP_ERR_INVALID_STATE;
-        }
     }
-
-    bool locked_here = false;
-    if (!lock_held) {
-        ESP_RETURN_ON_ERROR(led_lock(), "led", "lock");
-        locked_here = true;
-        lock_held = true;
+    ESP_RETURN_ON_ERROR(led_tx_lock_take(), "led", "tx lock");
+    // A previous failure may have left a channel in flight. Never overwrite its data.
+    esp_err_t err = led_drain_outputs_locked();
+    if (err != ESP_OK) {
+        led_tx_lock_give();
+        return err;
     }
-
     size_t logical_pixels = len_bytes / 3u;
     if (logical_pixels > LED_COUNT) logical_pixels = LED_COUNT;
     led_split_frame(rgb, logical_pixels);
-
-    esp_err_t err = led_retry_outputs_locked(true);
+    err = led_transmit_outputs_locked();
     if (err == ESP_ERR_TIMEOUT) {
         ESP_LOGW(TAG, "RMT TX timeout (%u logical px), retrying once", (unsigned)logical_pixels);
         for (size_t strip = 0; strip < LED_OUTPUT_COUNT; ++strip) {
-            (void)rmt_disable(s_outputs[strip].chan);
-            (void)rmt_enable(s_outputs[strip].chan);
+            err = rmt_disable(s_outputs[strip].chan);
+            if (err != ESP_OK) break;
+            err = rmt_enable(s_outputs[strip].chan);
+            if (err != ESP_OK) break;
         }
-        err = led_retry_outputs_locked(true);
+        if (err == ESP_OK) err = led_transmit_outputs_locked();
     }
-    if (locked_here) {
-        led_unlock();
-    }
+    led_tx_lock_give();
     return err;
 }
 
@@ -920,9 +897,9 @@ static void led_tx_task(void *arg){
             continue;
         }
 
-        // Single TX task owns the channel; don't hold the shared state lock while waiting.
+        // The TX lock protects physical buffers; the shared pending-frame lock stays free.
         int64_t tx_start_us = esp_timer_get_time();
-        (void)led_flush_locked(s_tx_shadow, len_bytes, false);
+        (void)led_flush_frame(s_tx_shadow, len_bytes);
         next_tx_us = tx_start_us + min_frame_us;
     }
 }
@@ -946,7 +923,7 @@ static esp_err_t led_test_show_prefix(uint8_t r, uint8_t g, uint8_t b, size_t li
     for (size_t i = 0; i < lit_count; ++i){
         led_set_pixel_rgb(s_frame, i, r, g, b);
     }
-    esp_err_t err = led_flush_locked(s_frame, active * 3u, true);
+    esp_err_t err = led_flush_frame(s_frame, active * 3u);
     led_unlock();
     return err;
 }
@@ -964,7 +941,7 @@ static esp_err_t led_test_show_chase(uint8_t r, uint8_t g, uint8_t b, size_t spa
         size_t p = pos % span;
         led_set_pixel_rgb(s_frame, p, r, g, b);
     }
-    esp_err_t err = led_flush_locked(s_frame, active * 3u, true);
+    esp_err_t err = led_flush_frame(s_frame, active * 3u);
     led_unlock();
     return err;
 }
@@ -1014,6 +991,9 @@ static esp_err_t led_init_output(size_t idx)
         .flags = { .with_dma = false }
     };
     ESP_RETURN_ON_ERROR(rmt_new_tx_channel(&tx_cfg, &out->chan), TAG, "new tx channel");
+    // RMT interrupt affinity follows the allocating task, not led_tx_task.
+    ESP_LOGI(TAG, "RMT GPIO%d: init_core=%d symbols=%u", (int)out->gpio,
+             xPortGetCoreID(), (unsigned)LED_RMT_MEM_SYMBOLS);
 
     led_strip_encoder_config_t enc_cfg = { .resolution = LED_RMT_RES_HZ };
     esp_err_t err = rmt_new_led_strip_encoder(&enc_cfg, &out->encoder);
@@ -1079,7 +1059,7 @@ esp_err_t led_init(void){
     }
     // Clear strip
     memset(s_frame, 0, LED_COUNT * 3);
-    esp_err_t err = led_flush_locked(s_frame, 3, true);
+    esp_err_t err = led_flush_frame(s_frame, 3);
     if (err != ESP_OK) {
         // Don't hard-fail init on clear timeout: allow later pulses to run with
         // shorter frames for bring-up diagnostics.

@@ -89,6 +89,7 @@ static void recorder_task(void *arg){
             fclose(s_wav);
             s_wav = NULL;
         }
+        audio_disable_all();
         s_rec_task = NULL;
         vTaskDelete(NULL);
     }
@@ -114,7 +115,8 @@ static void recorder_task(void *arg){
         // Convert the left slot's MSB-justified 32-bit samples to s16.
         for (size_t i = 0; i < frames_rd; i++) {
             int32_t v = rx32[2*i + slot_index];
-            pcm16[i]  = (int16_t)(v >> 14);           // adjust gain via shift
+            int32_t scaled = v / 16384;
+            pcm16[i] = scaled > 32767 ? 32767 : scaled < -32768 ? -32768 : scaled;
         }
 
         // Simple energy check (helps catch wiring issues)
@@ -128,6 +130,10 @@ static void recorder_task(void *arg){
 
         size_t wrote = fwrite(pcm16, 1, frames_rd * sizeof(int16_t), s_wav);
         s_bytes_data += wrote;
+        if(wrote != frames_rd * sizeof(int16_t)) {
+            ESP_LOGE(TAG, "SD write failed; stopping recording");
+            s_rec=false;
+        }
 
         static int flush_ctr = 0;
         if ((++flush_ctr & 0x1F) == 0) fflush(s_wav); // periodic flush
@@ -142,6 +148,7 @@ static void recorder_task(void *arg){
 
     free(rx32);
     free(pcm16);
+    audio_disable_all();
     s_rec_task = NULL;
     vTaskDelete(NULL);
 }
@@ -151,15 +158,16 @@ esp_err_t mic_rec_init(const mic_rec_cfg_t *cfg){
     if (cfg && cfg->sample_rate_hz > 0) s_rate = cfg->sample_rate_hz;
 
     s_rx = audio_rx_handle();
-    if (!s_rx) return ESP_ERR_INVALID_STATE;
+    // Idle Bluetooth may have released I2S; mic_rec_start restores it via
+    // audio_set_rate and refreshes this handle before creating the worker.
 
     ESP_LOGI(TAG, "Mic ready (fs=%d)", s_rate);
     return ESP_OK;
 }
 
 esp_err_t mic_rec_start(const char *path){
-    if (!s_rx) return ESP_ERR_INVALID_STATE;
     if (s_rec) return ESP_OK;
+    if (s_rec_task) return ESP_ERR_INVALID_STATE; // previous WAV still finalizing
 
     if (!path) {
         make_autopath(s_last_path);
@@ -174,19 +182,20 @@ esp_err_t mic_rec_start(const char *path){
     s_wav = fopen(path, "wb+");
     if (!s_wav) { ESP_LOGE(TAG, "open %s failed", path); return ESP_FAIL; }
 
-    uint8_t z[44] = {0};
-    fwrite(z, 1, sizeof(z), s_wav);
+    write_wav_header(s_wav, s_rate, 16, 1, 0);
     s_bytes_data = 0;
 
     /* make sure I²S is at mic rate and RX is active (TX disabled) */
-    ESP_RETURN_ON_ERROR(audio_set_rate(s_rate), TAG, "set fs");
-    esp_err_t e = audio_enable_rx();
+    esp_err_t e = audio_set_rate(s_rate);
+    if (e == ESP_OK) e = audio_enable_rx();
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "enable rx failed: %s", esp_err_to_name(e));
         fclose(s_wav);
         s_wav = NULL;
         return e;
     }
+    // Bluetooth may have released/recreated the I2S bus since mic_rec_init.
+    s_rx = audio_rx_handle();
 
     s_rec = true;
     BaseType_t ok = xTaskCreatePinnedToCore(recorder_task, "mic_rec", 4096, NULL, 5, &s_rec_task, BG_TASK_CORE);
@@ -204,12 +213,12 @@ esp_err_t mic_rec_start(const char *path){
 esp_err_t mic_rec_stop(void){
     if (!s_rec) return ESP_OK;
     s_rec = false;
-    if (s_rx) i2s_channel_disable(s_rx);
+    audio_disable_all(); // keep the shared bus's enabled-state bookkeeping correct
     for (int i = 0; i < 100 && s_rec_task; ++i) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     return ESP_OK;
 }
 
-bool mic_rec_is_recording(void) { return s_rec; }
+bool mic_rec_is_recording(void) { return s_rec || s_rec_task != NULL; }
 const char* mic_rec_last_path(void) { return s_last_path[0] ? s_last_path : NULL; }

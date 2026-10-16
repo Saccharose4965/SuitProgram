@@ -68,12 +68,12 @@ static const menu_entry_t g_menu_comm_entries[] = {
     { "file_rx",   "File RX"   },
 };
 static const menu_entry_t g_menu_led_entries[] = {
-    { "menu_root",       "Back"           },
-    { "leds_animations", "Animations"     },
-    { "leds_source",     "Source"         },
-    { "leds_color",      "Color"          },
-    { "master_control",  "Master Control" },
-    { "leds_layout",     "Layout Edit"    },
+    { "menu_root",       "Back"       },
+    { "led_controller",  "Controller" },
+    { "leds_animations", "Animation"  },
+    { "leds_color",      "Color"      },
+    { "leds_source",     "Source"     },
+    { "leds_layout",     "Editor"     },
 };
 static const menu_entry_t g_menu_misc_entries[] = {
     { "menu_root",  "Back"       },

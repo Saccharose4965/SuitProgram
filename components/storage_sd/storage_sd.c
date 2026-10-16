@@ -84,9 +84,9 @@ esp_err_t storage_mount_sd(void)
     #endif
     };
 
-    // Keep SDSPI probing at supported full-duplex rates on this wiring/driver.
-    // 40 MHz is rejected by SPI master on ESP32 here, so start at 20 MHz.
-    const int khz_steps[] = { 20000, 10000, 5000, 2000, 400 };
+    // Mounting at 20 MHz succeeded but sustained reads produced CRC/timeouts.
+    // Leave margin on the shared wired bus; 10 MHz still exceeds PCM throughput.
+    const int khz_steps[] = { 10000, 5000, 2000, 400 };
     const int n_steps = sizeof(khz_steps) / sizeof(khz_steps[0]);
 
     esp_err_t ret = ESP_FAIL;

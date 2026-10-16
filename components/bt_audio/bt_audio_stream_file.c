@@ -13,6 +13,10 @@
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "audio.h"
+
+static uint16_t s_file_channels = 1;
+static uint32_t s_file_rate;
 #include "esp_timer.h"
 
 static const char *TAG = "bt_audio";
@@ -36,6 +40,10 @@ static SemaphoreHandle_t s_bt_fp_lock = NULL; // protects FILE access
 #define BT_FEEDER_TASK_CORE            1
 #define BT_FEEDER_YIELD_EVERY          4
 #define BT_AUDIO_DIAG_LOG_ENABLE       0
+#include "voice_resample.h"
+static voice_resample_t s_voice;
+static bool s_voice_resampling;
+static size_t s_voice_input_pos, s_voice_input_count;
 #define BT_DIAG_LOG_MS                 5000
 
 static uint8_t *s_bt_buf                 = NULL;
@@ -395,8 +403,47 @@ static inline void bt_feeder_wait_for_signal(void)
     (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
 
+static bool voice_read_sample(int16_t *sample)
+{
+    if (s_voice_input_pos == s_voice_input_count) {
+        size_t want = s_bt_src_bytes_left;
+        if (want > BT_FEEDER_MONO_READ_MAX_BYTES) want = BT_FEEDER_MONO_READ_MAX_BYTES;
+        size_t rd = fread(s_bt_feeder_mono_chunk, 1, want, s_bt_fp);
+        s_bt_src_bytes_left -= rd;
+        s_voice_input_pos = 0;
+        s_voice_input_count = rd / 2;
+        if (!s_voice_input_count) return false;
+    }
+    *sample = ((int16_t *)s_bt_feeder_mono_chunk)[s_voice_input_pos++];
+    return true;
+}
+
 static size_t bt_read_mono_to_stereo_chunk_locked(size_t want_out_bytes)
 {
+    if (s_voice_resampling) {
+        size_t frames = 0;
+        int16_t sample, *out = (int16_t *)s_bt_feeder_chunk;
+        while (frames < want_out_bytes / 4 && voice_resample_next(&s_voice, voice_read_sample, &sample)) {
+            int16_t value = ((int32_t)sample * s_bt_vol_q15) >> 15;
+            out[2*frames] = out[2*frames+1] = value;
+            ++frames;
+        }
+        return frames * 4;
+    }
+    if (s_file_channels == 2) {
+        size_t want = want_out_bytes;
+        if (want > BT_FEEDER_MONO_READ_MAX_BYTES) want = BT_FEEDER_MONO_READ_MAX_BYTES;
+        if (want > s_bt_src_bytes_left) want = s_bt_src_bytes_left;
+        want &= ~(size_t)3;
+        size_t rd = fread(s_bt_feeder_chunk, 1, want, s_bt_fp) & ~(size_t)3;
+        s_bt_src_bytes_left -= rd;
+        int16_t *pcm = (int16_t *)s_bt_feeder_chunk;
+        for (size_t i = 0; i < rd / 2; ++i) {
+            int32_t v = ((int32_t)pcm[i] * s_bt_vol_q15) >> 15;
+            pcm[i] = v > 32767 ? 32767 : (v < -32768 ? -32768 : v);
+        }
+        return rd;
+    }
     if (!s_bt_feeder_chunk || !s_bt_feeder_mono_chunk ||
         !s_bt_fp || s_bt_src_bytes_left < sizeof(int16_t) || want_out_bytes < 4) return 0;
 
@@ -480,7 +527,7 @@ static void bt_file_feeder_task(void *arg)
         FILE *fp_local = s_bt_fp;
         if (!fp_local) break;
 
-        if (s_bt_src_bytes_left == 0) {
+        if (s_bt_src_bytes_left == 0 && (!s_voice_resampling || s_voice.remaining == 0)) {
             s_bt_file_eof = true;
             break;
         }
@@ -602,6 +649,17 @@ size_t bt_audio_stream_queued_frames(void)
     return s_bt_bytes_left / 4; // always output stereo frames
 }
 
+void bt_audio_log_stream_health(void)
+{
+    ESP_LOGW(TAG, "stream health: ring=%u bytes callbacks=%lu underruns=%lu "
+             "read=%lu bytes feeder=%d paused=%d eof=%d internal=%u",
+             (unsigned)bt_buf_level(), (unsigned long)s_bt_diag.cb_calls,
+             (unsigned long)s_bt_diag.cb_underruns,
+             (unsigned long)s_bt_diag.cb_read_bytes,
+             s_bt_feeder_task != NULL, s_bt_stream_paused, s_bt_file_eof,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+}
+
 int32_t bt_audio_a2dp_data_cb(uint8_t *data, int32_t len)
 {
     int64_t cb_start_us = esp_timer_get_time();
@@ -621,6 +679,7 @@ int32_t bt_audio_a2dp_data_cb(uint8_t *data, int32_t len)
     if (to_read > s_bt_bytes_left) to_read = s_bt_bytes_left;
 
     size_t rd = bt_buf_read(data, to_read);
+    audio_progress_submit(rd / 4, s_file_rate, true);
     if (rd < (size_t)len) {
         memset(data + rd, 0, (size_t)len - rd);
     }
@@ -661,17 +720,20 @@ esp_err_t bt_audio_play_wav(FILE *fp,
 {
     if (!fp || data_size == 0) return ESP_ERR_INVALID_ARG;
     if (bits_per_sample != 16) return ESP_ERR_NOT_SUPPORTED;
-    if (num_channels != 1) {
-        ESP_LOGW(TAG, "bt_audio_play_wav: mono-only, got ch=%u", num_channels);
+    if (num_channels != 1 && num_channels != 2) {
+        ESP_LOGW(TAG, "bt_audio_play_wav: unsupported ch=%u", num_channels);
         return ESP_ERR_NOT_SUPPORTED;
     }
     if (bt_audio_media_cmd_pending()) return ESP_ERR_INVALID_STATE;
 
     int peer_rate = bt_audio_get_peer_sample_rate();
     if (peer_rate <= 0) peer_rate = (int)sample_rate;
-    if (peer_rate != (int)sample_rate) {
-        ESP_LOGW(TAG, "Rate mismatch: wav=%u peer=%d, playing anyway (pitch may be off)",
+    bool resample_voice = sample_rate == 16000 && num_channels == 1 &&
+                          (peer_rate == 44100 || peer_rate == 48000);
+    if (peer_rate != (int)sample_rate && !resample_voice) {
+        ESP_LOGW(TAG, "Rate mismatch: wav=%u peer=%d; refusing wrong playback speed",
                  sample_rate, peer_rate);
+        return ESP_ERR_NOT_SUPPORTED;
     }
 
     if (fseek(fp, (long)data_offset, SEEK_SET) != 0) {
@@ -701,7 +763,8 @@ esp_err_t bt_audio_play_wav(FILE *fp,
         return ESP_ERR_TIMEOUT;
     }
 
-    uint64_t out_total = (uint64_t)data_size * 2ULL;
+    uint64_t out_total = (uint64_t)data_size * (2 / num_channels);
+    if (resample_voice) out_total = ((uint64_t)(data_size / 2) * peer_rate / sample_rate) * 4;
     if (out_total > UINT32_MAX) {
         ESP_LOGW(TAG, "bt_audio_play_wav: stream too large (%llu bytes)",
                  (unsigned long long)out_total);
@@ -715,6 +778,13 @@ esp_err_t bt_audio_play_wav(FILE *fp,
         return ESP_ERR_TIMEOUT;
     }
     close_bt_file_locked();
+    s_file_channels = num_channels;
+    s_file_rate = resample_voice ? peer_rate : sample_rate;
+    s_voice_resampling = resample_voice;
+    s_voice_input_pos = s_voice_input_count = 0;
+    s_voice = (voice_resample_t){.input_rate=sample_rate, .output_rate=peer_rate,
+                                .remaining=out_total / 4};
+    if (resample_voice) ESP_LOGI(TAG, "Voice resampling: 16000 -> %d Hz", peer_rate);
     s_bt_fp               = fp;
     s_bt_src_bytes_left   = data_size;
     s_bt_bytes_left       = (uint32_t)out_total;

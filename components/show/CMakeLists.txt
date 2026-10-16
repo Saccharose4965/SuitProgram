@@ -1,6 +1,8 @@
 idf_component_register(
     SRCS
         "show_layout_ids.c"
+        "show_geometry.c"
+        "show_effect_presets.c"
         "show_package.c"
         "show_renderer.c"
         "show_runtime.c"
@@ -12,4 +14,7 @@ idf_component_register(
         led_layout
         led_modes
         link
+        audio_player
+        audio
+        esp_hw_support
 )

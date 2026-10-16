@@ -35,14 +35,12 @@ enum {
 };
 
 typedef enum {
-    FFT_VIEW_BPM_TEXT = 0,   // held BPM, decision/evidence readiness, phase/flash
-    FFT_VIEW_SPECTRUM,       // per-frame log-magnitude spectrum (bars)
-    FFT_VIEW_SPECTROGRAM,    // rolling spectrogram over time
-    FFT_VIEW_NOVELTY_PEAKS,  // raw spectral flux and local mean (display only)
-    FFT_VIEW_FLUX,           // flux above local mean (display only)
-    FFT_VIEW_TEMPO_RAW,      // normalized, averaged direct-comb BPM scores
-    FFT_VIEW_PHASE_COMB,     // phase correlation vs comb filter aligned to BPM
-    FFT_VIEW_COUNT           // number of valid render views
+    FFT_VIEW_SPECTRUM = 0,  // full-screen log spectrum
+    FFT_VIEW_SPECTROGRAM,   // full-band, 320 audio-frame history
+    FFT_VIEW_TEMPO_RAW,     // averaged direct-comb scores
+    FFT_VIEW_CONFIDENCE,    // evidence and decision histories
+    FFT_VIEW_PHASE_COMB,    // phase energy in output-clock coordinates
+    FFT_VIEW_COUNT
 } fft_view_t;
 
 /**
@@ -70,6 +68,7 @@ typedef struct {
     float bpm;           // effective BPM currently driving beat export
     float detected_bpm;  // strongest smoothed BPM candidate
     float confidence;    // decision readiness, capped at 1 for existing consumers
+    float decision_confidence; // full 0..1.1 localFFT display value
     float held_bpm;      // base BPM before ratio
     float evidence;      // ungated evidence quality, threshold 1
     float lost_seconds;
@@ -94,27 +93,24 @@ void fft_beat_lock_set(bool locked);
 void fft_beat_lock_toggle(void);
 void fft_detector_reset(void);
 void fft_phase_lock_toggle(void);
+void fft_beat_ratio_set(unsigned ratio);
 void fft_beat_ratio_cycle(void);
+void fft_beat_offbeat_set(bool offbeat);
 void fft_beat_offbeat_toggle(void);
 void fft_beat_enable_set(bool enabled);
 void fft_beat_enable_toggle(void);
 void fft_led_export_enable(bool enabled);
 bool fft_led_export_enabled(void);
 
+// Suppress button-induced audio contamination without feeding it to the detector.
+void fft_suppress_novelty_frames(int frames);
+void fft_suppress_novelty_timed_ms(int backfill_ms, int future_frames);
+
 // Enable or disable OLED rendering; beat detection and sampling keep running.
 void fft_set_display_enabled(bool enabled);
 
 // Copy the latest FFT view framebuffer into dst_fb (PANEL_W*PANEL_H/8 bytes).
 void fft_copy_frame(uint8_t *dst_fb, size_t dst_len);
-
-// Request novelty suppression over the most recent N frames
-// (e.g., to ignore button voltage changes).
-void fft_suppress_novelty_frames(int frames);
-
-// Request novelty suppression aligned to real-world latency:
-// - backfill_ms: retroactively suppress recent novelty history covering this delay
-// - future_frames: also suppress a few upcoming frames to absorb jitter/ringing
-void fft_suppress_novelty_timed_ms(int backfill_ms, int future_frames);
 
 #ifdef __cplusplus
 }

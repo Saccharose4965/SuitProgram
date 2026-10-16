@@ -1,197 +1,143 @@
 #include "shell_apps.h"
 #include "shell_audio.h"
 
-#include <math.h>
 #include <stdio.h>
 
-#include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "fft.h"
-#include "oled.h"
 
-static const char *TAG = "fft_sync";
-static esp_err_t s_fft_sync_start_err = ESP_OK;
-enum { CONTROL_PHASE, CONTROL_BPM, CONTROL_RATIO, CONTROL_OFFBEAT,
-       CONTROL_OUTPUT, CONTROL_EARLIER, CONTROL_LATER, CONTROL_COUNT };
-static unsigned s_control;
+static const char *TAG = "led_controller";
 
-shell_legend_t FFT_SYNC_LEGEND = {
-    .slots = { SHELL_ICON_LEFT, SHELL_ICON_RIGHT, SHELL_ICON_SELECT, SHELL_ICON_REFRESH },
+enum {
+    CONTROLLER_BACK = 0,
+    CONTROLLER_RESET,
+    CONTROLLER_FORCE,
+    CONTROLLER_OFFSET,
+    CONTROLLER_COUNT,
 };
 
-static void fft_sync_update_legend(void)
+enum { OFFSET_MULTI_PRESS_US = 700000 };
+
+static size_t s_selected;
+static int64_t s_last_offset_press_us;
+static unsigned s_offset_press_count;
+static char s_force_label[20];
+static char s_offset_label[24];
+
+shell_legend_t FFT_SYNC_LEGEND = {
+    .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_NONE, SHELL_ICON_SELECT },
+};
+
+static void refresh_labels(void)
 {
-    FFT_SYNC_LEGEND.slots[2] = s_control <= CONTROL_BPM ? SHELL_ICON_LOCK : SHELL_ICON_SELECT;
+    fft_sync_state_t state = {0};
+    fft_get_sync_state(&state);
+    snprintf(s_force_label, sizeof(s_force_label), "Force: %s",
+             state.bpm_locked ? "on" : "off");
+    snprintf(s_offset_label, sizeof(s_offset_label), "Offset: %s",
+             led_source_timing_name(led_source_timing_get()));
 }
 
-static inline void fb_pset(uint8_t *fb, int x, int y)
+static void offset_press(void)
 {
-    if (!fb) return;
-    if ((unsigned)x >= PANEL_W || (unsigned)y >= PANEL_H) return;
-    int idx = y * PANEL_W + x;
-    fb[idx >> 3] |= (uint8_t)(1u << (7 - (idx & 7)));
-}
+    int64_t now = esp_timer_get_time();
+    bool in_window = s_last_offset_press_us > 0 &&
+                     now - s_last_offset_press_us <= OFFSET_MULTI_PRESS_US;
+    led_timing_mode_t next;
 
-static void fb_rect_fill(uint8_t *fb, int x0, int y0, int w, int h)
-{
-    if (!fb || w <= 0 || h <= 0) return;
-    int x1 = x0 + w - 1;
-    int y1 = y0 + h - 1;
-    if (x1 < 0 || y1 < 0 || x0 >= PANEL_W || y0 >= PANEL_H) return;
-    if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
-    if (x1 >= PANEL_W) x1 = PANEL_W - 1;
-    if (y1 >= PANEL_H) y1 = PANEL_H - 1;
-    for (int y = y0; y <= y1; ++y) {
-        for (int x = x0; x <= x1; ++x) {
-            fb_pset(fb, x, y);
+    if (!in_window) {
+        next = led_source_timing_get() == LED_TIMING_ON_BEAT
+                 ? LED_TIMING_OFFBEAT : LED_TIMING_ON_BEAT;
+        s_offset_press_count = 1;
+    } else {
+        s_offset_press_count++;
+        if (s_offset_press_count == 2) {
+            next = LED_TIMING_DOUBLE;
+        } else {
+            next = (led_timing_mode_t)((led_source_timing_get() + 1) % 3);
         }
     }
-}
 
-static void fb_rect_outline(uint8_t *fb, int x0, int y0, int w, int h)
-{
-    if (!fb || w <= 0 || h <= 0) return;
-    int x1 = x0 + w - 1;
-    int y1 = y0 + h - 1;
-    if (x1 < 0 || y1 < 0 || x0 >= PANEL_W || y0 >= PANEL_H) return;
-    if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
-    if (x1 >= PANEL_W) x1 = PANEL_W - 1;
-    if (y1 >= PANEL_H) y1 = PANEL_H - 1;
-    for (int x = x0; x <= x1; ++x) {
-        fb_pset(fb, x, y0);
-        fb_pset(fb, x, y1);
-    }
-    for (int y = y0; y <= y1; ++y) {
-        fb_pset(fb, x0, y);
-        fb_pset(fb, x1, y);
-    }
-}
-
-static int fft_sync_signed_offset_percent(float phase_offset)
-{
-    float signed_phase = phase_offset;
-    while (signed_phase >= 0.5f) signed_phase -= 1.0f;
-    while (signed_phase < -0.5f) signed_phase += 1.0f;
-    return (int)lroundf(signed_phase * 100.0f);
+    s_last_offset_press_us = now;
+    led_source_timing_set(next);
 }
 
 void fft_sync_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
-    s_fft_sync_start_err = ESP_OK;
-    s_control = CONTROL_PHASE;
-    fft_sync_update_legend();
-    led_source_mode_set(LED_SOURCE_FFT);
-    if (!shell_audio_init_if_needed()) {
-        ESP_LOGE(TAG, "audio_init failed; FFT sync unavailable");
-        s_fft_sync_start_err = ESP_ERR_INVALID_STATE;
-        fft_set_display_enabled(false);
-        return;
-    }
+    s_selected = CONTROLLER_RESET;
+    s_last_offset_press_us = 0;
+    s_offset_press_count = 0;
+    shell_ui_menu_reset(s_selected);
 
-    fft_set_display_enabled(false);
-    led_source_service_tick(0.0f);
-    if (!fft_visualizer_running()) {
-        s_fft_sync_start_err = ESP_ERR_INVALID_STATE;
+    if (led_source_mode_get() == LED_SOURCE_FFT && !shell_audio_init_if_needed()) {
+        ESP_LOGE(TAG, "audio_init failed; FFT source unavailable");
     }
-    fft_sync_update_legend();
+    led_source_service_tick(0.0f);
+    refresh_labels();
 }
 
-void fft_sync_app_deinit(shell_app_context_t *ctx)
+void fft_sync_app_deinit(shell_app_context_t *ctx) { (void)ctx; }
+
+void fft_sync_app_tick(shell_app_context_t *ctx, float dt_sec)
 {
     (void)ctx;
+    shell_ui_menu_tick(dt_sec, s_selected);
 }
 
 void fft_sync_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 {
-    (void)ctx;
-    if (!ev) return;
-    if (ev->type != INPUT_EVENT_PRESS) return; // a long press already emitted PRESS
+    if (!ctx || !ev || ev->type != INPUT_EVENT_PRESS) return;
+    if (ev->button == INPUT_BTN_A) {
+        if (s_selected > 0) s_selected--;
+        return;
+    }
+    if (ev->button == INPUT_BTN_B) {
+        if (s_selected + 1 < CONTROLLER_COUNT) s_selected++;
+        return;
+    }
+    if (ev->button != INPUT_BTN_C && ev->button != INPUT_BTN_D) return;
 
-    switch (ev->button) {
-        case INPUT_BTN_A:
-            s_control = (s_control + CONTROL_COUNT - 1) % CONTROL_COUNT;
+    switch (s_selected) {
+        case CONTROLLER_BACK:
+            if (ctx->request_switch) ctx->request_switch("menu", ctx->request_user_data);
             break;
-        case INPUT_BTN_B:
-            s_control = (s_control + 1) % CONTROL_COUNT;
-            break;
-        case INPUT_BTN_C:
-            switch (s_control) {
-                case CONTROL_PHASE: fft_phase_lock_toggle(); break;
-                case CONTROL_BPM: fft_beat_lock_toggle(); break;
-                case CONTROL_RATIO: fft_beat_ratio_cycle(); break;
-                case CONTROL_OFFBEAT: fft_beat_offbeat_toggle(); break;
-                case CONTROL_OUTPUT: fft_beat_enable_toggle(); break;
-                case CONTROL_EARLIER: fft_beat_phase_offset_add(-0.02f); break;
-                case CONTROL_LATER: fft_beat_phase_offset_add(0.02f); break;
-            }
-            break;
-        case INPUT_BTN_D:
+        case CONTROLLER_RESET:
             fft_detector_reset();
+            break;
+        case CONTROLLER_FORCE: {
+            fft_sync_state_t state = {0};
+            fft_get_sync_state(&state);
+            fft_beat_lock_set(!state.bpm_locked);
+            break;
+        }
+        case CONTROLLER_OFFSET:
+            offset_press();
             break;
         default:
             break;
     }
-    fft_sync_update_legend();
+    refresh_labels();
 }
 
 void fft_sync_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)
 {
     (void)ctx;
-    (void)h;
     if (!fb) return;
-
-    if (s_fft_sync_start_err != ESP_OK && !fft_visualizer_running()) {
-        char line[24];
-        oled_draw_text3x5(fb, x + 2, y + 2, "FFT SYNC FAIL");
-        snprintf(line, sizeof(line), "err:%s", esp_err_to_name(s_fft_sync_start_err));
-        oled_draw_text3x5(fb, x + 2, y + 12, line);
-        return;
-    }
-
-    fft_sync_state_t st = {0};
-    fft_get_sync_state(&st);
-
-    char line[32];
-    snprintf(line, sizeof(line), "held:%3u out:%3u", (unsigned)lroundf(st.held_bpm), (unsigned)lroundf(st.bpm));
-    oled_draw_text3x5(fb, x + 2, y + 2, line);
-
-    snprintf(line, sizeof(line), "cand:%3u x%u%s", (unsigned)lroundf(st.detected_bpm),
-             st.ratio, st.offbeat ? " offbeat" : "");
-    oled_draw_text3x5(fb, x + 2, y + 10, line);
-
-    snprintf(line, sizeof(line), "conf:%.2f ev:%.2f", st.confidence, st.evidence);
-    oled_draw_text3x5(fb, x + 2, y + 18, line);
-
-    switch (s_control) {
-        case CONTROL_PHASE: snprintf(line, sizeof(line), ">phase lock: %s", st.phase_locked ? "on" : "off"); break;
-        case CONTROL_BPM: snprintf(line, sizeof(line), ">BPM force: %s", st.bpm_locked ? "on" : "off"); break;
-        case CONTROL_RATIO: snprintf(line, sizeof(line), ">pulse ratio: x%u", st.ratio); break;
-        case CONTROL_OFFBEAT: snprintf(line, sizeof(line), ">offbeat: %s", st.offbeat ? "on" : "off"); break;
-        case CONTROL_OUTPUT: snprintf(line, sizeof(line), ">output: %s", st.beat_enabled ? "on" : "paused"); break;
-        default: snprintf(line, sizeof(line), ">%s: %+d%%", s_control == CONTROL_EARLIER ? "earlier" : "later",
-                          fft_sync_signed_offset_percent(st.phase_offset)); break;
-    }
-    oled_draw_text3x5(fb, x + 2, y + 26, line);
-
-    int bar_x = x + 2;
-    int bar_w = w - 8;
-    int phase_fill = (int)lroundf((float)(bar_w - 2) * st.beat_phase);
-    if (phase_fill < 0) phase_fill = 0;
-    if (phase_fill > bar_w - 2) phase_fill = bar_w - 2;
-    int marker_x = bar_x + 1 + (int)lroundf((float)(bar_w - 3) * st.trigger_phase);
-    if (marker_x < bar_x + 1) marker_x = bar_x + 1;
-    if (marker_x > bar_x + bar_w - 2) marker_x = bar_x + bar_w - 2;
-    fb_rect_outline(fb, bar_x, y + 35, bar_w, 6);
-    if (phase_fill > 0) {
-        fb_rect_fill(fb, bar_x + 1, y + 36, phase_fill, 4);
-    }
-    fb_rect_fill(fb, marker_x, y + 34, 1, 8);
-
-    if (!st.running) {
-        oled_draw_text3x5(fb, x + 2, y + 43, "fft:stopped");
-    }
+    refresh_labels();
+    const shell_menu_entry_t entries[CONTROLLER_COUNT] = {
+        { .id = "back", .label = "Back" },
+        { .id = "reset", .label = "Reset" },
+        { .id = "force", .label = s_force_label },
+        { .id = "offset", .label = s_offset_label },
+    };
+    shell_menu_view_t view = {
+        .entries = entries,
+        .count = CONTROLLER_COUNT,
+        .selected = s_selected,
+        .title = "LED / CONTROLLER",
+    };
+    shell_ui_draw_menu(fb, x, y, w, h, &view);
 }

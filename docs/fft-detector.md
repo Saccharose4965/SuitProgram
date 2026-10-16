@@ -1,5 +1,49 @@
 # ESP32 microphone detector
 
+Bluetooth coexistence: entering the Bluetooth app blocks background FFT
+requests and synchronously stops capture/BPM/phase tasks before BT initialization.
+The block remains while the app is open or BT is starting, scanning, connecting,
+connected or streaming. Leaving the app permits pending FFT requests to resume
+once BT is idle/disconnected. The FFT viewer also checks this gate before start.
+
+Bluetooth entry also releases the idle I2S TX/RX channels after FFT has stopped
+(unless recording or playback is active). Stopping the FFT tasks alone retained
+roughly 32 KiB of internal DMA buffers, starving the BT WAV feeder's 4 KiB stack.
+The bus configuration is retained and restored by the next local-audio rate or
+enable request; microphone recording refreshes its cached RX handle. The entry
+log reports internal heap before/after release. Task stack sizes and Bluetooth
+heap safety thresholds are unchanged. Hardware playback/reconnect testing remains
+required; a successful build does not establish runtime memory headroom.
+
+## Latest parity pass (2026-10-12)
+
+Phase evidence now runs on a separate priority-2 worker on core 0 with one
+immutable snapshot outstanding. Capture owns tracker decisions and the beat
+clock. Epoch and reset-revision checks reject obsolete phase results. BPM
+results preserve the live phase graph only while the held tempo is unchanged.
+The graph origin uses the actual beat boundary in nominal-BPM coordinates.
+The narrow late-flash rejection window has been removed; delayed processing
+emits the latest boundary once rather than discarding it.
+
+The first hold update uses the PC reference interval (22 frames), independently
+of the 88-frame BPM sweep cadence. Reset clears accepted state immediately and
+preserves audio/score history. On the full-screen FFT viewer, button C performs
+this reset (PC R); no footer widget is added. Button D retains its reset shortcut.
+
+Animation selection is a two-column alphabetical catalogue spanning both
+renderers. A/B move backwards/forwards, C selects, D moves down a row (on Speed,
+C decreases and D increases). Distinct effects formerly named energy, breathe
+and random have explicit names. The selected effect is marked with an asterisk
+when not focused. Rendering/source selection remains in the existing backends.
+
+Run `components/fft/tests/run_host_tests.sh`: in addition to the spectral tests,
+a 1,200-step replay compares phase decisions and beat-clock boundaries directly
+against the compiled PC source, including drift, competing peaks, lock/unlock,
+uncertain evidence, loss and tempo changes. This verifies those scenarios,
+not all possible inputs or hardware scheduling. Flash/runtime validation is
+still required after the worker change. Older dated sections below describe
+earlier implementations and are superseded by this note.
+
 This is the embedded port of `../localFFT/LatestFFT.c`, not another parameter
 search. The reference file at port time had SHA-256
 `975d540db616d5c041aa1970c174382731d866b26c63363b6632a6c80461b515`.
@@ -9,13 +53,23 @@ the user's request. On-board performance and sound tests remain outstanding.
 
 ## Responsibilities
 
-- `components/fft/fft_detector.c/.h`: portable band filtering, variance comb,
-  normalization, candidate history, held-BPM decisions, loss timer and phase.
+- `components/fft/fft_detector.c` and `components/fft/include/fft_detector.h`:
+  portable band filtering, variance comb, normalization, candidate history,
+  held-BPM decisions and loss timer.
+- `components/fft/fft_phase.c` and `components/fft/include/fft_phase.h`:
+  folded phase-family tracking, fractional tempo correction and the smoothly
+  steered beat clock.
 - `components/fft/fft.c`: I2S capture, FFT, immutable analysis snapshots, task
   scheduling, controls, beat clock and existing LED/audio-level APIs.
-- `components/fft/fft_render.c`: existing OLED views; flux is diagnostic only,
-  **not** the input to the BPM detector.
+- `components/fft/fft_display.c`: host-testable monochrome adaptation of the
+  localFFT dashboard, with the same signal meanings and timeline.
+- `components/fft/fft_render.c`: PSRAM display state and mutex adapter. The shell
+  draws on demand; there is no separate render task or framebuffer queue.
 - `main/app_fft_sync.c`: physical-button controls. No new shell application.
+
+All FFT headers live in `components/fft/include/`. Other components use `fft.h`;
+`fft_detector.h` and `fft_render.h` are internal helper interfaces, not new
+application entry points. The portable host test includes `fft_detector.h`.
 
 LED effects, show playback, show format, radio protocol, manual BPM and pinout
 are unchanged. Audio-reactive levels keep their original frequency regions and
@@ -55,23 +109,28 @@ Hold policy:
   `BPM_MAX` rule in the PC source. This is not general fractional/±1 tracking.
 - Phase lock independently raises challenger support to 2 seconds and lowers
   held release to 0.25 seconds. Hard BPM force prevents automatic changes.
-- Drop the clock after 30 accumulated seconds with neither a trusted candidate
-  nor a visible held pair (score >=0.03). Good evidence drains that timer at 4x
-  elapsed time. Hard force overrides the timeout. No volume gate is used.
+- Drop the clock after 40 accumulated seconds while the held pair remains below
+  60% of the current winning pair. Hard force overrides the timeout. No volume
+  gate is used.
 
 `conf` is decision readiness: the minimum of quality, support, and (when needed)
 held-release gates, zeroed during shock cooldown. `ev` is just the minimum of
 pair-strength, stability and consistency readiness, before cooldown/support
 gates. Threshold is 1 for both; neither is a probability of correct BPM.
-The public legacy confidence field is capped at 1; evidence can reach 1.1.
+The public legacy confidence field is capped at 1; `decision_confidence` and
+evidence retain the full display range up to 1.1. Sub-threshold quality does
+not zero confidence; only shock cooldown does, matching localFFT.
 
 ## Phase and controls
 
-Phase runs automatically. At the held BPM, 128 offsets measure recurring band
-energy; a neighboring peak or one >=20% stronger may replace the held phase.
-Stable score history gates clock re-anchoring. Phase lock freezes the accepted
-phase; a genuine held-BPM change reinitializes it. Offbeat shifts the output by
-half an output pulse; ratio multiplies pulse rate without changing detected BPM.
+Phase runs independently every eight audio frames (~5.4 Hz). Its 128-bin curve
+folds opposite peaks into 64 families. Tracking stays near the predicted family;
+a distant family must remain at least 20% stronger for six seconds before a
+switch. The chosen side persists, and a recently lost candidate may be restored
+for 45 seconds. Filtered phase error supplies bounded anchor and fractional-BPM
+corrections. The beat clock applies them only at the next boundary and gently
+steers the following cycle, so the active cycle never snaps. Phase lock blocks
+family switches but keeps fine drift correction active and soft-locks BPM.
 
 On **FFT Sync**, A/B select, C applies, D resets detector history and both locks.
 Selected controls: phase lock, BPM force, ratio 1x/2x/3x, offbeat, output pause,
@@ -80,16 +139,15 @@ BPM force takes the strongest smoothed candidate, like PC F; it does not have
 to equal the previous hold. Phase locking is ignored until there is a clock.
 Only PRESS is handled; LONG_PRESS does not double-toggle. Shell shortcuts remain.
 
-Phase is not a solved precision clock. Fractional BPM/drift estimation and the
-distinction between true timing drift and a beat/offbeat instrumentation change
-remain separate research. The port fixes the old phase comparison's mixed
-window-local/absolute coordinates, but adds no untested drift controller.
+The implementation now follows the PC phase tracker rather than the former
+embedded strongest-peak snapper.
 
 ## Scheduling and integration safeguards
 
 Capture/FFT: core 1, priority 4. Analysis: core 1, priority 2. The expensive
-80-BPM sweep is requested every 22 audio frames (~511 ms), **not at 30 FPS**.
-Between candidates, the worker blocks for one RTOS tick after a ~2 ms work
+80-BPM sweep is requested every 88 audio frames (~2.04 s), **not at 30 FPS**.
+Phase is refreshed separately every eight frames. Between candidates, the
+worker blocks for one RTOS tick after a ~40 ms work
 slice. Capture preempts analysis; LEDs/radio/shell retain their existing tasks.
 These budgets are starting points, not measured hardware guarantees.
 
@@ -106,7 +164,7 @@ variance reciprocals outside the band loop. Subtracting each band's fixed first
 sample prevents float cancellation on constant, high-offset input. Only the
 absolute beat/time calculations use doubles. DSP files use `-O2` even with the
 rest of the firmware in debug mode; no fast-math flags or global config changes.
-Large history, snapshot and FFT buffers are in PSRAM. Capture/analysis stacks
+Large history, snapshot, FFT, I2S staging and display buffers are in PSRAM. Capture/analysis stacks
 are 8192/6144 internal bytes. Queue messages are small; no allocation per frame.
 
 Reset/capture gaps increment an epoch; stale results cannot restore an old
@@ -128,11 +186,11 @@ From `SuitProgram`, host tests (no songs, microphone, SDL, or ESP-IDF needed):
 
 ```sh
 gcc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic \
-  -fsanitize=address,undefined -I components/fft \
+  -fsanitize=address,undefined -I components/fft/include \
   components/fft/tests/test_detector.c components/fft/fft_detector.c \
   -lm -o /tmp/suit-test-detector
 /tmp/suit-test-detector
-python3 -m unittest discover -s tools/show_editor/tests -v
+(cd ../ShowEditor && python3 -m unittest discover -s show_editor/tests -v)
 ```
 
 Tests cover double-reference comb parity, normalization/constant input, impulse
@@ -149,7 +207,7 @@ export tests passed. These are implementation regressions, not a new musical
 accuracy score or proof of microphone performance.
 
 The port was fully built with the installed ESP-IDF 6.1 development checkout,
-ESP32 target, 160 MHz CPU and PSRAM enabled. An isolated build/config lives in
+ESP32 target, 240 MHz CPU and PSRAM enabled. An isolated build/config lives in
 `build/fft-port/`; the user's root sdkconfig and previous build were preserved.
 No board was connected, so nothing was flashed. To build/flash normally:
 
@@ -172,7 +230,7 @@ static placement, not runtime free-heap proof.
 Please test:
 
 1. Known steady song: time to hold, phase alignment, lock/offbeat/ratio/reset.
-2. Pause/breakdown for 10 seconds: keep the clock. No rhythm for >30 seconds:
+2. Pause/breakdown for 10 seconds: keep the clock. No rhythm for >40 seconds:
    eventually release; force lock must keep it. Test speech/clicks too: the loss
    criterion is still experimental on real non-music input.
 3. Another song: reject brief contestants, then change on persistent evidence.
@@ -182,3 +240,77 @@ Please test:
 5. Send 20–30 seconds of `fft_vis` logs with LEDs/radio enabled. If analysis is
    late but capture stays healthy, tune batching/cadence first; do not change
    the sample rate/bands or launch a fresh detector search to fix scheduling.
+
+
+## 2026-09-22: board follow-up and localFFT display completion
+
+The source hash above still matches the actual sibling `LatestFFT.c`. The
+previous port is the starting point, not an abandoned alternative tracker.
+No parameter sweeps or song benchmarks were rerun. Existing conservative
+scheduling differences and the absolute-coordinate phase correction described
+above remain deliberate.
+
+The first on-board log showed only 2,451 free internal bytes and
+`led_modes_start failed: ESP_ERR_NO_MEM`; it also showed analysis wall times of
+1.8–2.6 seconds. The 8 KB I2S staging allocation now explicitly uses PSRAM.
+The new display model also lives in PSRAM and is drawn by the shell, removing
+the old 6 KB renderer task stack, its large queue and internal display history.
+Task stacks and actual I2S/RMT DMA buffers stay internal. No global sdkconfig
+allocation or CPU-frequency settings were changed by this follow-up.
+
+The existing 2 ms analysis slice slept for a whole 10 ms tick at 100 Hz,
+frequently after each BPM candidate. A 12 ms work slice now amortizes that
+sleep; capture still preempts the lower-priority worker. This changes only
+scheduling, not samples, phase probes, thresholds or score mathematics. New
+runtime timing and heap measurements still require flashing and board testing.
+
+### OLED views and controls
+
+The FFT viewer opens on a plain, full-screen spectrum. A/B cycle through
+spectrum, spectrogram, BPM scores, confidence and phase. Every graph uses the
+entire 128x64 framebuffer: no dashboard, text labels, legends, dither patterns,
+stipple, antialiasing or decorative markers. C opens the separate FFT Sync
+controls; D resets the tracker, both locks and visual histories. FFT Sync keeps
+its functional control labels and numeric status.
+
+- The spectrogram covers 0–22.05 kHz. Raw magnitudes are averaged into 32 rows,
+  using localFFT's magnitude transfer followed by a single 128/255 on/off
+  threshold. There is no spatial dithering. This fixes the old view's missing
+  upper half of the frequency range.
+- Spectrogram and readiness share a 320-audio-frame ring (~7.43 seconds), updated
+  once per captured FFT frame even when another app is open. The OLED compresses
+  that timeline horizontally. Drawing never advances it; reset/discontinuity
+  clears both together.
+- Confidence and evidence are two plain, one-pixel solid traces, on a fixed
+  0–1.1 vertical scale. Values are held between detector results.
+- BPM scores and the instantaneous spectrum use solid vertical bars, scaled
+  to their current peaks without additional display-scale smoothing.
+- Phase energy uses solid vertical bars and min/max scaling in actual output
+  clock coordinates, including the output ratio.
+
+BPM wrapping was discussed but remains unspecified; these presentation changes
+do not introduce octave averaging or modulo-128 BPM mapping.
+
+### Repeatable checks
+
+```sh
+components/fft/tests/run_host_tests.sh
+. ../esp-idf/export.sh
+idf.py build
+```
+
+The runner uses address/undefined-behavior sanitizers and strict warnings.
+Alongside the original detector regressions it checks full-band spectrograms,
+aligned histories, rollover, reset, draw bounds and clock-coordinate mapping.
+When ALSA/SDL development packages and the sibling reference are available,
+`test_localfft_reference.c` compiles the *actual desktop source*, renaming its
+main without starting audio or SDL. It compares 480 raw and normalized scores,
+768 phase bins, impulse filtering/treble weights, and graded confidence below
+threshold. Current raw-score maximum absolute error is about 1.01e-6, with
+identical winning bins. These are synthetic implementation checks, not a
+claim of musical accuracy or measured ESP32 performance.
+
+The normal project build succeeds. Next board check: flash, activate
+`sync:fill`, then open FFT viewer with a known song. Check all views and
+locks/ratio/offbeat/reset, and collect 20–30 seconds of heap/capture/worker logs.
+The updated firmware has not yet been verified on the suit.

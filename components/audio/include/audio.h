@@ -22,6 +22,18 @@ typedef struct {
 } audio_i2s_config_t;
 
 esp_err_t audio_init(const audio_i2s_config_t* cfg);
+// Release I2S/DMA memory only after capture/playback users have stopped.
+// Rate/enable calls restore the saved bus configuration on demand.
+esp_err_t audio_release_idle_bus(void);
+typedef struct {
+    uint64_t frames;
+    uint32_t rate;
+    int64_t updated_us;
+    bool bluetooth;
+} audio_progress_t;
+void audio_progress_reset(void);
+void audio_progress_submit(size_t frames, uint32_t rate, bool bluetooth);
+audio_progress_t audio_progress_get(void);
 esp_err_t audio_set_rate(int hz);
 // Capture diagnostics: rate is zero while clock reconfiguration is incomplete.
 int       audio_get_rate(void);

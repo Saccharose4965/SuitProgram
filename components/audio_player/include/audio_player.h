@@ -10,6 +10,8 @@ extern "C" {
 // If a Bluetooth sink is connected/streaming, stream over A2DP.
 // Otherwise, fall back to local I2S speaker via audio_play_wav_file().
 esp_err_t audio_player_play(const char *path);
+// Show playback permits local-speaker fallback if BT startup fails.
+esp_err_t audio_player_play_show(const char *path);
 esp_err_t audio_player_set_current(const char *path);
 esp_err_t audio_player_toggle_play_pause(void);
 void      audio_player_stop(void);

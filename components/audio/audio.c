@@ -17,6 +17,7 @@
 #include "esp_idf_version.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 
 #include "audio_wav.h"
 
@@ -41,6 +42,36 @@ static unsigned            s_output_users;
 static int32_t             s_vol_q15   = 32767; // 1.0 in Q1.15
 static bool                s_tx_enabled = false;
 static bool                s_rx_enabled = false;
+static bool                s_bus_configured;
+static portMUX_TYPE s_progress_mux = portMUX_INITIALIZER_UNLOCKED;
+static audio_progress_t s_progress;
+
+void audio_progress_reset(void)
+{
+    portENTER_CRITICAL(&s_progress_mux);
+    memset(&s_progress, 0, sizeof(s_progress));
+    portEXIT_CRITICAL(&s_progress_mux);
+}
+
+void audio_progress_submit(size_t frames, uint32_t rate, bool bluetooth)
+{
+    if (!frames || !rate) return;
+    int64_t now = esp_timer_get_time();
+    portENTER_CRITICAL(&s_progress_mux);
+    s_progress.frames += frames;
+    s_progress.rate = rate;
+    s_progress.bluetooth = bluetooth;
+    s_progress.updated_us = now;
+    portEXIT_CRITICAL(&s_progress_mux);
+}
+
+audio_progress_t audio_progress_get(void)
+{
+    portENTER_CRITICAL(&s_progress_mux);
+    audio_progress_t p = s_progress;
+    portEXIT_CRITICAL(&s_progress_mux);
+    return p;
+}
 
 // Yield occasionally during long streaming loops to keep UI responsive.
 #define AUDIO_PLAY_YIELD_EVERY    4
@@ -49,8 +80,9 @@ static bool                s_rx_enabled = false;
 #define AUDIO_TX_WRITE_SLICE_BYTES 2048
 
 // Small static zero blocks to avoid stack usage
-static int32_t s_zero256_stereo[256 * 2] = {0};
-static int32_t s_zero512_stereo[512 * 2] = {0};
+// I2S write copies these task-context buffers into the driver's internal DMA.
+static EXT_RAM_BSS_ATTR int32_t s_zero256_stereo[256 * 2];
+static EXT_RAM_BSS_ATTR int32_t s_zero512_stereo[512 * 2];
 
 // Forward
 static esp_err_t audio_quiet_tail(int fade_ms, int zero_ms);
@@ -110,7 +142,9 @@ static bool IRAM_ATTR audio_rx_overflow(i2s_chan_handle_t ch, i2s_event_data_t *
 
 esp_err_t audio_init(const audio_i2s_config_t* cfg){
     if (!cfg) return ESP_ERR_INVALID_ARG;
+    if (s_tx || s_rx) return ESP_ERR_INVALID_STATE;
     g_last_cfg  = *cfg;
+    s_bus_configured = true;
     s_curr_rate = 48000;
     s_tx_enabled = s_rx_enabled = false;
 
@@ -149,18 +183,60 @@ esp_err_t audio_init(const audio_i2s_config_t* cfg){
     rx_cfg.gpio_cfg.dout = I2S_GPIO_UNUSED;
     rx_cfg.gpio_cfg.din  = cfg->din_gpio;
 
-    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_tx, &tx_cfg), TAG, "init tx");
+    esp_err_t err = i2s_channel_init_std_mode(s_tx, &tx_cfg);
+    if (err != ESP_OK) goto fail;
     if (cfg->din_gpio >= 0) {
-        ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_rx, &rx_cfg), TAG, "init rx");
+        err = i2s_channel_init_std_mode(s_rx, &rx_cfg);
+        if (err != ESP_OK) goto fail;
         i2s_event_callbacks_t callbacks = { .on_recv_q_ovf = audio_rx_overflow };
-        ESP_RETURN_ON_ERROR(i2s_channel_register_event_callback(s_rx, &callbacks, NULL), TAG, "RX overflow monitor");
+        err = i2s_channel_register_event_callback(s_rx, &callbacks, NULL);
+        if (err != ESP_OK) goto fail;
     } else {
+        i2s_del_channel(s_rx);
         s_rx = NULL;
     }
 
     ESP_LOGI(TAG, "I2S ready: fs=%d, BCLK=%d, LRCK=%d, DOUT=%d, DIN=%d",
              s_curr_rate, cfg->bclk_gpio, cfg->lrck_gpio, cfg->dout_gpio, cfg->din_gpio);
     return ESP_OK;
+fail:
+    if (s_rx) { i2s_del_channel(s_rx); s_rx = NULL; }
+    if (s_tx) { i2s_del_channel(s_tx); s_tx = NULL; }
+    return err;
+}
+
+esp_err_t audio_release_idle_bus(void)
+{
+    if (audio_output_active()) return ESP_ERR_INVALID_STATE;
+    if (s_tx_enabled) {
+        ESP_RETURN_ON_ERROR(i2s_channel_disable(s_tx), TAG, "stop tx");
+        s_tx_enabled = false;
+    }
+    if (s_rx_enabled) {
+        ESP_RETURN_ON_ERROR(i2s_channel_disable(s_rx), TAG, "stop rx");
+        s_rx_enabled = false;
+    }
+    if (g_last_cfg.sd_en_pin >= 0 && s_bus_configured)
+        gpio_set_level(g_last_cfg.sd_en_pin, 0);
+    if (s_rx) {
+        ESP_RETURN_ON_ERROR(i2s_del_channel(s_rx), TAG, "release rx");
+        s_rx = NULL;
+    }
+    if (s_tx) {
+        ESP_RETURN_ON_ERROR(i2s_del_channel(s_tx), TAG, "release tx");
+        s_tx = NULL;
+    }
+    ++s_clock_revision;
+    return ESP_OK;
+}
+
+static esp_err_t audio_restore_bus(void)
+{
+    if (s_tx) return ESP_OK;
+    if (!s_bus_configured) return ESP_ERR_INVALID_STATE;
+    int rate = s_curr_rate;
+    ESP_RETURN_ON_ERROR(audio_init(&g_last_cfg), TAG, "restore bus");
+    return audio_set_rate(rate);
 }
 
 static esp_err_t audio_reconfig_clock(i2s_chan_handle_t ch, int hz){
@@ -180,6 +256,7 @@ static esp_err_t audio_reconfig_clock(i2s_chan_handle_t ch, int hz){
 
 esp_err_t audio_set_rate(int hz){
     if (hz <= 0) return ESP_ERR_INVALID_ARG;
+    ESP_RETURN_ON_ERROR(audio_restore_bus(), TAG, "restore I2S");
     s_rate_changing = true; // capture must discard windows spanning reconfiguration
     ++s_clock_revision;
     ESP_RETURN_ON_ERROR(audio_reconfig_clock(s_tx, hz), TAG, "tx re-clock");
@@ -207,6 +284,7 @@ static esp_err_t audio_output_leave(esp_err_t err)
 { portENTER_CRITICAL(&s_output_mux); --s_output_users; portEXIT_CRITICAL(&s_output_mux); return err; }
 
 esp_err_t audio_enable_tx(void){
+    ESP_RETURN_ON_ERROR(audio_restore_bus(), TAG, "restore I2S");
     if (!s_tx) return ESP_ERR_INVALID_STATE;
     if (!s_tx_enabled) {
         if (g_last_cfg.sd_en_pin >= 0) gpio_set_level(g_last_cfg.sd_en_pin, 1); // unmute
@@ -260,6 +338,7 @@ esp_err_t audio_enable_tx(void){
 }
 
 esp_err_t audio_enable_rx(void){
+    ESP_RETURN_ON_ERROR(audio_restore_bus(), TAG, "restore I2S");
     if (!s_rx) return ESP_ERR_INVALID_STATE;
 
     // Mute amp while recording
@@ -376,13 +455,14 @@ static size_t ring_read(audio_ring_t *r, uint8_t *dst, size_t n){
 // Local WAV playback using I2S speaker (mono PCM16 only)
 static esp_err_t play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
 {
-    if (!s_tx || !f || !info) {
+    if (!f || !info) {
         return ESP_ERR_INVALID_ARG;
     }
 
     const audio_wav_fmt_t *fmt = &info->fmt;
 
-    if (fmt->audio_format != 1 || fmt->bits_per_sample != 16 || fmt->num_channels != 1) {
+    if (fmt->audio_format != 1 || fmt->bits_per_sample != 16 ||
+        (fmt->num_channels != 1 && fmt->num_channels != 2)) {
         ESP_LOGW(TAG, "local_stream: unsupported fmt=%u ch=%u bits=%u",
                  fmt->audio_format, fmt->num_channels, fmt->bits_per_sample);
         return ESP_ERR_NOT_SUPPORTED;
@@ -405,10 +485,11 @@ static esp_err_t play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
     // 3) Streaming loop: read PCM16 frames (with PSRAM ring), convert to stereo s32, write to I2S
 
     const size_t FRAMES_PER_CHUNK = 512;  // audio frames per chunk
-    const size_t IN_SAMPLES       = FRAMES_PER_CHUNK;
+    const size_t IN_SAMPLES       = FRAMES_PER_CHUNK * fmt->num_channels;
 
-    int16_t *in  = (int16_t *)malloc(IN_SAMPLES * sizeof(int16_t));           // input PCM16
-    int32_t *out = (int32_t *)malloc(FRAMES_PER_CHUNK * 2 * sizeof(int32_t)); // stereo s32
+    // i2s_channel_write copies into its own DMA buffers; staging can use PSRAM.
+    int16_t *in = heap_caps_malloc(IN_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    int32_t *out = heap_caps_malloc(FRAMES_PER_CHUNK * 2 * sizeof(int32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     audio_ring_t ring = ring_alloc(AUDIO_RING_BYTES);
 
     if (!in || !out) {
@@ -476,7 +557,7 @@ static esp_err_t play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
 
         // Convert bytes -> samples -> frames (mono source)
         size_t samples = rd / sizeof(int16_t);
-        size_t frames  = samples;
+        size_t frames  = samples / fmt->num_channels;
 
         if (frames == 0) {
             break;
@@ -484,11 +565,14 @@ static esp_err_t play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
 
         // Build stereo s32 from mono PCM16
         for (size_t i = 0; i < frames; ++i) {
-            int32_t s = in[i];
+            int32_t s = in[i * fmt->num_channels];
+            if (fmt->num_channels == 2) s = (s + in[i * 2 + 1]) / 2;
 
             // Apply volume (Q15), then convert s16 → s32 MSB-justified
             int32_t vs  = (int32_t)((s * (int64_t)s_vol_q15) >> 15);
-            int32_t v32 = vs << 16;
+            if (vs > 32767) vs = 32767;
+            if (vs < -32768) vs = -32768;
+            int32_t v32 = vs * 65536;
 
             out[2 * i + 0] = v32;  // left
             out[2 * i + 1] = v32;  // right
@@ -513,6 +597,8 @@ static esp_err_t play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
                 200
             );
 
+            written += just;
+            audio_progress_submit(just / 8, fmt->sample_rate, false);
             if (e == ESP_ERR_TIMEOUT) {
                 // Retry instead of dropping samples; avoid underruns that speed playback up.
                 continue;
@@ -521,13 +607,13 @@ static esp_err_t play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
                 ESP_LOGE(TAG, "local_stream: i2s write %s", esp_err_to_name(e));
                 free(in);
                 free(out);
+                ring_free(&ring);
                 return e;
             }
             if (just == 0) {
                 // No progress – bail out of loop
                 break;
             }
-            written += just;
         }
 
         if (++yield_count >= AUDIO_PLAY_YIELD_EVERY) {
@@ -547,7 +633,7 @@ static esp_err_t play_wav_local_stream(FILE *f, const audio_wav_info_t *info)
 
 
 static esp_err_t play_wav_file(const char* path){
-    if (!s_tx || !path) return ESP_ERR_INVALID_STATE;
+    if (!path) return ESP_ERR_INVALID_ARG;
 
     FILE* f = fopen(path, "rb");
     if (!f) return ESP_ERR_NOT_FOUND;
@@ -668,7 +754,7 @@ static esp_err_t play_wav_file(const char* path){
 
 // ====================== Memory variant (same format, mono only) ======================
 static esp_err_t play_wav_mem(const void* data, size_t size){
-    if (!s_tx || !data || size < sizeof(riff_t)) return ESP_ERR_INVALID_ARG;
+    if (!data || size < sizeof(riff_t)) return ESP_ERR_INVALID_ARG;
 
     const uint8_t *p   = (const uint8_t*)data;
     const uint8_t *end = p + size;
@@ -798,7 +884,7 @@ esp_err_t audio_play_embedded(void){
 }
 
 static esp_err_t play_tone(int hz, int ms){
-    if (!s_tx) return ESP_ERR_INVALID_STATE;
+    ESP_RETURN_ON_ERROR(audio_restore_bus(), TAG, "restore I2S");
     if (hz <= 0) hz = 440;
     if (ms <= 0) ms = 250;
 

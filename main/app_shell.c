@@ -1,4 +1,6 @@
 #include "app_shell.h"
+#include "app_call.h"
+#include "message_direct.h"
 #include "shell_apps.h"
 #include "shell_audio.h"
 #include "shell_profiler.h"
@@ -428,6 +430,8 @@ static void link_frame_handler(link_msg_type_t type, const uint8_t *src_mac,
                                const uint8_t *payload, size_t len, void *user_ctx)
 {
     (void)user_ctx;
+    call_app_receive(type, src_mac, payload, len);
+    message_direct_receive(type, src_mac, payload, len);
     if (type == LINK_MSG_CONTROL && payload && len >= 2) {
         show_runtime_handle_link_frame(type, src_mac, payload, len);
         master_control_handle_link_frame(type, src_mac, payload, len);
@@ -574,7 +578,7 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .legend = &LED_SOURCE_LEGEND,
         .init   = led_source_app_init,
         .deinit = NULL,
-        .tick   = NULL,
+        .tick   = led_source_app_tick,
         .handle_input = led_source_app_handle_input,
         .draw   = led_source_app_draw,
     },
@@ -612,13 +616,13 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .draw   = manual_bpm_app_draw,
     },
     {
-        .id     = "fft_sync",
-        .name   = "FFT Sync",
+        .id     = "led_controller",
+        .name   = "LED Controller",
         .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
         .legend = &FFT_SYNC_LEGEND,
         .init   = fft_sync_app_init,
         .deinit = fft_sync_app_deinit,
-        .tick   = NULL,
+        .tick   = fft_sync_app_tick,
         .handle_input = fft_sync_app_handle_input,
         .draw   = fft_sync_app_draw,
     },
@@ -639,7 +643,7 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
         .legend = &SHOW_PLAYER_LEGEND,
         .init   = show_player_app_init,
-        .deinit = NULL,
+        .deinit = show_player_app_deinit,
         .tick   = NULL,
         .handle_input = show_player_app_handle_input,
         .draw   = show_player_app_draw,
@@ -650,10 +654,19 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
         .legend = &BT_AUDIO_LEGEND,
         .init   = bt_app_init_wrapper,
-        .deinit = NULL,
+        .deinit = bt_app_deinit_wrapper,
         .tick   = NULL,
         .handle_input = bt_handle_input_wrapper,
         .draw   = bt_draw_wrapper,
+    },
+    {
+        .id     = "call",
+        .name   = "Call",
+        .flags  = SHELL_APP_FLAG_SHOW_HUD,
+        .init   = call_app_init,
+        .deinit = call_app_deinit,
+        .handle_input = call_app_handle_input,
+        .draw   = call_app_draw,
     },
     {
         .id     = "message",

@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <inttypes.h>
 #include <errno.h>
+#include <unistd.h>
 
 #define TEL_DEBUG 1   // set 0 to silence the breadcrumbs
 #define TEL_MAGIC 0x46494C45u  // 'FILE'
@@ -110,13 +111,21 @@ esp_err_t telemetry_start(const telemetry_cfg_t* cfg){
     if (cfg->pass) strncpy((char*)wcfg.sta.password, cfg->pass, sizeof(wcfg.sta.password)-1);
     wcfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wcfg));
-    esp_wifi_start();   // ok if already started
-    esp_wifi_connect(); // ok if already connecting
-
-    // Wait for IP (uses s_net_eg, now guaranteed created)
-    EventBits_t bits = xEventGroupWaitBits(
-        s_net_eg, BIT_GOT_IP, pdTRUE, pdTRUE, pdMS_TO_TICKS(10000));
+    esp_netif_ip_info_t current_ip = {0};
+    esp_netif_t *current_net = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    wifi_ap_record_t ap={0};
+    bool already_connected = current_net && esp_wifi_sta_get_ap_info(&ap)==ESP_OK &&
+        strncmp((const char *)ap.ssid,cfg->ssid,sizeof(ap.ssid))==0 &&
+        esp_netif_get_ip_info(current_net, &current_ip)==ESP_OK && current_ip.ip.addr;
+    if(!already_connected) {
+        xEventGroupClearBits(s_net_eg,BIT_GOT_IP);
+        err = esp_wifi_set_config(WIFI_IF_STA, &wcfg);
+        if (err != ESP_OK) return err;
+        esp_wifi_start();
+        esp_wifi_connect();
+    }
+    EventBits_t bits = already_connected ? BIT_GOT_IP : xEventGroupWaitBits(
+        s_net_eg, BIT_GOT_IP, pdFALSE, pdTRUE, pdMS_TO_TICKS(10000));
     if (!(bits & BIT_GOT_IP)) return ESP_ERR_TIMEOUT;
 
 #if TEL_DEBUG
@@ -225,27 +234,42 @@ esp_err_t telemetry_send_file_udp_ex(const char *path,
     memcpy(hdr + hdr_len, s_mac, 6); hdr_len += 6;
     hdr[hdr_len++] = (uint8_t)fname_len;
     memcpy(hdr + hdr_len, fname, fname_len); hdr_len += fname_len;
-    sendto(s_sock, hdr, hdr_len, 0, (struct sockaddr*)&peer, sizeof(peer));
+    // Discard stale acknowledgements from a previous attempt.
+    uint8_t stale[32];
+    while (recv(s_sock, stale, sizeof(stale), MSG_DONTWAIT)>0) {}
+    if (sendto(s_sock, hdr, hdr_len, 0, (struct sockaddr*)&peer, sizeof(peer))!=(ssize_t)hdr_len) {
+        fclose(f); return ESP_FAIL;
+    }
 
     while (remaining > 0){
         size_t n = remaining > CHUNK ? CHUNK : remaining;
         size_t rd = fread(buf + 12, 1, n, f);
-        if (rd == 0) break;
+        if (rd == 0) { fclose(f); return ESP_FAIL; }
         // Chunk header: magic, seq, size
         memcpy(buf + 0, &magic, 4);
         memcpy(buf + 4, &seq, 4);
         uint32_t sz = (uint32_t)rd;
         memcpy(buf + 8, &sz, 4);
-        sendto(s_sock, buf, rd + 12, 0, (struct sockaddr*)&peer, sizeof(peer));
+        if (sendto(s_sock, buf, rd + 12, 0, (struct sockaddr*)&peer, sizeof(peer))!=(ssize_t)(rd+12)) {
+            fclose(f); return ESP_FAIL;
+        }
         remaining -= rd;
         seq++;
         if (cb) cb(total - remaining, total, user_ctx);
+        if ((seq & 3u)==0) vTaskDelay(1);
     }
 
     fclose(f);
-    // Best-effort ACK (non-blocking)
-    telemetry_try_recv_ack(total);
-    return ESP_OK;
+    // A successful send is not delivery. Wait for the receiver's completed-file ACK.
+    TickType_t began=xTaskGetTickCount();
+    while (xTaskGetTickCount()-began<pdMS_TO_TICKS(3000)) {
+        uint32_t ack[2]; struct sockaddr_in from; socklen_t length=sizeof(from);
+        ssize_t n=recvfrom(s_sock,ack,sizeof(ack),MSG_DONTWAIT,(struct sockaddr *)&from,&length);
+        if(n==sizeof(ack) && from.sin_addr.s_addr==peer.sin_addr.s_addr &&
+           from.sin_port==peer.sin_port && ack[0]==magic && ack[1]==total) return ESP_OK;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    return ESP_ERR_TIMEOUT;
 }
 
 // Send in-memory buffer (call-style) with the same header/chunk/ack framing.
@@ -311,11 +335,12 @@ static void telemetry_rx_task(void *arg){
     listen_addr.sin_port = htons(cfg.port);
 
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-    if (sock < 0) { vTaskDelete(NULL); return; }
+    if (sock < 0) { s_rx_task=NULL;vTaskDelete(NULL); return; }
     int reuse = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
     if (bind(sock, (struct sockaddr*)&listen_addr, sizeof(listen_addr)) != 0){
         close(sock);
+        s_rx_task=NULL;
         vTaskDelete(NULL);
         return;
     }
@@ -332,37 +357,56 @@ static void telemetry_rx_task(void *arg){
 
         uint32_t total = 0;
         memcpy(&total, buf + 4, 4);
-        uint8_t name_len = buf[10]; // magic+total+MAC(6)+len
-        if (11 + name_len > (size_t)n) continue;
+        if (n<15 || !total || total>16*1024*1024) continue;
+        uint8_t name_len = buf[14]; // magic + total + MAC(6) + len
+        if (!name_len || name_len>=64 || 15u+name_len != (size_t)n) continue;
         char name[64] = {0};
-        if (name_len >= sizeof(name)) name_len = sizeof(name) - 1;
-        memcpy(name, buf + 11, name_len);
+        memcpy(name, buf + 15, name_len);
+        if (strchr(name,'/') || strchr(name,'\\') || strstr(name,"..") || strlen(name)!=name_len) continue;
 
         char path[160];
         snprintf(path, sizeof(path), "%s/%s", cfg.dir, name);
         FILE *f = NULL;
         bool save_to_sd = (name_len > 0 && cfg.dir[0]);
+        char partial[168]; snprintf(partial,sizeof(partial),"%s.part",path);
+        struct stat existing;
+        if(stat(path,&existing)==0) continue; // do not overwrite an existing message
         if (save_to_sd) {
-            f = fopen(path, "wb");
+            f = fopen(partial, "wb");
         }
+        if(!f) continue;
 
         size_t written = 0;
+        uint32_t expected_seq=0;
+        struct sockaddr_in sender=src;
+        struct timeval timeout={.tv_sec=3};
+        setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
+        bool valid=true;
+        TickType_t deadline=xTaskGetTickCount();
         while (written < total){
             ssize_t r = recvfrom(sock, buf, sizeof(buf), 0, (struct sockaddr*)&src, &slen);
-            if (r < 12) continue;
+            if (r<0 || xTaskGetTickCount()-deadline>pdMS_TO_TICKS(30000)) { valid=false;break; }
+            if (r < 12 || src.sin_addr.s_addr!=sender.sin_addr.s_addr || src.sin_port!=sender.sin_port) continue;
             uint32_t mag2=0, seq=0, sz=0;
             memcpy(&mag2, buf, 4);
             memcpy(&seq,  buf+4, 4);
             memcpy(&sz,   buf+8, 4);
-            if (mag2 != TEL_MAGIC || sz > (uint32_t)(r - 12)) continue;
+            if (mag2 != TEL_MAGIC || sz != (uint32_t)(r - 12) || !sz) continue;
+            if(seq<expected_seq) continue;
+            if(seq!=expected_seq || sz>total-written) {valid=false;break;}
             size_t to_write = sz;
             if (written + to_write > total) to_write = total - written;
-            if (f) fwrite(buf + 12, 1, to_write, f);
+            if (fwrite(buf + 12, 1, to_write, f)!=to_write) {valid=false;break;}
             // If no SD/file, could route to an in-memory buffer / stream callback.
             written += to_write;
-            (void)seq;
+            ++expected_seq;
         }
-        if (f) { fflush(f); fclose(f); }
+        if(fflush(f)!=0) valid=false;
+        if(fclose(f)!=0) valid=false;
+        timeout.tv_sec=0;setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
+        if(!valid || rename(partial,path)!=0) {remove(partial);continue;}
+        uint32_t ack[2]={TEL_MAGIC,total};
+        sendto(sock,ack,sizeof(ack),0,(struct sockaddr *)&sender,sizeof(sender));
 #if TEL_DEBUG
         if (save_to_sd) printf("recv file: %s (%u bytes)\n", path, (unsigned)written);
         else printf("recv %u bytes (no save)\n", (unsigned)written);
@@ -379,5 +423,6 @@ esp_err_t telemetry_start_file_receiver(uint16_t listen_port, const char *save_d
     strncpy(cfg->dir, save_dir, sizeof(cfg->dir)-1);
     cfg->dir[sizeof(cfg->dir)-1] = 0;
     BaseType_t ok = xTaskCreatePinnedToCore(telemetry_rx_task, "tel_rx", 4096, cfg, 4, &s_rx_task, BG_TASK_CORE);
+    if(ok!=pdPASS) { free(cfg);s_rx_task=NULL; }
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }

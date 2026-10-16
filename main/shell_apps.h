@@ -63,6 +63,12 @@ typedef enum {
     LED_SOURCE_FFT,
 } led_source_mode_t;
 
+typedef enum {
+    LED_TIMING_ON_BEAT = 0,
+    LED_TIMING_OFFBEAT,
+    LED_TIMING_DOUBLE,
+} led_timing_mode_t;
+
 void leds_animations_app_init(shell_app_context_t *ctx);
 void leds_app_deinit(shell_app_context_t *ctx);
 void leds_app_tick(shell_app_context_t *ctx, float dt_sec);
@@ -71,6 +77,7 @@ void leds_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, i
 extern const shell_legend_t LEDS_LEGEND;
 
 void led_source_app_init(shell_app_context_t *ctx);
+void led_source_app_tick(shell_app_context_t *ctx, float dt_sec);
 void led_source_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void led_source_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 const char *led_source_mode_name(led_source_mode_t mode);
@@ -80,6 +87,9 @@ void led_source_service_tick(float dt_sec);
 bool led_source_manual_state_get(manual_bpm_sync_state_t *out);
 void led_source_manual_bpm_adjust(float delta);
 void led_source_manual_phase_adjust(float delta);
+void led_source_timing_set(led_timing_mode_t mode);
+led_timing_mode_t led_source_timing_get(void);
+const char *led_source_timing_name(led_timing_mode_t mode);
 extern const shell_legend_t LED_SOURCE_LEGEND;
 
 void led_color_app_init(shell_app_context_t *ctx);
@@ -111,6 +121,7 @@ void fft_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, in
 
 void fft_sync_app_init(shell_app_context_t *ctx);
 void fft_sync_app_deinit(shell_app_context_t *ctx);
+void fft_sync_app_tick(shell_app_context_t *ctx, float dt_sec);
 void fft_sync_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void fft_sync_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern shell_legend_t FFT_SYNC_LEGEND;
@@ -122,11 +133,13 @@ void music_stop_playback(void);
 extern shell_legend_t MUSIC_LEGEND;
 
 void show_player_app_init(shell_app_context_t *ctx);
+void show_player_app_deinit(shell_app_context_t *ctx);
 void show_player_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void show_player_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t SHOW_PLAYER_LEGEND;
 
 void bt_app_init_wrapper(shell_app_context_t *ctx);
+void bt_app_deinit_wrapper(shell_app_context_t *ctx);
 void bt_handle_input_wrapper(shell_app_context_t *ctx, const input_event_t *ev);
 void bt_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t BT_AUDIO_LEGEND;

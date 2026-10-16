@@ -29,6 +29,7 @@ typedef struct {
     uint16_t bucket_ms;
     uint16_t palette_count;
     uint16_t group_count;
+    uint16_t formation;
     uint32_t tempo_millibpm;
     int32_t beat_offset_ms;
     bool crc_checked;
@@ -44,6 +45,8 @@ typedef struct {
     uint8_t *param_blob;
     size_t param_blob_bytes;
     uint32_t param_blob_file_offset;
+    uint32_t formation_cue_count;
+    show_formation_cue_v1_3_t *formation_cues;
 } show_package_program_t;
 
 esp_err_t show_package_build_path(const char *show_slug, char *out, size_t out_sz);

@@ -19,8 +19,9 @@ Keep the existing high-level separation:
 - `main/` is the composition root: shell runtime plus thin app adapters.
 - `components/` owns reusable hardware, media, analysis, communication, layout,
   rendering, and game engines.
-- `tools/` owns host-side layout and show-authoring utilities.
-- `shows/` contains editable source projects; exported runtime packages belong
+- `../ShowEditor/` owns desktop-only layout and show-authoring utilities; nothing there
+  is compiled or flashed by ESP-IDF. Launch with `../ShowEditor/show-editor`.
+- `../ShowEditor/shows/` contains editable source projects; exported runtime packages belong
   on SD rather than in the firmware image.
 
 The shell app contract (`init`, `deinit`, `tick`, `handle_input`, `draw`) and
@@ -47,10 +48,9 @@ Typical commands:
 Reproducibility caveat:
 - The repository currently relies on that local ESP-IDF checkout and does not
   pin/bootstrap the exact IDF and Python environment.
-- The last inspected local IDF Python environment was incomplete after a Python
-  version change, so a clean full build could not be reproduced from the README
-  alone. Fix the toolchain/bootstrap before treating build failures as firmware
-  regressions.
+- The local IDF Python 3.13 environment was repaired for the FFT port, and the
+  full firmware builds in `build/fft-port`. A fresh checkout still needs the
+  matching IDF/toolchain environment; it is not bootstrapped by this repository.
 - Do not commit real Wi-Fi credentials through `main/Kconfig`, `sdkconfig`, or
   backup configuration files. Rotate any credentials that were committed and
   move local values to an untracked/provisioned configuration path.
@@ -475,10 +475,10 @@ Layout authoring / debug workflow:
   - change side, section length, reverse flag, preview mode
   - save / reload / reset default
   - preview the selected section live on the strips
-- On host: Python tools under `tools/`
-  - `tools/layout_model.py`: normalized chestplate geometry and sampling model
-  - `tools/render_front_layout.py`: SVG preview renderer
-  - `tools/generate_layout_sd.py`: export layout text file for SD
+- On host: Python tools under `../ShowEditor/show_editor/layout/`
+  - `../ShowEditor/show_editor/layout/layout_model.py`: normalized chestplate geometry and sampling model
+  - `../ShowEditor/show_editor/layout/render_front_layout.py`: SVG preview renderer
+  - `../ShowEditor/show_editor/layout/generate_layout_sd.py`: export layout text file for SD
 
 Animation model notes:
 - Custom geometry-aware modes and several audio-reactive modes now use the
@@ -551,7 +551,7 @@ of volume and still needs non-music/crowd testing on the physical microphone.
 
 Multi-suit show authoring system
 --------------------------------
-`tools/show_editor/main_window.py` is a desktop PC application for designing
+`../ShowEditor/show_editor/main_window.py` is a desktop PC application for designing
 song-timed LED animation shows shared by multiple suits. It is not an on-device
 ESP32 UI. The editor is a substantial but unfinished tool, currently centered
 on one integrated Qt window.
@@ -561,7 +561,7 @@ The intended workflow is:
 2. Author layered effect clips on global and per-role (`A`, `B`, `C`) lanes.
 3. Target canonical suit sections/groups rather than hard-coded LED indices.
 4. Preview the same timeline against 2D/3D suit layouts.
-5. Save editable JSON source in `shows/`.
+5. Save editable JSON source in `../ShowEditor/shows/`.
 6. Export a compact `show.bin` package, plus audio when needed, for SD playback.
 7. Have a master suit start/synchronize playback while each suit renders its
    assigned role.
@@ -574,9 +574,10 @@ current JSON projects export successfully.
 Important limitations:
 - This is WIP authoring software; effect-specific controls and workflow still
   need refinement.
-- `main_window.py` has grown very large and should eventually be split into
-  timeline, preview, inspector/edit-history, audio transport, and window/controller
-  modules without changing the saved-project format casually.
+- Timeline and preview/worker widgets now live in `timeline_widget.py` and
+  `preview_widget.py`; their method bodies were preserved during extraction.
+  `main_window.py` still needs a later inspector/history/audio-transport split.
+  Do not change the saved-project or exported firmware format casually.
 - The firmware now validates `show.bin`, loads one role into PSRAM/RAM, resolves
   canonical targets against the local layout, and renders the compiled effect
   set from the absolute timeline.
@@ -593,8 +594,8 @@ Important limitations:
 Related design documents:
 - `docs/show_system_requirements.md`
 - `docs/show_system_spec.md`
-- `docs/show_editor_ux_plan.md`
-- `tools/show_editor/README.md`
+- `../ShowEditor/docs/show_editor_ux_plan.md`
+- `../ShowEditor/README.md`
 
 
 Engineering notes from the current review
@@ -627,25 +628,44 @@ Highest-risk implementation debt:
   caches logical-to-physical mapping until the layout changes.
 - Several large files now mix responsibilities. Split internally rather than
   creating a component for every small helper.
-- No automated tests or CI currently protect protocols, parsers, layout mapping,
-  show packages, menu/registry consistency, or service state machines.
+- Host regression tests cover the FFT detector and show exporter. There is no
+  CI yet, and protocols, layout mapping, firmware show parsing, menu/registry
+  consistency and service state machines still lack automated coverage.
 
 
 Repository layout
 -----------------
 `main/`:
 - Shell and app wrappers listed in `main/CMakeLists.txt`
+- App-local headers stay alongside their sources; this is the composition
+  root, not a reusable component API. Do not make components depend on it.
 
 `components/`:
 - Reusable modules: hardware, oled, input, audio, bt_audio, fft, link, gps,
   orientation, storage, games, etc.
+- Convention: implementation `.c` files and `CMakeLists.txt` at component root;
+  first-party `.h` files in `include/`; tests in `tests/` where present.
+- Include headers by name (`#include "fft.h"`), with paths supplied by CMake,
+  not relative paths into another component's source directory.
+- Internal helper headers also live in `include/`, but are not application
+  APIs: FFT clients use `fft.h`, not `fft_detector.h` or `fft_render.h`;
+  `bt_audio_internal.h` is only for Bluetooth implementation files.
+- List firmware sources explicitly in CMake. Do not glob in tests, generators,
+  prototypes or backups. Use public dependencies for exposed header types and
+  private dependencies for implementation details.
+- Existing vendor exception: Bad Apple's bundled Heatshrink headers/sources
+  retain their layout; its license lives in `third_party/`. Keep vendor changes
+  separate from first-party header moves.
 
-`tools/`:
-- Layout preview and SD-export helpers for the chestplate geometry
-- Qt multi-suit song/show editor, preview model, and binary exporter
-
-`shows/`:
-- Editable JSON source projects for song-timed, per-role LED shows
+`../ShowEditor/` (separate sibling desktop project, outside this Git repository):
+- `show-editor`: launcher; uses its local `.venv` if installed, otherwise system Python
+- `show_editor/`: Qt editor, preview, exporter and tests
+- `show_editor/layout/`: geometry model, SVG previews and SD-layout export tools
+- `shows/`: editable JSON source projects; `assets/`: bundled audio/preview
+- `output/`: ignored generated exports; `.venv/`: ignored Python environment
+- `README.md`: PC setup, commands and test instructions
+- The ESP32 keeps only `components/show/` and `main/app_show_player.c`; exported
+  packages are copied to SD, never linked into firmware.
 
 Sibling research directory:
 - `../localFFT/`: PC FFT/BPM experiments and offline benchmark; not part of
@@ -654,6 +674,25 @@ Sibling research directory:
 Legacy entrypoint files still present in `main/` but not in build list:
 - `main/reciever.c`
 - `main/sender.c`
+- `main/old2.c`
+
+Structure audit (after the FFT header move):
+- All 37 registered local components have existing declared source/include
+  paths. All first-party component headers are now under `include/`.
+- `components/audio_capture/` has an empty CMakeLists.txt; `components/led2/`
+  has none. Neither implementation is compiled. Do not silently enable them.
+- `components/fft/temp.c` is a PC/ALSA/SDL prototype, not firmware.
+  `components/audio_player/audio_player.c.bak` and the tracked
+  `components/twenty48/__pycache__/gen_sprites.cpython-313.pyc` are cleanup debt.
+  Local untracked FFT copies/config edits were left untouched.
+- Circular build dependencies remain: `audio_player <-> bt_audio`, plus
+  `fft -> audio_player -> bt_audio -> input -> fft`. Fix ownership/callback
+  boundaries in a separate behavior-tested refactor, not by deleting REQUIRES.
+- Bluetooth contains app UI and still declares a private include path into
+  `main/`; that crosses the intended composition/component boundary.
+- Large responsibility mixes remain, especially `../ShowEditor/show_editor/main_window.py`
+  (~4,200 lines after widget extraction) and `components/led/led.c` (~2,700). Split by responsibility
+  when working on those modules; more folders alone will not fix the coupling.
 
 
 Known caveats (current code)
@@ -745,7 +784,17 @@ FFT/BPM research:
 Multi-suit show system:
 - [ ] Continue the PC editor as the authoring source of truth; do not move its
   editing complexity into firmware.
-- [ ] Split `tools/show_editor/main_window.py` by responsibility while
+- [x] Move PC authoring code/assets/projects to sibling `../ShowEditor/`; keep the firmware
+  player and shared show-format specification separate.
+- [x] Add saved line/circle formations, inward-facing 3D preview, stage/top camera
+  controls, facing diagram, and matching v1.2 firmware placement. Old line exports
+  remain v1.1. Flash updated firmware before using circle shows.
+- [x] Prepare posed torso/arm coordinates once on v1.2 show load; validate the
+  shared stage/body transforms with PC/C regression tests. Preserve v1.1 behavior.
+- [ ] Give the separate ShowEditor project its own version control/remote before
+  committing the firmware-side editor removals; old files remain in Git history.
+- [x] Extract timeline and preview widgets/worker from `main_window.py`.
+- [ ] Extract inspector/history/audio transport from the remaining window code,
   preserving project/session behavior and export compatibility.
 - [ ] Refine effect-specific editing, selection, audio transport, timeline UX,
   preview accuracy, presets, and schema migration/versioning.
@@ -783,6 +832,7 @@ Structure, tests, and unfinished features:
 - [ ] Rehearse it on all physical suits, tune role spacing/effects against the
   real layouts, and finish synchronized audio.
 
+- random animation should change based on the bpm, every so many beats
 
 Legacy notes from original README
 ---------------------------------

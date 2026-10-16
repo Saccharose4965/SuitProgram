@@ -18,6 +18,7 @@ typedef enum {
     LINK_MSG_MESSAGE = 2, // user data / file header etc.
     LINK_MSG_GAME    = 3, // game control (e.g., Pong)
     LINK_MSG_CONTROL = 4, // master/slave control + sync
+    LINK_MSG_CALL = 5, // live half-duplex PCM voice
 } link_msg_type_t;
 
 typedef struct {

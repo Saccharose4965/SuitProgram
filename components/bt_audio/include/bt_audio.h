@@ -83,6 +83,8 @@ esp_err_t bt_audio_play_wav(FILE *fp,
 
 // Snapshot current state (safe from any task).
 void bt_audio_get_status(bt_audio_status_t *out);
+// Task-context diagnostic only; does not change stream or connection state.
+void bt_audio_log_stream_health(void);
 
 // Small helper for UI text.
 const char *bt_audio_state_name(bt_audio_state_t s);

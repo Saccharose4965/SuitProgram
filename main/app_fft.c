@@ -1,5 +1,6 @@
 #include "app_shell.h"
 #include "shell_audio.h"
+#include "app_led_support.h"
 
 #include "esp_err.h"
 #include "esp_log.h"
@@ -12,7 +13,7 @@
 static const char *TAG = "shell";
 static esp_err_t s_fft_start_err = ESP_OK;
 
-static fft_view_t g_fft_view = FFT_VIEW_BPM_TEXT;
+static fft_view_t g_fft_view = FFT_VIEW_SPECTRUM;
 
 void fft_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 {
@@ -26,6 +27,10 @@ void fft_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
         case INPUT_BTN_B:
             g_fft_view = (fft_view_t)((g_fft_view + 1) % FFT_VIEW_COUNT);
             break;
+        case INPUT_BTN_C:
+        case INPUT_BTN_D:
+            fft_detector_reset();
+            return;
         default:
             return;
     }
@@ -37,13 +42,18 @@ void fft_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
     s_fft_start_err = ESP_OK;
+    if (led_ui_fft_blocked_by_bluetooth()) {
+        s_fft_start_err = ESP_ERR_INVALID_STATE;
+        fft_set_display_enabled(false);
+        return;
+    }
     if (!shell_audio_init_if_needed()) {
         ESP_LOGE(TAG, "audio_init failed; FFT won't run");
         s_fft_start_err = ESP_ERR_INVALID_STATE;
         fft_set_display_enabled(false);
         return;
     }
-    g_fft_view = FFT_VIEW_BPM_TEXT;
+    g_fft_view = FFT_VIEW_SPECTRUM;
     fft_visualizer_set_view(g_fft_view);
     s_fft_start_err = fft_visualizer_start();
     if (s_fft_start_err != ESP_OK) {
@@ -69,6 +79,11 @@ void fft_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, in
     (void)h;
     if (!fb) return;
     if (s_fft_start_err != ESP_OK) {
+        if (led_ui_fft_blocked_by_bluetooth()) {
+            oled_draw_text3x5(fb, 0, 0, "FFT paused for Bluetooth");
+            oled_draw_text3x5(fb, 0, 10, "Disconnect BT, then reopen FFT");
+            return;
+        }
         char line[24];
         oled_draw_text3x5(fb, 0, 0, "FFT start failed");
         snprintf(line, sizeof(line), "err:%s", esp_err_to_name(s_fft_start_err));

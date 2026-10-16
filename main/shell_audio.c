@@ -7,7 +7,8 @@ static bool s_audio_inited = false;
 
 bool shell_audio_init_if_needed(void)
 {
-    if (s_audio_inited) return true;
+    if (s_audio_inited && audio_tx_handle()) return true;
+    s_audio_inited = false;
     audio_i2s_config_t bus = {
         .i2s_id    = 0,
         .bclk_gpio = PIN_I2S_BCLK,
