@@ -239,8 +239,6 @@ Misc:
 Call and message are registered shell apps; validate their individual audio
 and transport routes on hardware before assuming all combinations work.
 
-Selecting these logs an unknown app warning and remains in menu.
-
 
 Per-app controls (current wiring)
 ---------------------------------
