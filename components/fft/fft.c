@@ -22,6 +22,7 @@ static const char *TAG = "fft_vis";
 #define ANALYSIS_PRIORITY 2
 #define PHASE_PRIORITY 2
 #define FFT_CORE 1
+#define ANALYSIS_CORE 0
 #define PHASE_CORE 0
 #define FRAME_SECONDS ((double)DETECTOR_FFT_SIZE / DETECTOR_SAMPLE_RATE)
 #define PHASE_HOP_FRAMES 8
@@ -99,6 +100,7 @@ static bool s_clock_offbeat;
 static float s_clock_offset;
 static double s_last_emit;
 static uint32_t s_skipped, s_capture_errors;
+static double s_analysis_interval;
 static level_track_t s_level[4];
 
 static float wrap(float p) { return p - floorf(p); }
@@ -136,7 +138,15 @@ static void invalidate_capture(void)
     ++s_controls.revision;
     s_capture_epoch = s_controls.epoch;
     portEXIT_CRITICAL(&s_mux);
-    clear_capture();
+    // A DMA gap invalidates comb evidence, not the song. Keep the accepted
+    // tempo/clock running while rebuilding contiguous audio, like the PC hold.
+    s_frame_count = s_frame_write = s_hop_count = s_phase_hop_count = 0;
+    memset(&s_filter, 0, sizeof(s_filter));
+    s_current.detector.trusted = false;
+    s_current.detector.history_coverage = 0;
+    s_current.detector.confidence = s_current.detector.evidence = 0;
+    fft_render_update_detector(&s_current.detector);
+    ESP_LOGW(TAG, "Capture gap: rebuilding audio history; retaining BPM %.0f", s_current.detector.held_bpm);
     led_audio_raw_volume_set(0);
     led_audio_levels_set(0, 0, 0, 0);
     portENTER_CRITICAL(&s_mux);
@@ -210,7 +220,8 @@ static void analysis_task(void *arg)
     while (!s_stop_analysis && xQueueReceive(s_jobs, &job, portMAX_DELAY) == pdTRUE) {
         if (s_stop_analysis) break;
         if (epoch != job.controls.epoch) {
-            detector_reset(&s_detector);
+            if (epoch == UINT32_MAX) detector_reset(&s_detector);
+            else detector_discontinuity(&s_detector);
             epoch = job.controls.epoch;
         }
         analysis_result_t result = { .epoch = job.controls.epoch, .revision = job.controls.revision,
@@ -248,6 +259,7 @@ static void poll_analysis(controls_t c)
     float accepted_phase = s_current.detector.accepted_phase;
     double beat_time = s_current.detector.beat_time;
     if (had_phase) memcpy(live_phase, s_current.detector.phase, sizeof(live_phase));
+    s_analysis_interval = s_current.time > 0 ? result.time - s_current.time : 0;
     s_current = result;
     detector_result_t *d = &s_current.detector;
     if (had_phase) {
@@ -354,15 +366,15 @@ static void submit_phase(double time, controls_t c)
     s_phase_busy = xQueueSend(s_phase_jobs, &job, 0) == pdTRUE;
 }
 
-static void submit_analysis(double time, controls_t c)
+static bool submit_analysis(double time, controls_t c)
 {
-    if (s_job_busy) { ++s_skipped; return; }
-    if (s_frame_count < 3) return;
+    if (s_job_busy || s_frame_count < 3) return false;
     int oldest = (s_frame_write - s_frame_count + DETECTOR_FRAMES) % DETECTOR_FRAMES;
     for (int i = 0; i < s_frame_count; ++i)
         memcpy(s_snapshot[i], s_frames[(oldest + i) % DETECTOR_FRAMES], sizeof(s_snapshot[i]));
     analysis_job_t job = { .count = s_frame_count, .time = time, .controls = c };
     s_job_busy = xQueueSend(s_jobs, &job, 0) == pdTRUE;
+    return s_job_busy;
 }
 
 static void emit_and_publish(double now, controls_t c)
@@ -432,8 +444,10 @@ static void process_frame(double time)
         float magnitude = sqrtf(s_re[k] * s_re[k] + s_im[k] * s_im[k]);
         packet.logmag[k] = log1pf(10 * magnitude);
         if (k < DETECTOR_FFT_SIZE / 2)
-            packet.magnitudes[k * FFT_DISPLAY_ROWS / (DETECTOR_FFT_SIZE / 2)] +=
-                magnitude / (DETECTOR_FFT_SIZE / 2 / FFT_DISPLAY_ROWS);
+        {
+            int row = k * FFT_DISPLAY_ROWS / (DETECTOR_FFT_SIZE / 2);
+            if (magnitude > packet.magnitudes[row]) packet.magnitudes[row] = magnitude;
+        }
     }
     led_audio_raw_volume_set(fminf(1, sqrtf(power / DETECTOR_FFT_SIZE) * 12));
     fft_levels_t levels = {
@@ -466,7 +480,11 @@ static void process_frame(double time)
     poll_phase(c);
     c = controls_get();
     if (c.epoch != s_capture_epoch) { s_capture_epoch = c.epoch; clear_capture(); }
-    if (++s_hop_count >= DETECTOR_HOP_FRAMES) { s_hop_count = 0; submit_analysis(time, c); }
+    if (s_hop_count < DETECTOR_HOP_FRAMES) ++s_hop_count;
+    if (s_hop_count >= DETECTOR_HOP_FRAMES) {
+        if (submit_analysis(time, c)) s_hop_count = 0;
+        else ++s_skipped;
+    }
     if (++s_phase_hop_count >= PHASE_HOP_FRAMES) {
         s_phase_hop_count = 0;
         submit_phase(time, c);
@@ -481,7 +499,7 @@ static void process_frame(double time)
                           s_current.detector.held_bpm > 0
         ? s_clock.beat_start * s_current.detector.held_bpm / 60.0 : 0;
     packet.clock_origin = (float)(origin_phase - floor(origin_phase));
-    packet.time = esp_timer_get_time() / 1e6;
+    packet.time = time;
     fft_render_submit(&packet);
     float load = (float)(esp_timer_get_time() - start) / (FRAME_SECONDS * 10000);
     portENTER_CRITICAL(&s_mux);
@@ -514,6 +532,7 @@ static void capture_task(void *arg)
                     !audio_player_is_active() && !mic_rec_is_recording()) {
                     if (audio_set_rate(DETECTOR_SAMPLE_RATE) == ESP_OK) (void)audio_enable_rx();
                 }
+                emit_and_publish(esp_timer_get_time() / 1e6, controls_get());
                 vTaskDelay(pdMS_TO_TICKS(20));
                 continue;
             }
@@ -534,6 +553,7 @@ static void capture_task(void *arg)
                 !audio_player_is_active() && !mic_rec_is_recording()) {
                 if (audio_set_rate(DETECTOR_SAMPLE_RATE) == ESP_OK) (void)audio_enable_rx();
             }
+            emit_and_publish(esp_timer_get_time() / 1e6, controls_get());
             vTaskDelay(1);
             continue;
         }
@@ -558,8 +578,10 @@ static void capture_task(void *arg)
         if (esp_timer_get_time() - report_time >= 5000000) {
             fft_sync_state_t status;
             fft_get_sync_state(&status);
-            ESP_LOGI(TAG, "capture %.0f%% worker %.0fms skipped %lu errors %lu held %.0f evidence %.2f lost %.1fs",
-                     status.capture_load, status.analysis_ms, (unsigned long)s_skipped,
+            ESP_LOGI(TAG, "capture %.0f%% worker %.0fms cadence %.2fs age %.2fs overdue-frames %lu errors %lu held %.0f evidence %.2f lost %.1fs",
+                     status.capture_load, status.analysis_ms, s_analysis_interval,
+                     s_current.time > 0 ? esp_timer_get_time() / 1e6 - s_current.time : 0,
+                     (unsigned long)s_skipped,
                      (unsigned long)s_capture_errors, status.held_bpm, status.evidence, status.lost_seconds);
             ESP_LOGI(TAG, "internal heap %u; stack headroom capture %u worker %u bytes",
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
@@ -600,12 +622,13 @@ esp_err_t fft_visualizer_start(void)
     s_job_busy = s_phase_busy = false;
     s_stop_capture = s_stop_analysis = s_stop_phase = false;
     s_skipped = s_capture_errors = 0;
+    s_analysis_interval = 0;
     memset(s_level, 0, sizeof(s_level));
     fft_detector_reset();
     s_capture_epoch = controls_get().epoch;
     clear_capture();
     if (xTaskCreatePinnedToCore(analysis_task, "fft_bpm", 6144, NULL,
-                               ANALYSIS_PRIORITY, &s_analysis_task, FFT_CORE) != pdPASS) {
+                               ANALYSIS_PRIORITY, &s_analysis_task, ANALYSIS_CORE) != pdPASS) {
         free(input); return ESP_ERR_NO_MEM;
     }
     if (xTaskCreatePinnedToCore(phase_task, "fft_phase", 4096, NULL,

@@ -6,7 +6,6 @@
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
-#include "driver/uart.h"
 #include "driver/i2s_std.h"
 
 #include "esp_adc/adc_oneshot.h"
@@ -323,30 +322,6 @@ esp_err_t hw_i2s_init_rx_24bit_mono_48k(void)
 }
 
 
-// ======================================================================
-// UART0 — GPS
-// ======================================================================
-
-esp_err_t hw_uart_gps_init(int baud)
-{
-    // NOTE: Using UART0 requires disabling the console on UART0 in menuconfig:
-    //   Component config → ESP System Settings → Channel for console output → None
-    uart_config_t cfg = {
-        .baud_rate = baud,
-        .data_bits = UART_DATA_8_BITS,
-        .parity    = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_APB,
-    };
-    ESP_RETURN_ON_ERROR(uart_driver_install(HW_GPS_UART_NUM, 2048, 0, 0, NULL, 0), TAG, "uart_driver_install");
-    ESP_RETURN_ON_ERROR(uart_param_config(HW_GPS_UART_NUM, &cfg), TAG, "uart_param_config");
-    ESP_RETURN_ON_ERROR(uart_set_pin(HW_GPS_UART_NUM, HW_GPS_TXD, HW_GPS_RXD,
-                                     UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE),
-                        TAG, "uart_set_pin");
-    ESP_LOGI(TAG, "GPS UART0 ready on TX=%d RX=%d @%d", HW_GPS_TXD, HW_GPS_RXD, baud);
-    return ESP_OK;
-}
 // ======================================================================
 // ADC1 — bring-up + raw / mV reads (Hall A/B + buttons ladder)
 // ======================================================================

@@ -144,7 +144,7 @@ embedded strongest-peak snapper.
 
 ## Scheduling and integration safeguards
 
-Capture/FFT: core 1, priority 4. Analysis: core 1, priority 2. The expensive
+Capture/FFT: core 1, priority 4. Analysis: core 0, priority 2. The expensive
 80-BPM sweep is requested every 88 audio frames (~2.04 s), **not at 30 FPS**.
 Phase is refreshed separately every eight frames. Between candidates, the
 worker blocks for one RTOS tick after a ~40 ms work
@@ -273,14 +273,16 @@ stipple, antialiasing or decorative markers. C opens the separate FFT Sync
 controls; D resets the tracker, both locks and visual histories. FFT Sync keeps
 its functional control labels and numeric status.
 
-- The spectrogram covers 0–22.05 kHz. Raw magnitudes are averaged into 32 rows,
-  using localFFT's magnitude transfer followed by a single 128/255 on/off
-  threshold. There is no spatial dithering. This fixes the old view's missing
-  upper half of the frequency range.
-- Spectrogram and readiness share a 320-audio-frame ring (~7.43 seconds), updated
-  once per captured FFT frame even when another app is open. The OLED compresses
-  that timeline horizontally. Drawing never advances it; reset/discontinuity
-  clears both together.
+- The spectrogram covers 0–22.05 kHz, peak-pooling frequency bins into 32 rows.
+  Its binary display threshold is max(0.01, current peak * 0.01), retaining a
+  40 dB amplitude range above an absolute floor. This is display-only; detector
+  magnitudes and thresholds are unchanged. Moderate-input visibility needs a
+  final microphone/OLED check on the suit.
+- Spectrogram and readiness share 128 columns, one column per two audio frames
+  (~21.5 columns/second, ~5.94 seconds visible). The spectrogram retains either
+  frame's peaks; confidence uses the latest sample in the group. No horizontal
+  averaging, antialiasing or dithering. Drawing never advances history. Explicit
+  reset clears it; capture gaps retain the existing columns.
 - Confidence and evidence are two plain, one-pixel solid traces, on a fixed
   0–1.1 vertical scale. Values are held between detector results.
 - BPM scores and the instantaneous spectrum use solid vertical bars, scaled
@@ -314,3 +316,36 @@ The normal project build succeeds. Next board check: flash, activate
 `sync:fill`, then open FFT viewer with a known song. Check all views and
 locks/ratio/offbeat/reset, and collect 20–30 seconds of heap/capture/worker logs.
 The updated firmware has not yet been verified on the suit.
+
+## 2026-10-16: pipeline parity and capture recovery
+
+- Capture discontinuities discard partial audio, band-filter and score history,
+  but preserve the accepted BPM/phase clock. They no longer bypass the 40-second
+  evidence-based loss rule by resetting the detector. Missing capture time is
+  not fabricated into evidence; an indefinitely unavailable microphone is not
+  classified as 40 seconds of non-rhythmic audio. Button suppression is unchanged.
+- New accepted tempos reset accumulated loss, matching PC `newLock` handling.
+- Clean evidence agreeing with the held BPM remains phase-trusted during shock
+  cooldown, matching the PC. Cooldown still prevents transitions/support credit.
+- A busy BPM worker leaves its deadline pending, retrying on the next audio
+  frame rather than waiting another 88 frames. Its core-0 worker yields every
+  40 ms. No FFT size, comb resolution or detector thresholds were reduced.
+- OLED rendering copies a snapshot under the capture mutex and draws outside
+  it. Phase source is compiled with the same -O2 optimization as the detector.
+- Diagnostics now report result cadence, audio-result age and overdue frames
+  (the old `skipped_jobs` status field now counts these frames).
+- Shell LED-source service requests FFT regardless of which viewer is open;
+  closing the viewer only hides its display. Shared-audio owners still suspend
+  FFT intentionally, and the audio gate retries when they release ownership.
+
+Host tests compare 900 updates against actual desktop BPM history/hold/loss
+logic (transients, sustained changes, soft lock, delayed jobs, loss/reacquisition)
+and 1,200 phase/clock updates. Capture-gap retention and binary grouped display
+are also tested. They establish implementation parity on identical synthetic
+inputs, not microphone equivalence or achieved hardware throughput.
+
+Board check: use a steady track, press several buttons, leave/reopen the FFT
+viewer, then change tracks. Capture 20–30 seconds of `fft_vis` lines including
+`cadence`, `age`, `overdue-frames`, and any `Capture gap` messages. Target BPM
+cadence is ~2.04 s (the current PC default); longer cadence identifies remaining
+hardware scheduling/compute limits rather than a display refresh setting.

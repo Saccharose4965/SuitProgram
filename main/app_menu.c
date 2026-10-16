@@ -46,7 +46,6 @@ static const menu_entry_t g_menu_settings_entries[] = {
 };
 static const menu_entry_t g_menu_sim_entries[] = {
     { "menu_root", "Back"   },
-    { "gps",       "GPS"    },
     { "fft",       "FFT"    },
     { "fluid",     "Fluid"  },
     { "stickman",  "Arm Pose" },

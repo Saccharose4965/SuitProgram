@@ -60,6 +60,8 @@ typedef struct {
 } detector_t;
 
 void detector_reset(detector_t *d);
+// Discard discontinuous evidence, not an already accepted BPM or its support.
+void detector_discontinuity(detector_t *d);
 // Input is log(1 + 10 * FFT magnitude), excludes the Nyquist bin.
 bool detector_filter_bands(detector_filter_t *filter, const float *logmag,
                            bool suppress, float bands[DETECTOR_BANDS]);

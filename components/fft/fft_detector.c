@@ -21,6 +21,13 @@ static float display_value(float x) { return isfinite(x) ? fminf(1.1f, fmaxf(0, 
 
 void detector_reset(detector_t *d) { memset(d, 0, sizeof(*d)); }
 
+void detector_discontinuity(detector_t *d)
+{
+    d->count = d->write = 0;
+    d->have_time = d->have_variance = d->have_loss_time = false;
+    d->previous_trusted = false;
+}
+
 bool detector_filter_bands(detector_filter_t *f, const float *logmag,
                            bool suppress, float bands[DETECTOR_BANDS])
 {
@@ -79,8 +86,11 @@ float detector_comb_score_cooperative(const float *frames, int count, int bpm,
         }
         if (teeth < 2) continue;
         float inv_n = 1.0f / teeth, inv_dof = 1.0f / (teeth - 1);
-        for (int b = 0; b < DETECTOR_BANDS; ++b)
-            total += fmaxf(0, (squares[b] - sums[b] * sums[b] * inv_n) * inv_dof);
+        for (int b = 0; b < DETECTOR_BANDS; ++b) {
+            float variance = (squares[b] - sums[b] * sums[b] * inv_n) * inv_dof;
+            // Avoid a libm fmaxf call for each band/phase on Xtensa.
+            if (variance > 0) total += variance;
+        }
         evaluations += DETECTOR_BANDS;
         if (yield_fn) yield_fn(yield_ctx);
     }
@@ -172,6 +182,7 @@ void detector_update(detector_t *d, const float scores[DETECTOR_BPM_COUNT], doub
                      detector_control_t control, detector_result_t *out)
 {
     memset(out, 0, sizeof(*out));
+    float previously_held = d->held_bpm;
     float history_elapsed = d->have_time ? fmaxf(0, (float)(time - d->last_time)) : UPDATE_SECONDS;
     float duration = d->have_time ? history_elapsed : UPDATE_SECONDS;
     duration = fminf(duration, UPDATE_SECONDS + 1.0f / FRAME_RATE);
@@ -291,10 +302,13 @@ void detector_update(detector_t *d, const float scores[DETECTOR_BPM_COUNT], doub
         }
     }
     out->confidence = display_value(out->confidence);
+    // PC exposes clean evidence as trusted when it agrees with the accepted
+    // BPM. Shock cooldown guards transitions/support, not ongoing phase tracking.
+    if (d->held_bpm == out->candidate_bpm) out->trusted = evidence_quality >= 1;
     float loss_elapsed = d->have_loss_time ? fmaxf(0.001f, (float)(time - d->loss_last_time)) : 0.5f;
     d->loss_last_time = time;
     d->have_loss_time = true;
-    if (control.hard_lock || !d->held_bpm ||
+    if (control.hard_lock || !d->held_bpm || d->held_bpm != previously_held ||
         held_score_ratio(out->scores, d->held_bpm) >= LOST_MIN_HELD_RATIO) d->lost_seconds = 0;
     else d->lost_seconds += loss_elapsed;
     out->lost_seconds = d->lost_seconds;

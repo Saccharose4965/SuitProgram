@@ -9,7 +9,6 @@
 //
 // Peripheral summary
 // - SPI2 (HSPI): OLED (SSD1309), microSD, up to 3× MPU6500
-// - UART0: GPS NEO-6M → GPIO3 (RX0) / GPIO1 (TX0)  → console must be disabled
 // - I2S TX: MAX98357A (left mono) | I2S RX: INMP441 microphone
 // - ADC1: Hall A/B (GPIO34/35) + buttons ladder (GPIO39 VN)
 // - WS2815 LED strips on GPIO32/33 (12 V power via level shifter)
@@ -24,7 +23,6 @@
 // Use the classic header paths; the includes are provided by split components.
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
-#include "driver/uart.h"
 #include "driver/i2s_std.h"
 
 // New ADC lives in esp_adc component on your snapshot
@@ -94,14 +92,6 @@ extern "C" {
 #define PIN_BUTTONS_LADDER 39    // SENSOR_VN → ADC1_CH3
 
 // ======================================================================
-// UART — GPS NEO-6M on UART0
-// ======================================================================
-#define HW_GPS_UART_NUM    UART_NUM_0
-#define HW_GPS_TXD         1     // → GPS RX
-#define HW_GPS_RXD         3     // ← GPS TX
-#define HW_GPS_BAUD_DEFAULT 155200
-
-// ======================================================================
 // Convenience aliases / ADC channels
 // ======================================================================
 #define HW_BUTTONS_ADC_CH  ADC1_CHANNEL_3  // GPIO39
@@ -146,11 +136,6 @@ static inline esp_err_t hw_spi2_add_mpu(gpio_num_t cs_pin, spi_device_handle_t* 
 // ======================================================================
 esp_err_t hw_i2s_init_tx_16bit_mono_48k(void);
 esp_err_t hw_i2s_init_rx_24bit_mono_48k(void);
-
-// ======================================================================
-// UART — GPS
-// ======================================================================
-esp_err_t hw_uart_gps_init(int baud);
 
 // ======================================================================
 // ADC — Hall sensors and buttons

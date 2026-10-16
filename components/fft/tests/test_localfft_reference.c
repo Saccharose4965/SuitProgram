@@ -175,9 +175,68 @@ static void test_phase_replay(void)
     puts("1200-step PC/ESP phase and beat-clock replay passed.");
 }
 
+static void test_bpm_replay(void)
+{
+    detector_t port = {0};
+    BpmHoldState pc = {0};
+    ScoreHistory history = {0};
+    double time = 0, lost = 0, loss_time = 0;
+    bool have_loss_time = false;
+    const double hop = DETECTOR_HOP_FRAMES * FFT_SIZE / (double)SAMPLE_RATE;
+    int stops = 0, switches = 0;
+    for (int n = 0; n < 900; ++n) {
+        int stage = n % 300;
+        int bpm = stage < 70 ? 120 : stage < 140 ? 145 :
+                  stage < 220 ? ((n & 1) ? 100 : 130) : 105;
+        if (stage == 35 || stage == 36) bpm = 138; // short challenger
+        float scores[BPM_COUNT]; double reference[BPM_COUNT], mean[BPM_COUNT];
+        for (int i = 0; i < BPM_COUNT; ++i) scores[i] = .65f / 78;
+        scores[bpm - BPM_MIN] = .25f;
+        scores[bpm - BPM_MIN + 1] = .10f;
+        for (int i = 0; i < BPM_COUNT; ++i) reference[i] = scores[i];
+        time += (n % 67 == 66) ? 2 * hop : hop; // overdue worker
+        score_history_push(&history, reference, time, hop);
+        double variance, consistency, confidence, evidence, final_bpm;
+        double coverage = score_history_stats(&history, mean, &variance, &consistency);
+        int pair = strongest_pair(mean), final_pair, trusted;
+        int candidate = pair + (mean[pair + 1] > mean[pair]);
+        double previous = pc.have ? pc.bpm : 0;
+        bool soft = n >= 300 && n < 600;
+        update_final_bpm_from_accum(BPM_MIN + candidate, pair, mean[pair] + mean[pair+1],
+            consistency, variance, time, 1, soft, &pc, &final_bpm, &final_pair,
+            &confidence, &evidence, &trusted);
+        bool changed = pc.have && pc.bpm != previous;
+        switches += changed;
+        lost = update_lost_pulse(lost, have_loss_time ? time - loss_time : .5,
+            0, pc.have, held_score_ratio(mean, final_bpm), changed);
+        loss_time = time; have_loss_time = true;
+        bool stopped = pc.have && lost >= AUTO_STOP_LOST_SECONDS;
+        if (stopped) {
+            ++stops; bpm_hold_reset(&pc); lost = 0; have_loss_time = false;
+        }
+        detector_result_t out;
+        detector_update(&port, scores, time, (detector_control_t){.phase_lock=soft}, &out);
+        assert(out.held_bpm == (pc.have ? pc.bpm : 0));
+        assert(out.stopped == stopped);
+        assert(fabs(out.history_coverage - coverage) < 1e-5);
+        assert(fabs(out.variance - variance) < 1e-6);
+        assert(fabs(out.consistency - consistency) < 1e-5);
+        if (!stopped) {
+            if (out.trusted != trusted) fprintf(stderr, "step=%d trusted=%d/%d variance=%.9g/%.9g consistency=%.9g/%.9g cooldown=%.9g/%.9g evidence=%.9g/%.9g\n", n, out.trusted, trusted, out.variance, variance, out.consistency, consistency, port.cooldown, pc.shockCooldown, out.evidence, evidence);
+            assert(out.trusted == trusted);
+            assert(fabs(out.confidence - confidence) < 1e-4);
+            assert(fabs(out.evidence - evidence) < 1e-4);
+            assert(fabs(out.lost_seconds - lost) < 1e-4);
+        }
+    }
+    assert(stops > 0 && switches > 5);
+    puts("900-step PC/ESP BPM replay passed: acquisition, rejection, switching, soft lock, delayed jobs, loss/reacquisition.");
+}
+
 int main(void)
 {
     test_scores_and_phase(); test_filter_reference(); test_readiness_reference();
     test_phase_replay();
+    test_bpm_replay();
     puts("Actual localFFT reference regressions passed.");
 }

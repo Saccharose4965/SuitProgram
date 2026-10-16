@@ -55,7 +55,7 @@ void system_state_set_fft_status(bool running, uint16_t bpm_centi);
 // Master-control HUD status is owned by the shell/service layer.
 void system_state_set_master_control(system_master_ctrl_t state, bool link_active);
 
-// Time validity is owned by GPS.
+// Time validity is supplied by the shell/link status publisher.
 void system_state_set_time(bool valid, uint8_t hours, uint8_t minutes);
 
 // Helper for HUD rendering.

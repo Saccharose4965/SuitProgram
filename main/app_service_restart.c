@@ -21,7 +21,6 @@ typedef enum {
     RESTART_ITEM_FFT_STOP,
     RESTART_ITEM_FILE_RX_STOP,
     RESTART_ITEM_TODO_LINK,
-    RESTART_ITEM_TODO_GPS,
     RESTART_ITEM_TODO_ORI,
     RESTART_ITEM_TODO_POWER,
 } restart_item_id_t;
@@ -46,7 +45,6 @@ static const restart_entry_t s_entries[] = {
     { "FFT stop",        RESTART_ITEM_FFT_STOP },
     { "FileRX stop",     RESTART_ITEM_FILE_RX_STOP },
     { "Link restart*",   RESTART_ITEM_TODO_LINK },
-    { "GPS restart*",    RESTART_ITEM_TODO_GPS },
     { "IMU restart*",    RESTART_ITEM_TODO_ORI },
     { "Power restart*",  RESTART_ITEM_TODO_POWER },
 };
@@ -132,10 +130,6 @@ static void restart_do_action(shell_app_context_t *ctx, restart_item_id_t id)
 
         case RESTART_ITEM_TODO_LINK:
             restart_set_status("Link: need stop/deinit API", ESP_ERR_NOT_SUPPORTED);
-            return;
-
-        case RESTART_ITEM_TODO_GPS:
-            restart_set_status("GPS: need stop/deinit API", ESP_ERR_NOT_SUPPORTED);
             return;
 
         case RESTART_ITEM_TODO_ORI:

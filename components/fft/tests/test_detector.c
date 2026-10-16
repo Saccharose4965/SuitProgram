@@ -203,6 +203,22 @@ static void test_loss_and_scheduling(void)
     assert(out.held_bpm == 120 && d.count < DETECTOR_HISTORY);
 }
 
+static void test_capture_gap(void)
+{
+    detector_t d = {0};
+    detector_control_t c = {0};
+    detector_result_t out = feed(&d, c, 120, 30, HOP);
+    assert(out.held_bpm == 120);
+    detector_discontinuity(&d);
+    assert(d.held_bpm == 120 && d.count == 0 && !d.have_time);
+    out = feed(&d, c, 120, 1, 60);
+    assert(out.held_bpm == 120 && out.lost_seconds == 0 && !out.stopped);
+    out = feed(&d, c, 120, 12, HOP);
+    assert(out.held_bpm == 120 && out.trusted);
+    detector_reset(&d);
+    assert(d.held_bpm == 0);
+}
+
 static double phase_distance(double beat_time, int bpm, double desired)
 {
     double error = beat_time * bpm / 60 - desired;
@@ -235,7 +251,7 @@ static void test_phase(void)
 
 int main(void)
 {
-    test_comb(); test_filter(); test_hold(); test_loss_and_scheduling(); test_phase();
+    test_comb(); test_filter(); test_hold(); test_loss_and_scheduling(); test_capture_gap(); test_phase();
     puts("All detector regressions passed.");
     return 0;
 }

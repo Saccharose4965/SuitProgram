@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_check.h"
 
 #ifndef MIC_REC_RATE_HZ
 #define MIC_REC_RATE_HZ 44100 // match playback path to avoid resample issues

@@ -4,13 +4,14 @@
 
 #define FFT_DISPLAY_WIDTH 128
 #define FFT_DISPLAY_HEIGHT 64
-#define FFT_DISPLAY_HISTORY 320
+#define FFT_DISPLAY_HISTORY FFT_DISPLAY_WIDTH
+#define FFT_DISPLAY_FRAMES_PER_COLUMN 2
 #define FFT_DISPLAY_ROWS 32
 #define FFT_DISPLAY_BYTES (FFT_DISPLAY_WIDTH * FFT_DISPLAY_HEIGHT / 8)
 
 typedef struct {
     float logmag[FFT_CFG_SIZE / 2 + 1];
-    float magnitudes[FFT_DISPLAY_ROWS]; // mean raw magnitude, full band
+    float magnitudes[FFT_DISPLAY_ROWS]; // peak raw magnitude per frequency group
     fft_sync_state_t status;
     float decision; // uncapped 0..1.1 readiness, like localFFT
     float clock_origin; // absolute base-BPM phase of the actual output anchor
@@ -21,6 +22,8 @@ typedef struct {
     uint8_t spectrogram[FFT_DISPLAY_HISTORY][FFT_DISPLAY_ROWS];
     float confidence[FFT_DISPLAY_HISTORY], evidence[FFT_DISPLAY_HISTORY];
     unsigned write, count;
+    unsigned pending_frames;
+    uint8_t pending[FFT_DISPLAY_ROWS];
     fft_display_packet_t latest;
     detector_result_t detector;
 } fft_display_t;

@@ -30,7 +30,7 @@ over adding alternate entry points or direct hardware access from apps.
 
 The project is an advanced work in progress. The main areas that still need
 stabilization are communication security, audio/shared-resource ownership,
-FFT/BPM reliability, show audio integration, real power/GPS integration, and
+FFT/BPM reliability, show audio integration, real power integration, and
 reproducible builds.
 See `Current TODO / roadmap` near the end of this file before making broad
 changes.
@@ -103,7 +103,6 @@ Startup sequence (exact current flow)
 Intentionally commented out in startup:
 - `led_modes_start()`
 - `power_monitor_start()`
-- `gps_services_start(9600)`
 
 Important:
 - `shell_setup_link()` does not mount SD and does not start `audio_rx`.
@@ -204,7 +203,6 @@ Settings:
 
 Simulations:
 - Back
-- GPS
 - FFT
 - Fluid
 - Arm Pose
@@ -240,7 +238,6 @@ Misc:
 - Bad Apple
 
 Current menu stubs (not registered as apps):
-- `gps`
 - `call`
 
 Selecting these logs an unknown app warning and remains in menu.
@@ -414,9 +411,6 @@ ADC:
 
 LED strips:
 - GPIO `32`, GPIO `33`
-
-GPS UART:
-- UART0 TX `1`, RX `3`
 
 SD mount point:
 - `/sdcard`
@@ -618,7 +612,6 @@ Highest-risk implementation debt:
   still unauthenticated.
 - The shared SPI registry can retain an IMU handle after the orientation service
   removes that device for a lower-speed retry.
-- GPS uses UART0 console pins and globally disables logging from its task.
 - Link startup state can be overwritten back to `CONNECTING` after successful
   initialization. HUD battery percentages are placeholders.
 - Show playback now takes an exclusive LED-output lease and restores the prior
@@ -641,7 +634,7 @@ Repository layout
   root, not a reusable component API. Do not make components depend on it.
 
 `components/`:
-- Reusable modules: hardware, oled, input, audio, bt_audio, fft, link, gps,
+- Reusable modules: hardware, oled, input, audio, bt_audio, fft, link,
   orientation, storage, games, etc.
 - Convention: implementation `.c` files and `CMakeLists.txt` at component root;
   first-party `.h` files in `include/`; tests in `tests/` where present.
@@ -697,13 +690,13 @@ Structure audit (after the FFT header move):
 
 Known caveats (current code)
 ----------------------------
-- `gps` and `call` are menu stubs with no registered shell app. `message` is
+- `call` is a menu stub with no registered shell app. `message` is
   registered and partially implemented.
 - Global long `BC combo` restart is reserved by shell and preempts app-local
   handling.
-- `led_modes_start()`, `power_monitor_start()`, and `gps_services_start(9600)`
+- `led_modes_start()` and `power_monitor_start()`
   are not started during shell boot. LED modes start on demand from the LED app;
-  power and GPS remain unwired.
+  power remains unwired.
 - The show player performs silent timeline playback and multi-suit transport;
   synchronized `track.wav` audio is not wired yet.
 - Current battery percentages are placeholders, not trustworthy measurements.
@@ -726,7 +719,6 @@ Stabilize security, protocols, and hardware first:
   loading/rendering inside Wi-Fi/ESP-NOW callbacks. Apply the same boundary to
   remaining callback-driven app protocols.
 - [ ] Fix the shared-SPI stale device handle during IMU speed fallback.
-- [ ] Move GPS away from UART0 console pins and remove the global log shutdown.
 - [ ] Fix startup connection-state ordering and distinguish placeholders from
   live status values.
 
@@ -815,7 +807,7 @@ Multi-suit show system:
 
 Structure, tests, and unfinished features:
 - [ ] Add host tests for link/telemetry codecs, LED layout mapping, show packages,
-  menu/registry consistency, NMEA parsing, and audio/service state machines.
+  menu/registry consistency and audio/service state machines.
 - [ ] Add CI, a formatter configuration, and a warning baseline.
 - [ ] Split large mixed-responsibility files internally: shell runtime/registry/
   boot/link bridge; LED driver/mapping/color/effects; Master Control protocol/
@@ -823,7 +815,7 @@ Structure, tests, and unfinished features:
   controllers.
 - [ ] Audit and then archive/remove excluded backups, copied C files, old
   entrypoints, Python bytecode, and stale sdkconfig copies.
-- [ ] Replace placeholder menu icons and complete real GPS, power logging,
+- [ ] Replace placeholder menu icons and complete power logging,
   message/call, Pong synchronization, game sound, and service-restart behavior.
 - [ ] Add real battery voltage/current measurements before broadcasting suit
   telemetry.
@@ -864,30 +856,16 @@ Power / thermal notes (legacy hardware sizing):
 - 4-hour sizing estimate in original notes: roughly ~160 Wh.
 - Keep LED data level-shifted (74HCT family) and grounds shared between 12 V and logic rails.
 
-Open TODO / wishlist (legacy backlog)
--------------------------------------
+Open TODO / wishlist
+---------------------
 
-- general optimizations and better cpu ressource management
-- code cleanup: what are apps doing in main ? why are there other patches of code, bad structure
-- fix or change fft method (confidence, autosync with single phase peak musics, ...)
-- Menu/UI: replace placeholder icons
+- Menu/UI: replace placeholder icons with ascii-art
 - games sfx, conflict with audio player playing sfx ?
-- fix message and call, esp communication in general
-- fix Pong host election/ACK UI
-- handcrafted led animations on specific music
 
-Not yet wired:
-- GPS time and position
-- Power: integrate current reading and store every now and then in sd card
-- accelerometer synth (theremin like? idk)
-- legs
-- gesture menu selection ?
+- accelerometer synth (theremin like? idk) !
+- gesture menu selection ? (trigger things with limb position/movement)
 
-Extras:
 - do spatial aware led animations based on limb orientation
-- wide putin
-- create audio file that when displayed on the spectrogram, spell out words, as hidden messages
 - tron
-- doom
 - pacman
 - asteroids game !

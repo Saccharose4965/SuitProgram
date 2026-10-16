@@ -39,5 +39,5 @@ idf_component_register(
         "shell_audio.c"
         "shell_profiler.c"
     INCLUDE_DIRS "."
-    REQUIRES state input oled hw ui_shell flappy twenty48 tetris audio audio_player fft keyboard storage_sd gps led_modes led_layout power link audio_rx bt_audio snake pong threedee fluid orientation bad_apple calculator logo microphone telemetry show
+    REQUIRES state input oled hw ui_shell flappy twenty48 tetris audio audio_player fft keyboard storage_sd led_modes led_layout power link audio_rx bt_audio snake pong threedee fluid orientation bad_apple calculator logo microphone telemetry show
 )

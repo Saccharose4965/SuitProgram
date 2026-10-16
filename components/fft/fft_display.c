@@ -20,20 +20,25 @@ void fft_display_reset(fft_display_t *d)
 
 void fft_display_push(fft_display_t *d, const fft_display_packet_t *p)
 {
-    // localFFT's linear full-band spectrogram and fixed magnitude transfer.
-    // Average bins into 32 rows; the desktop has enough pixels for individual bins.
+    // Monochrome OLED: retain peaks, never average/interpolate time columns.
+    // Display-only 40 dB range, with an absolute floor to keep silence black.
+    float peak = 0;
+    for (int row = 0; row < FFT_DISPLAY_ROWS; ++row)
+        peak = fmaxf(peak, clamp(p->magnitudes[row], 1e6f));
+    float threshold = fmaxf(.01f, peak * .01f);
     for (int row = 0; row < FFT_DISPLAY_ROWS; ++row) {
-        float norm = clamp(p->magnitudes[row] / 50, 1);
-        float level = norm <= .05f ? norm * 6 : .3f + (norm - .05f) * (.7f / .95f);
-        level = log10f(1 + 9 * level);
-        d->spectrogram[d->write][row] = (uint8_t)(clamp(level, 1) * 255);
+        if (isfinite(p->magnitudes[row]) && p->magnitudes[row] >= threshold)
+            d->pending[row] = 255;
     }
+    d->latest = *p;
+    if (++d->pending_frames < FFT_DISPLAY_FRAMES_PER_COLUMN) return;
+    memcpy(d->spectrogram[d->write], d->pending, sizeof(d->pending));
+    memset(d->pending, 0, sizeof(d->pending));
+    d->pending_frames = 0;
     d->confidence[d->write] = clamp(p->decision, 1.1f);
     d->evidence[d->write] = clamp(p->status.evidence, 1.1f);
     d->write = (d->write + 1) % FFT_DISPLAY_HISTORY;
     if (d->count < FFT_DISPLAY_HISTORY) ++d->count;
-    d->latest = *p;
-
 }
 
 static void pixel(uint8_t *fb, int x, int y)
@@ -58,7 +63,7 @@ static void line(uint8_t *fb, int x0, int y0, int x1, int y1)
 
 static int history_slot(const fft_display_t *d, int column)
 {
-    // Left-padded 320-frame timeline; confidence and spectrogram use this together.
+    // One stored column per screen column; both histories share the same groups.
     if (column < FFT_DISPLAY_HISTORY - (int)d->count) return -1;
     return (d->write + column) % FFT_DISPLAY_HISTORY;
 }
@@ -66,19 +71,10 @@ static int history_slot(const fft_display_t *d, int column)
 static void spectrogram(const fft_display_t *d, uint8_t *fb, int x, int y, int w, int h)
 {
     for (int col = 0; col < w; ++col) {
-        int first = col * FFT_DISPLAY_HISTORY / w;
-        int end = (col + 1) * FFT_DISPLAY_HISTORY / w;
+        int slot = history_slot(d, col * FFT_DISPLAY_HISTORY / w);
+        if (slot < 0) continue;
         for (int row = 0; row < h; ++row) {
-            unsigned total = 0;
-            int r0 = row * FFT_DISPLAY_ROWS / h;
-            int r1 = (row + 1) * FFT_DISPLAY_ROWS / h;
-            if (r1 <= r0) r1 = r0 + 1;
-            for (int t = first; t < end; ++t) {
-                int slot = history_slot(d, t);
-                if (slot >= 0) for (int r = r0; r < r1; ++r) total += d->spectrogram[slot][r];
-            }
-            unsigned value = total / ((end - first) * (r1 - r0));
-            if (value > 128)
+            if (d->spectrogram[slot][row * FFT_DISPLAY_ROWS / h])
                 pixel(fb, x + col, y + h - 1 - row);
         }
     }

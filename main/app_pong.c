@@ -3,7 +3,7 @@
 #include "pong.h"
 
 const shell_legend_t PONG_LEGEND = {
-    .slots = { SHELL_ICON_PAUSE, SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_REFRESH },
+    .slots = { SHELL_ICON_LEFT, SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_SELECT },
 };
 
 void pong_app_init_wrapper(shell_app_context_t *ctx)
@@ -17,6 +17,12 @@ void pong_handle_input_wrapper(shell_app_context_t *ctx, const input_event_t *ev
 {
     (void)ctx;
     pong_app_handle_input(ev);
+}
+
+void pong_app_deinit_wrapper(shell_app_context_t *ctx)
+{
+    (void)ctx;
+    pong_app_deinit();
 }
 
 void pong_tick_wrapper(shell_app_context_t *ctx, float dt_sec)

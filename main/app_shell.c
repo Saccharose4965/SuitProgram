@@ -23,7 +23,6 @@
 
 #include "hw.h"
 #include "oled.h"
-#include "gps.h"
 #include "led_layout.h"
 #include "led_modes.h"
 #include "logo.h"
@@ -436,7 +435,7 @@ static void link_frame_handler(link_msg_type_t type, const uint8_t *src_mac,
         show_runtime_handle_link_frame(type, src_mac, payload, len);
         master_control_handle_link_frame(type, src_mac, payload, len);
     } else if (type == LINK_MSG_GAME && payload && len >= 2){
-        pong_handle_link_frame(type, payload, len);
+        pong_handle_link_frame(type, src_mac, payload, len);
     } else if (type == LINK_MSG_INFO && payload && len >= 9){
         // Versioned system_state snapshot
         uint8_t ver = payload[0];
@@ -762,7 +761,7 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
         .legend = &PONG_LEGEND,
         .init   = pong_app_init_wrapper,
-        .deinit = NULL,
+        .deinit = pong_app_deinit_wrapper,
         .tick   = pong_tick_wrapper,
         .handle_input = pong_handle_input_wrapper,
         .draw   = pong_draw_wrapper,
@@ -1093,7 +1092,6 @@ void app_shell_start(void)
     // (void)power_monitor_start(); // temporarily disabled
     shell_setup_link(); // TODO: better names for these setup stages? and sepaate components for each service init? 
     ESP_LOGI(TAG, "stage: link setup done");
-    // gps_services_start(9600); // temporarily disabled for now
     shell_seed_initial_system_state();
     shell_init_input_and_apps();
     shell_profiler_init();

@@ -33,8 +33,9 @@ int main(void)
     // Energy only above 11 kHz must reach the top of the graph. The old view
     // accidentally covered only the lower 256 FFT bins (half the frequency range).
     for (int i = 16; i < FFT_DISPLAY_ROWS; ++i) packet.magnitudes[i] = 50;
-    for (int i = 0; i < 340; ++i) fft_display_push(&display, &packet);
-    assert(display.count == 320 && display.write == 20);
+    for (int i = 0; i < (FFT_DISPLAY_HISTORY + 20) * FFT_DISPLAY_FRAMES_PER_COLUMN; ++i)
+        fft_display_push(&display, &packet);
+    assert(display.count == FFT_DISPLAY_HISTORY && display.write == 20);
     assert(display.confidence[19] == 1.08f && display.evidence[19] == 1.05f);
     assert(display.spectrogram[19][31] == 255 && display.spectrogram[19][0] == 0);
     draw(FFT_VIEW_SPECTROGRAM, guarded.fb);
@@ -44,6 +45,8 @@ int main(void)
     // same rightmost history slot, with older data retained on rollover.
     packet.decision = .2f; packet.status.evidence = .3f;
     memset(packet.magnitudes, 0, sizeof(packet.magnitudes));
+    fft_display_push(&display, &packet);
+    assert(display.write == 20); // incomplete group does not scroll
     fft_display_push(&display, &packet);
     assert(display.confidence[20] == .2f && display.evidence[20] == .3f);
     assert(display.spectrogram[20][31] == 0 && display.spectrogram[19][31] == 255);
@@ -61,6 +64,18 @@ int main(void)
     assert(fabsf(fft_display_clock_phase(.67f, .17f, 1) - .5f) < 1e-6f);
     assert(fabsf(fft_display_clock_phase(.67f, .17f, 2)) < 1e-6f);
     assert(fabsf(fft_display_clock_phase(.67f, .17f, 3) - .5f) < 1e-6f);
+    fft_display_reset(&display);
+    memset(packet.magnitudes, 0, sizeof(packet.magnitudes));
+    packet.magnitudes[5] = .05f; // moderate input must be visible
+    packet.magnitudes[6] = NAN;
+    fft_display_push(&display, &packet);
+    packet.magnitudes[5] = 0;
+    fft_display_push(&display, &packet);
+    assert(display.count == 1 && display.spectrogram[0][5] == 255);
+    assert(display.spectrogram[0][6] == 0 && display.spectrogram[0][7] == 0);
+    draw(FFT_VIEW_SPECTROGRAM, guarded.fb);
+    assert(pixels(guarded.fb, 127, 0, 128, 64) == 2);
+    assert(pixels(guarded.fb, 0, 0, 127, 64) == 0);
     fft_display_reset(&display);
     assert(!display.count && !display.detector.phase_valid);
     draw(FFT_VIEW_PHASE_COMB, guarded.fb);

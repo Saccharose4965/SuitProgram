@@ -179,6 +179,7 @@ void snake_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int
 extern const shell_legend_t SNAKE_LEGEND;
 
 void pong_app_init_wrapper(shell_app_context_t *ctx);
+void pong_app_deinit_wrapper(shell_app_context_t *ctx);
 void pong_handle_input_wrapper(shell_app_context_t *ctx, const input_event_t *ev);
 void pong_tick_wrapper(shell_app_context_t *ctx, float dt_sec);
 void pong_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
