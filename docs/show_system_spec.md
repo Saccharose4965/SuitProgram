@@ -396,7 +396,10 @@ Current torso and arm IDs:
 - `right_upper_arm`
 - `right_forearm`
 
-Reserved future IDs for legs:
+Implemented leg section IDs (renderer and editor). Physical firmware layout
+support is incomplete: defaults contain only torso/arms, and the current
+24-section capacity cannot hold the full 33-section suit. These IDs do not
+automatically configure LED counts, wiring order or output pins:
 
 - `left_thigh_front`
 - `left_thigh_back`

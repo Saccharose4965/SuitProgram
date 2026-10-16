@@ -28,12 +28,11 @@ The shell app contract (`init`, `deinit`, `tick`, `handle_input`, `draw`) and
 the spatial LED layout are strong foundations. Prefer extending those contracts
 over adding alternate entry points or direct hardware access from apps.
 
-The project is an advanced work in progress. The main areas that still need
-stabilization are communication security, audio/shared-resource ownership,
-FFT/BPM reliability, show audio integration, real power integration, and
-reproducible builds.
-See `Current TODO / roadmap` near the end of this file before making broad
-changes.
+The project is an advanced work in progress. FFT tracking and show playback
+are now reported working well on hardware. Preserve that baseline while
+completing physical leg mapping, validating multi-suit behavior, and addressing
+security, power calibration and reproducible builds deliberately.
+See `Current status and scoped backlog` before making broad changes.
 
 
 Build and flash
@@ -237,8 +236,8 @@ Misc:
 - Calculator
 - Bad Apple
 
-Current menu stubs (not registered as apps):
-- `call`
+Call and message are registered shell apps; validate their individual audio
+and transport routes on hardware before assuming all combinations work.
 
 Selecting these logs an unknown app warning and remains in menu.
 
@@ -688,143 +687,76 @@ Structure audit (after the FFT header move):
   when working on those modules; more folders alone will not fix the coupling.
 
 
-Known caveats (current code)
-----------------------------
-- `call` is a menu stub with no registered shell app. `message` is
-  registered and partially implemented.
-- Global long `BC combo` restart is reserved by shell and preempts app-local
-  handling.
-- `led_modes_start()` and `power_monitor_start()`
-  are not started during shell boot. LED modes start on demand from the LED app;
-  power remains unwired.
-- The show player performs silent timeline playback and multi-suit transport;
-  synchronized `track.wav` audio is not wired yet.
-- Current battery percentages are placeholders, not trustworthy measurements.
+Current status and scoped backlog (2026-10-16)
+---------------------------------------------
+This replaces the old speculative roadmap. An unchecked idea is not proof of a
+bug. Preserve working behavior; require a reproducer, measured bottleneck or
+explicit feature request before changing architecture.
 
+Working baseline:
+- FFT/BPM/phase: user reports the latest ESP implementation works very well.
+  PC/ESP host replays cover hold/loss and phase/clock behavior. Do not restart
+  detector research or tune thresholds without a concrete failing recording.
+- Shows: user reports playback works very well. Audio ownership, track.wav,
+  configurable delay, role coordination and late join already exist.
+- Call/message are registered apps, not menu stubs. Their hardware behavior
+  still needs explicit testing before claiming every route works.
+- Pong multiplayer is implemented and passes simulated loss/jitter tests;
+  physical two-suit validation is still pending.
+- Package validation, runtime/role tests, editor export tests and PC/C spatial
+  parity tests exist. Do not list them as entirely unimplemented.
 
-Current TODO / roadmap
-----------------------
-Stabilize security, protocols, and hardware first:
-- [ ] Rotate/remove committed Wi-Fi credentials and establish an untracked or
-  provisioned secrets workflow.
-- [ ] Pin the ESP-IDF/toolchain version, add a repeatable bootstrap/environment
-  check, and move stable configuration into `sdkconfig.defaults`.
-- [ ] Replace telemetry packet offset logic with one versioned encode/decode
-  implementation used by both sender and receiver.
-- [ ] Validate upload size, bounds, filename, source, sequence, timeout, and
-  completion state; reject traversal and malformed packets.
-- [x] Fix framed UDP receive, the send-before-ACK-clear race, and ACK matching.
-- [ ] Define authentication/encryption expectations for suit control traffic.
-- [x] Queue show-player network callback work into its service queue instead of
-  loading/rendering inside Wi-Fi/ESP-NOW callbacks. Apply the same boundary to
-  remaining callback-driven app protocols.
-- [ ] Fix the shared-SPI stale device handle during IMU speed fallback.
-- [ ] Fix startup connection-state ordering and distinguish placeholders from
-  live status values.
+Next: legs in authored shows
+- [ ] Complete the physical leg layout. Show section IDs/groups and editor leg
+  geometry exist, but firmware defaults and saved jonas/tom layouts only cover
+  chestplate/arms. LED_LAYOUT_MAX_SECTIONS is 24; the full geometry has 33.
+- [ ] Confirm leg LED counts, strip order, direction and output connections
+  before updating mappings. Never append guessed counts to a working layout.
+- [ ] Check the total pixel budget (currently 721), section limits and stack
+  allocations together; increasing a struct limit alone is not a safe fix.
+- [ ] Test all leg targets and spatial coordinates against the editor, then
+  validate on one suit before rolling out to all three.
+- [ ] Correct the show specification's stale "reserved future" leg wording once
+  the full physical mapping is supported and verified.
 
-Make ownership and lifecycle explicit:
-- [x] Establish exclusive LED output ownership between base beat/continuous
-  renderers and authored show playback. Add a compositor only if simultaneous
-  base+show blending becomes a real requirement.
-- [ ] Add an audio arbiter/lease model for FFT capture, microphone recording,
-  local playback, Bluetooth playback, calls, and sound effects.
-- [ ] Add synchronized/refcounted SD mounting and prevent remount/unmount while
-  files are in use.
-- [ ] Make complete OLED command/data transfers atomic, ideally with the shell
-  as the only display owner.
-- [ ] Replace cross-core `volatile` stop/state flags with task notifications,
-  event groups, locks, or atomics as appropriate.
-- [ ] Give services consistent `start` / `stop` / `status` behavior and avoid
-  forgetting task handles before a task has actually exited.
-- [ ] Make app descriptors the routing source of truth and validate/derive menu
-  IDs so dead entries cannot drift from the registry.
+Focused verification, not rewrites:
+- [ ] Two-suit Pong: pairing order, disconnect/rejoin, collision correction and
+  opposite-side controls on hardware.
+- [ ] Three-suit shows: occupied-role swap, joining mid-song, full-song sync.
+  Existing code/tests are not a substitute for this physical rehearsal.
+- [ ] Preserve real failing logs/recordings when issues recur. Profile the
+  failing path before changing task priorities, Bluetooth or LED scheduling.
+- [ ] Verify power sensing against actual wiring/calibration before trusting
+  battery telemetry. Current power code uses a placeholder divider ratio and
+  repurposes a Hall ADC input; do not enable it blindly.
 
-Optimize measured hot paths:
-- [x] Send each RMT channel only its configured physical strip length instead of
-  721 pixels on both channels.
-- [x] Precompute logical LED -> strip/physical mappings when the layout changes.
-- [ ] Use `shell_profiler` measurements before doing general CPU/memory cleanup.
-- [ ] Revisit the 16 MB flash partition table for OTA A/B images and useful
-  asset/storage space.
+Security and reproducibility (separate, deliberate work):
+- [ ] Remove tracked credentials through a provisioning/local-config workflow.
+  Credential rotation requires the owner's coordination; do not silently change
+  network access or rewrite Git history.
+- [ ] Record the exact working ESP-IDF revision and local SDK patches so another
+  build reproduces the tested firmware. Do not upgrade the SDK as cleanup.
+- [ ] Decide the trusted-network model. ESP-NOW peers currently use
+  encrypt=false; authentication is a real design question, not an unrequested
+  protocol rewrite.
+- [ ] Audit file-transfer limits/peer validation with targeted tests. Filename
+  sanitization already exists in audio_rx; the old blanket "add validation"
+  task was too vague to justify replacing a working transfer path.
+- [ ] Back up/version the sibling ShowEditor project before committing the
+  firmware-side editor deletions. Those removals remain deliberately unstaged.
 
-FFT/BPM research:
-- [x] Treat the live firmware FFT/BPM/phase pipeline as provisional and use
-  `../localFFT/benchmark` as the decision environment.
-- [ ] Expand the labeled corpus across genres, intros, breakdowns, silence,
-  tempo changes, noisy live input, ambiguous half/double tempo, and transitions
-  between songs.
-- [ ] Add reproducible per-track and transition metrics: convergence time,
-  strict BPM error, false switches, confidence calibration, CPU time, and memory.
-- [x] Make benchmark parameters/configurations explicit so candidate strategies
-  share inputs, preprocessing, windows, and scoring.
-- [x] Automate analysis-window and clean/speech-babble SNR sweeps, cache decoded
-  inputs, resume completed variants, and rank aggregate results.
-- [ ] Replace/confirm synthetic multi-speaker babble with representative real
-  crowd/conversation recordings before choosing the production window length.
-- [ ] Compare tempo strategies against the current accumulated normalized comb
-  score and hold/switch policy; preserve plots/traces for failed cases.
-- [ ] Investigate phase separately from BPM: onset/novelty phase stability,
-  ambiguity scoring, drift, and tracks with multiple plausible peaks.
-- [x] Port the selected PC detector and add reset, forced BPM, automatic/locked
-  phase, independent phase/BPM soft-lock, offbeat and 1x/2x/3x pulse controls.
-- [ ] Decide when automatic phase is trustworthy, when to keep the previous
-  phase, and when to ask the wearer for input.
-- [ ] Validate the port on ESP32: real-time load, heap/stack headroom, capture
-  overflow, latency, task interaction and live-microphone behavior. Start with
-  `docs/fft-detector.md`; compile/host tests do not establish hardware performance.
-
-Multi-suit show system:
-- [ ] Continue the PC editor as the authoring source of truth; do not move its
-  editing complexity into firmware.
-- [x] Move PC authoring code/assets/projects to sibling `../ShowEditor/`; keep the firmware
-  player and shared show-format specification separate.
-- [x] Add saved line/circle formations, inward-facing 3D preview, stage/top camera
-  controls, facing diagram, and matching v1.2 firmware placement. Old line exports
-  remain v1.1. Flash updated firmware before using circle shows.
-- [x] Prepare posed torso/arm coordinates once on v1.2 show load; validate the
-  shared stage/body transforms with PC/C regression tests. Preserve v1.1 behavior.
-- [ ] Give the separate ShowEditor project its own version control/remote before
-  committing the firmware-side editor removals; old files remain in Git history.
-- [x] Extract timeline and preview widgets/worker from `main_window.py`.
-- [ ] Extract inspector/history/audio transport from the remaining window code,
-  preserving project/session behavior and export compatibility.
-- [ ] Refine effect-specific editing, selection, audio transport, timeline UX,
-  preview accuracy, presets, and schema migration/versioning.
-- [x] Complete package bounds validation and CRC checking on firmware.
-- [x] Implement bucketed, allocation-conscious show clip evaluation and spatial
-  LED rendering for the local suit role.
-- [x] Implement suit role selection, master start, ping/pong clock offsets,
-  periodic play/pause/stop transport, late catch-up, and standalone degraded
-  playback when peers disappear.
-- [ ] Add seek controls, reusable shared clock-sync extraction, authenticated
-  control traffic, reconnect stress tests, and measured drift correction over
-  full-length songs.
-- [ ] Integrate `track.wav` ownership/playback and configurable audio delay.
-- [x] Add exporter tests for v1.1 offsets, CRC, timing/color suffixes, and
-  content-derived UID changes.
-- [ ] Add firmware-parser golden/corrupted package tests and deterministic
-  preview/runtime effect parity tests.
-
-Structure, tests, and unfinished features:
-- [ ] Add host tests for link/telemetry codecs, LED layout mapping, show packages,
-  menu/registry consistency and audio/service state machines.
-- [ ] Add CI, a formatter configuration, and a warning baseline.
-- [ ] Split large mixed-responsibility files internally: shell runtime/registry/
-  boot/link bridge; LED driver/mapping/color/effects; Master Control protocol/
-  controller/view; Message storage/capture/transport/UI; show-editor widgets and
-  controllers.
-- [ ] Audit and then archive/remove excluded backups, copied C files, old
-  entrypoints, Python bytecode, and stale sdkconfig copies.
-- [ ] Replace placeholder menu icons and complete power logging,
-  message/call, Pong synchronization, game sound, and service-restart behavior.
-- [ ] Add real battery voltage/current measurements before broadcasting suit
-  telemetry.
-- [x] Implement the first synchronized handcrafted-song runtime through the show
-  system rather than one-off firmware code.
-- [ ] Rehearse it on all physical suits, tune role spacing/effects against the
-  real layouts, and finish synchronized audio.
-
-- random animation should change based on the bpm, every so many beats
+Deferred ideas, not defects or prerequisites:
+- Audio arbiter/leases, global service-lifecycle standardization, replacing all
+  volatile flags, SD refcounting, OLED ownership rewrites, packet-codec
+  consolidation and splitting large modules: only when a specific problem
+  requires it, with regression tests for the affected boundary.
+- OTA repartitioning: only if OTA becomes a requested feature.
+- FFT corpus expansion, alternate algorithms and phase research: optional
+  experiments, not required work on the now-working detector.
+- Editor refactoring/presets, show seek UI, extra games/icons and gesture
+  controls: feature requests, not reliability fixes.
+- Previously asserted IMU stale-handle and startup-order bugs need a fresh
+  code trace/reproducer before being treated as confirmed current failures.
 
 Legacy notes from original README
 ---------------------------------
@@ -835,7 +767,7 @@ Legacy hardware context:
 - Target board: ESP32-WROVER-E (16 MB), flashed over USB-UART at 115200.
 - Known historical MACs: `24:d7:eb:6b:26:40` and `24:d7:eb:6b:26:c8`.
 - SD conventions: mount at `/sdcard`, hidden boot counter file `.rec_counter`.
-- Original parts checklist (historical): ESP32 module, IMUs, microSD, SSD1309 OLED, NEO-6M, INMP441, MAX98357A, WS2815 + 74HCT level shifter, ACS712 + divider, 3S pack + BMS, regulators, hall sensor, ladder buttons, speaker, harness/connectors.
+- Original parts checklist (historical): ESP32 module, IMUs, microSD, SSD1309 OLED, INMP441, MAX98357A, WS2815 + 74HCT level shifter, ACS712 + divider, 3S pack + BMS, regulators, hall sensor, ladder buttons, speaker, harness/connectors.
 
 Extended module inventory (components in tree, not all shell-wired):
 - Storage: SDSPI mount retries at 20/10/5/2/0.4 MHz; directory listing helper; boot counter helper.
