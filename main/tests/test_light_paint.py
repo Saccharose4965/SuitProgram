@@ -138,7 +138,7 @@ int main(void) {
     assert(!arm_pose_canvas((arm_vec3_t){0,0,-1},&x,&y));
     assert(!arm_pose_canvas((arm_vec3_t){NAN,0,1},&x,&y));
     assert(arm_brush_distance(0,0,-1,0,1,0)==0);
-    light_paint_init(NULL); assert(fft_suspended); press(INPUT_BTN_C);busy=true;press(INPUT_BTN_D);
+    light_paint_init(NULL); assert(fft_suspended); press(INPUT_BTN_B);busy=true;press(INPUT_BTN_D);
     assert(s_mode==PAINT_MENU && !s_accept && !claimed);
     busy=false;press(INPUT_BTN_D);assert(s_mode==PAINT_CANVAS && claimed);
     assert(s_xy[1][0]==0 && s_xy[1][1]==0); // waist, not LED bounding-box centre
@@ -163,14 +163,16 @@ int main(void) {
     sensor=unfolded_left;now+=50000;sample=now;light_paint_tick(NULL,.05f);
     assert(s_on_canvas && sends==2);
     now+=300000;light_paint_tick(NULL,.3f);assert(!s_on_canvas);
-    press(INPUT_BTN_A);press(INPUT_BTN_B);assert(s_choice==2);
+    press(INPUT_BTN_A);press(INPUT_BTN_B);press(INPUT_BTN_B);assert(s_choice==2);
     press(INPUT_BTN_D);assert(!s_left_arm && !s_pose.calibrated && !s_painting);
-    press(INPUT_BTN_C);press(INPUT_BTN_D);assert(s_mode==PAINT_PAINTER);
+    press(INPUT_BTN_A);press(INPUT_BTN_A);press(INPUT_BTN_D);assert(s_mode==PAINT_PAINTER);
     sensor=(imu_quat_t){1,0,0,0};sample=now;press(INPUT_BTN_B);press(INPUT_BTN_D);
     sensor=unfolded;now+=50000;sample=now;light_paint_tick(NULL,.05f);
     assert(s_on_canvas && s_painting);
     light_paint_deinit(NULL);light_paint_init(NULL);assert(!s_left_arm);
-    press(INPUT_BTN_B);press(INPUT_BTN_D);assert(s_left_arm && !s_pose.calibrated);
+    press(INPUT_BTN_B);press(INPUT_BTN_B);press(INPUT_BTN_D);assert(s_left_arm && !s_pose.calibrated);
+    press(INPUT_BTN_C);assert(s_choice==2); // C is not list navigation
+    press(INPUT_BTN_B);press(INPUT_BTN_B);assert(s_choice==3); // bounded at Back
 }
 '''
         with tempfile.TemporaryDirectory(prefix='suit-paint-') as tmp:

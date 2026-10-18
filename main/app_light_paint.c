@@ -138,16 +138,16 @@ void light_paint_input(shell_app_context_t *ctx,const input_event_t *ev)
 {
     if(!ev || ev->type!=INPUT_EVENT_PRESS) return;
     s_error=NULL;
-    if(ev->button==INPUT_BTN_A) {
-        if(s_mode==PAINT_MENU) ctx->request_switch("menu_sim",ctx->request_user_data);
-        else {leave_canvas();s_mode=PAINT_MENU;}
+    if(ev->button==INPUT_BTN_A && s_mode!=PAINT_MENU) {
+        leave_canvas();s_mode=PAINT_MENU;
         return;
     }
     if(s_mode==PAINT_MENU) {
-        if(ev->button==INPUT_BTN_B) s_choice=(s_choice+2)%3;
-        if(ev->button==INPUT_BTN_C) s_choice=(s_choice+1)%3;
+        if(ev->button==INPUT_BTN_A && s_choice>0) --s_choice;
+        if(ev->button==INPUT_BTN_B && s_choice<3) ++s_choice;
         if(ev->button==INPUT_BTN_D) {
-            if(s_choice==2) {
+            if(s_choice==3) {if(ctx && ctx->request_switch) ctx->request_switch("menu_sim",ctx->request_user_data);}
+            else if(s_choice==2) {
                 s_left_arm=!s_left_arm;
                 s_pose.calibrated=false; s_painting=false; s_on_canvas=false; ++s_stroke;
             }
@@ -224,6 +224,7 @@ void light_paint_draw(shell_app_context_t *ctx,uint8_t *fb,int x,int y,int w,int
         oled_draw_text3x5(fb,x+2,y+34,s_left_arm?
             (s_choice==2?"> Arm: left":"  Arm: left"):
             (s_choice==2?"> Arm: right":"  Arm: right"));
+        oled_draw_text3x5(fb,x+2,y+44,s_choice==3?"> Back":"  Back");
     } else if(s_mode==PAINT_PAINTER) {
         oled_draw_text3x5(fb,x+2,y+13,!s_pose.calibrated?"Fold arm; B calibrates":s_on_canvas?"Aiming at canvas":"Unfold / aim forward");
         oled_draw_text3x5(fb,x+2,y+23,s_painting?"D: paint OFF (ON now)":"D: paint ON (OFF now)");

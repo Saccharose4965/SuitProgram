@@ -12,8 +12,9 @@
 #include "app_led_support.h"
 
 const shell_legend_t LEDS_LEGEND = {
-    .slots = { SHELL_ICON_LEFT, SHELL_ICON_RIGHT, SHELL_ICON_SELECT, SHELL_ICON_DOWN },
+    .slots = { SHELL_ICON_LEFT, SHELL_ICON_DOWN, SHELL_ICON_RIGHT, SHELL_ICON_SELECT },
 };
+static bool s_speed_editing;
 
 typedef enum {
     LEDS_BACKEND_BEAT = 0,
@@ -201,6 +202,7 @@ static void leds_apply_current_mode(void)
 
 void leds_animations_app_init(shell_app_context_t *ctx)
 {
+    s_speed_editing = false;
     (void)ctx;
     esp_err_t err = led_modes_start();
     if (err != ESP_OK) {
@@ -247,20 +249,31 @@ void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
     if (count == 0) return;
     s_leds.selected = clamp_sel(s_leds.selected, count);
 
+    if (s_speed_editing) {
+        if (ev->button == INPUT_BTN_A || ev->button == INPUT_BTN_C) {
+            s_leds.custom_speed_percent = (uint8_t)clamp_int(
+                (int)s_leds.custom_speed_percent + (ev->button == INPUT_BTN_C ? 10 : -10), 10, 250);
+            led_modes_set_speed_percent(s_leds.custom_speed_percent);
+            return;
+        }
+        s_speed_editing = false;
+        if (ev->button == INPUT_BTN_D) return;
+    }
     if (ev->button == INPUT_BTN_A) {
-        if (s_leds.selected > 0) s_leds.selected--;
+        if (s_leds.selected % 2) s_leds.selected--;
         return;
     }
     if (ev->button == INPUT_BTN_B) {
-        if (s_leds.selected + 1 < count) s_leds.selected++;
+        size_t next = s_leds.selected + 2;
+        s_leds.selected = next < count ? next : s_leds.selected % 2;
+        s_leds.selected = clamp_sel(s_leds.selected, count);
         return;
     }
-    if (ev->button == INPUT_BTN_D &&
-        s_meta[s_leds.selected].kind != LEDS_ENTRY_KIND_CFG_SPEED) {
-        s_leds.selected = (s_leds.selected + 2) % count;
+    if (ev->button == INPUT_BTN_C) {
+        if (!(s_leds.selected % 2) && s_leds.selected + 1 < count) s_leds.selected++;
         return;
     }
-    if (ev->button != INPUT_BTN_C && ev->button != INPUT_BTN_D) {
+    if (ev->button != INPUT_BTN_D) {
         return;
     }
 
@@ -277,10 +290,7 @@ void leds_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
             leds_apply_current_mode();
             break;
         case LEDS_ENTRY_KIND_CFG_SPEED:
-            s_leds.custom_speed_percent = (uint8_t)clamp_int((int)s_leds.custom_speed_percent +
-                                                             ((ev->button == INPUT_BTN_D) ? 10 : -10),
-                                                             10, 250);
-            led_modes_set_speed_percent(s_leds.custom_speed_percent);
+            s_speed_editing = true;
             break;
         case LEDS_ENTRY_KIND_CFG_PLANE_BG:
             s_leds.plane_bg = !s_leds.plane_bg;
@@ -310,6 +320,7 @@ void leds_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, i
     char title[40];
     snprintf(title, sizeof(title), "ANIMATION %u/%u", (unsigned)(first / page_size + 1),
              (unsigned)((count + page_size - 1) / page_size));
+    if (s_speed_editing) snprintf(title, sizeof(title), "SPEED A-/C+ D done");
     oled_draw_text3x5(fb, x, y, title);
     for (size_t i = first; i < count && i < first + page_size; ++i) {
         int col = (int)((i - first) % 2), row = (int)((i - first) / 2);

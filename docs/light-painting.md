@@ -7,8 +7,8 @@ stroke; this is not automatic identification of the person you point at.
 
 ## Controls
 
-- Menu: B/C navigate Painter, Canvas and Arm; D selects or toggles left/right;
-  A returns. Arm defaults to left and is remembered until reboot. Switching
+- Menu: A/B navigate Painter, Canvas, Arm and Back; D selects or toggles left/right.
+  Arm defaults to left and is remembered until reboot. Switching
   arms requires recalibration. This selects the pose convention, not another IMU.
 - Painter: fold the **selected forearm horizontally across the chest**, then B
   calibrates. Unfold toward the target in front. D toggles painting; C changes

@@ -261,10 +261,10 @@ Preferences (`main/app_preferences.c`):
 - `C`: toggle direction icon family
 
 LED Animations (`main/app_leds.c`):
-- `A/B`: move through the combined animation list
-- `C/D`: select a beat-triggered (`beat:*`) or continuous synchronized
-  (`sync:*`) animation; on configuration rows they decrement/increment or
-  toggle the value
+- Two-column grid: `A` left, `B` down (wraps within column), `C` right,
+  `D` selects an animation or toggles a setting.
+- Speed: `D` enters editing, `A/C` decrease/increase, `D` finishes;
+  `B` also leaves editing and moves down. The title indicates edit mode.
 - Configuration rows currently include custom speed plus plane/ring backgrounds
 - This app chooses animation behavior only; source/timing and color are separate
 
@@ -818,6 +818,11 @@ Power / thermal notes (legacy hardware sizing):
 Open TODO / wishlist
 ---------------------
 Progress review (2026-10-19; keep the requests below as the design backlog):
+- Button consistency first pass: animation grid now uses A left/B down/C right/
+  D select; Light Paint's list uses A/B and D with an explicit Back row.
+  Speed still adjusts both ways in a D-entered edit mode. Host controls tests
+  cover column bounds/wrap, selection and speed limits. Other apps still need
+  individual review; gameplay, recording and playback shortcuts are unchanged.
 - Implemented, hardware acceptance pending: Light Paint + shared arm math,
   heading-only Paint calibration, 1.5 m waist-centred target; Arm Synth with
   local/Bluetooth output. See controls above and docs/light-painting.md.
