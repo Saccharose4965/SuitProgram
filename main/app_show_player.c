@@ -260,18 +260,11 @@ void show_player_app_handle_input(shell_app_context_t *ctx, const input_event_t 
                     show_player_set_status("finding roles");
                     return;
                 }
-                if (runtime.master_roles && !runtime.authority && !runtime.owns_leds) {
-                    show_player_set_status("joining show");
-                    return;
-                }
                 const char *slug = s_show.shows[show_idx];
                 esp_err_t err;
                 if (runtime.owns_leds && runtime.authority &&
                     strcmp(runtime.slug, slug) == 0) {
                     err = show_runtime_toggle_master_pause();
-                } else if (runtime.owns_leds && !runtime.authority) {
-                    show_player_set_status("following master");
-                    return;
                 } else {
                     if (runtime.owns_leds) show_runtime_stop(true);
                     err = show_runtime_load(slug, s_show.role_id);

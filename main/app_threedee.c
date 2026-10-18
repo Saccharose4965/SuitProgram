@@ -1,6 +1,6 @@
 #include "app_shell.h"
 #include "orientation_service.h"
-
+#include "app_led_support.h"
 #include "threedee.h"
 
 const shell_legend_t THREEDEE_LEGEND = {
@@ -9,6 +9,7 @@ const shell_legend_t THREEDEE_LEGEND = {
 
 void threedee_app_init_wrapper(shell_app_context_t *ctx)
 {
+    led_ui_fft_set_threedee_app(true);
     if (!ctx) return;
     threedee_set_request_switch(ctx->request_switch, ctx->request_user_data);
     imu_orientation_t *ori = orientation_service_ctx();
@@ -20,6 +21,7 @@ void threedee_app_init_wrapper(shell_app_context_t *ctx)
 
 void threedee_app_deinit_wrapper(shell_app_context_t *ctx)
 {
+    led_ui_fft_set_threedee_app(false);
     (void)ctx;
     threedee_app_deinit();
 }

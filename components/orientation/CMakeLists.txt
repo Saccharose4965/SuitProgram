@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS orientation.c orientation_service.c
+    SRCS orientation.c orientation_service.c arm_pose.c
     INCLUDE_DIRS include
     REQUIRES hw mpu6500
 )

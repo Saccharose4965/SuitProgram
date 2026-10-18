@@ -227,7 +227,7 @@ static void layout_render_preview(const led_layout_config_t *cfg)
 
 static void layout_refresh_preview(void)
 {
-    led_layout_config_t cfg;
+    static EXT_RAM_BSS_ATTR led_layout_config_t cfg;
     led_layout_snapshot(&cfg);
     layout_render_preview(&cfg);
 }
@@ -245,7 +245,7 @@ static void layout_cycle_field(bool next)
 
 static void layout_cycle_section(bool next)
 {
-    led_layout_config_t cfg;
+    static EXT_RAM_BSS_ATTR led_layout_config_t cfg;
     led_layout_snapshot(&cfg);
     layout_clamp_selection(&cfg);
 
@@ -267,7 +267,7 @@ static void layout_cycle_section(bool next)
 
 static void layout_cycle_strip(bool next)
 {
-    led_layout_config_t cfg;
+    static EXT_RAM_BSS_ATTR led_layout_config_t cfg;
     led_layout_snapshot(&cfg);
     if (cfg.strip_count == 0) {
         s_layout_app.strip = 0;
@@ -289,7 +289,7 @@ static void layout_cycle_strip(bool next)
 
 static void layout_apply_edit(bool increment, bool coarse)
 {
-    led_layout_config_t cfg;
+    static EXT_RAM_BSS_ATTR led_layout_config_t cfg;
     led_layout_snapshot(&cfg);
     size_t global_idx = 0;
     const led_layout_section_t *sec = layout_selected_section(&cfg, &global_idx);
@@ -308,7 +308,7 @@ static void layout_apply_edit(bool increment, bool coarse)
         case LED_LAYOUT_FIELD_LENGTH: {
             int delta = coarse ? 8 : 1;
             int next_len = (int)sec->length + (increment ? delta : -delta);
-            if (next_len < 1) next_len = 1;
+            if (next_len < 0) next_len = 0;
             err = led_layout_set_section_length(global_idx, (uint16_t)next_len);
             if (err == ESP_OK) s_layout_app.dirty = true;
             break;
@@ -440,7 +440,7 @@ void led_layout_app_tick(shell_app_context_t *ctx, float dt_sec)
     (void)dt_sec;
 
     if (s_layout_app.preview == LED_LAYOUT_PREVIEW_RUNNER) {
-        led_layout_config_t cfg;
+        static EXT_RAM_BSS_ATTR led_layout_config_t cfg;
         led_layout_snapshot(&cfg);
         const led_layout_section_t *sec = layout_selected_section(&cfg, NULL);
         if (sec) {
@@ -463,7 +463,7 @@ void led_layout_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, in
     (void)h;
     if (!fb) return;
 
-    led_layout_config_t cfg;
+    static EXT_RAM_BSS_ATTR led_layout_config_t cfg;
     led_layout_snapshot(&cfg);
     layout_clamp_selection(&cfg);
 
@@ -493,7 +493,7 @@ void led_layout_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, in
     if (esp_timer_get_time() < s_layout_app.status_until_us && s_layout_app.status[0]) {
         oled_draw_text3x5(fb, x + 2, y + 16, s_layout_app.status);
     } else if (sec) {
-        uint16_t phys_end = (uint16_t)(sec->physical_start + sec->length - 1u);
+        uint16_t phys_end = sec->length ? (uint16_t)(sec->physical_start + sec->length - 1u) : sec->physical_start;
         snprintf(line, sizeof(line), "%.11s %u-%u len%u",
                  strip_name,
                  (unsigned)sec->physical_start,

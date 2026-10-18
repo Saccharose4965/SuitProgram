@@ -365,9 +365,21 @@ FFT (`main/app_fft.c`):
 
 Arm Pose (`main/app_stickman.c`):
 - `A/B`: rotate the figure view left/right
-- `C`: toggle tracked arm left/right
-- `D`: recenter orientation
+- `C`: toggle tracked arm left/right (then recalibrate)
+- `D`: calibrate with the forearm folded horizontally across the chest
 - Renders a simple projected stick figure with the selected arm driven by IMU orientation
+- Shares Light Paint's axes: beam MPU +Y, target reference -X, up +Z.
+  Wrist roll remains visible; the upper arm is estimated, not measured.
+
+Light Paint (`main/app_light_paint.c`):
+- Choose Painter or Canvas; choose left/right arm in the menu (default left).
+- Painter: B calibrates folded, C changes colour, D toggles painting.
+- Canvas: B clears fading trails. Only open canvases accept strokes.
+- Paint uses heading-only calibration (ignores finger-axis roll), with a
+  0.6 x 1.5 m target at 1.5 m, centred on the fixed waist/belt centreline.
+  Update both Painter and Canvas firmware for this coordinate mapping.
+- FFT is suspended while Light Paint is open; pending FFT requests resume on exit.
+- Controls, mounting assumptions and verification: docs/light-painting.md.
 
 Message (`main/app_message.c`):
 - `A`: start/stop mic recording
@@ -375,6 +387,23 @@ Message (`main/app_message.c`):
 - `D`: send the current saved message
 - Recording is forced to the left mic slot
 - Records save to `/sdcard/messages/outbox`; incoming files go to `/sdcard/messages/inbox`
+
+Arm Synth (Simulations, `main/app_synth.c`):
+- Continuous sine wave: uses an already-connected Bluetooth speaker, otherwise
+  the local speaker. Connect through Bluetooth before opening Arm Synth.
+  The title displays the active output. Startup failure/disconnection falls
+  back to local output; it does not repeatedly restart or reconnect Bluetooth.
+  Bluetooth has speaker/codec latency; local output is more responsive.
+- Fold forearm horizontally, B calibrates, D unmutes/mutes, A exits.
+- Elevation controls pitch (~78–622 Hz, horizontal = 220 Hz); sideways aim
+  controls volume. Uses the shared left-arm reference; moving sensor +Y is aim.
+- Starts muted; recalibration mutes. Stale IMU data fades to silence.
+- FFT pauses while open. Existing recording/playback is not interrupted:
+  if audio is busy, close the synth, stop playback, then reopen it.
+- Phase-continuous oscillator, smoothed pitch/gain, small streamed chunks;
+  audio runs outside the UI task. Pitch is continuous, not snapped to notes.
+- Host oscillator test: python3 main/tests/test_synth.py. Hardware sound and
+  gesture feel still require testing; keep speaker volume low for first use.
 
 Keyboard/Fluid/Pong/Snake/Flappy/2048/Tetris:
 - Shell forwards input/tick/draw to their app/component handlers.
@@ -788,14 +817,56 @@ Power / thermal notes (legacy hardware sizing):
 
 Open TODO / wishlist
 ---------------------
+Progress review (2026-10-19; keep the requests below as the design backlog):
+- Implemented, hardware acceptance pending: Light Paint + shared arm math,
+  heading-only Paint calibration, 1.5 m waist-centred target; Arm Synth with
+  local/Bluetooth output. See controls above and docs/light-painting.md.
+- OLED artefact experiment: full-frame refresh is now the default. Every call
+  sends all 1024 panel bytes, even for unchanged frames. Existing app frame
+  rates are unchanged. To compare, menuconfig -> Suit OLED -> changed-region
+  updates; CONFIG_SUIT_OLED_PARTIAL_UPDATES defaults to off. Test scrolling,
+  app transitions and long BT shows before deciding which mode to keep.
+  Host panel-emulation tests cover full/partial updates, clears and stale pixels.
+- Pong audit: authoritative paddle impacts are computed by that paddle's suit;
+  both suits advance the ball locally. The remote side also predicts a bounce
+  for smooth display, then reconciles to the owner's event by midfield (late
+  events use an 80 ms correction). Event snapshots are retransmitted in state
+  packets for packet-loss recovery, not sent only once. Host tests pass;
+  two-suit feel/latency still needs testing. No Pong logic changed in this pass.
+- Implemented, multi-suit hardware check pending: selecting a show and pressing
+  D on a follower starts it as the new playback leader; the old leader stops
+  its audio and follows. A/B/C costume roles do not change. Starting the same
+  show on a follower restarts it; D on the current leader's same show still
+  pauses/resumes. Transport carries an increasing leadership term; concurrent
+  starts tie-break by MAC, older terms cannot regain control, and release
+  packets must match the term. Tests cover takeover, duplicates and stale terms.
+  Update ALL participating suits (show sync protocol 0x53). Radio delivery and
+  audio startup are asynchronous: brief overlap during handoff is possible;
+  this is not a crossfade or a simultaneous hard audio cut.
+- Defer broad rewrites until each has a bounded test: master-control sync,
+  message navigation/notifications, animation catalogue and button consistency.
+  Game SFX need audio ownership/mixing first; do not interrupt music or calls.
 
+- light painting with accelerometer as the brush on other suits. (default position as horizontal like a folded arm and target in front so first thing is to unfold arm.) along with that we can fix arm pose app, and make a common math pipeline if appropriate.
+: almost there, but the armpose and paint app are not handling orientation correctly, the accelerometer y component is towards the fingers, x is towards the body when the arm is horizontal at the reference and while Z is pointing up. the screen has its x axis towards the mpu Y and y axis towards the mpu's negative x. when we point we want the opposite rotation behavior as the threedee environment (the same as its camera) and the target should be towards the negative x when we calibrate.rolling the upper arm on itself triggers a Y axis rotation which on the screen should be seen as pointing up or down.shaking someone hand is a Z rotation and giving someone a palm in the face is an X rotation, idk if that makes any sense :p
+- accelerometer synth (theremin like? idk) !
+- role lead/follow switching if someone else starts a song.
 - Menu/UI: replace placeholder icons with ascii-art
 - games sfx, conflict with audio player playing sfx ?
 
-- accelerometer synth (theremin like? idk) !
 - gesture menu selection ? (trigger things with limb position/movement)
 
-- do spatial aware led animations based on limb orientation
+- do spatial aware led animations based on limb orientation (new app)
 - tron
 - pacman
 - asteroids game !
+- confirm for pong that the trajectory is computed only once upon collision, by the person where the collision happens and sent only at that point to the other suit for it to correct it's own trajectory given the data it recieved. because the collision might be interpreded differently as the position might not have been the same on the two, we do interpolation of the trajectory by starting from initial thought to be the correct trajectory and slowly merge towards the other one, smoothly. so that means we don't get lag.
+- uniformity with the buttons : the last one is always the select button (if there needs one) if we have a 2d navigation, we do left and right with A and C, B does the down, if we only have a simple list 1D, we do A and B up and down, or left and right.
+-fix message : we want to have main menu notification that a new one arrived, on the message app we want to be able to select either send new message, view sent list or listen to recieved message (find appropriate not too long names) on the view app : we have a history of costume specific messages, which we can navigate with A and B, listen to with C (play pause) and a shortcut to new message with D; on new message app we have a visual audio graph that starts drawing when we press record, stops when we press again (button start stop C), the button D is play pause to listen to it and AB select target ([name1],[name2] or everyone) which means we need names for each suits, maybe we got that already but if not, add it (same name used for game leaderboards)
+on the listen app, we get a list of recieved message, scroll through with A/B listen to with D.
+any suggestions are welcome, tell me if you think any other features could be great to include.
+- fix master control, it should have the same sync method as the show, that one worked very well(master control is broken), settings changes should sync as well any changes are accepted, from both costumes, master control can be taken from the other or deactivated.
+- fix the absolute disaster mess that the animations app is. we want all those animations to be bpm controlled, some of them are not, some of them are dupliacted, add an app for non bpm syncable animations.
+
+- maybe the keyboard could find a use when choosing names for messages for example, maybe we make it an overlay.
+- global UI rework, prettify, normalize, animate. there are artefacts because of our screen optimization, i don't know if i like that, well i don't. but sometimes it might be required to avoid clutter on the SPI. this needs testing but i would like to try to disable it for now so that i can complain if it's actually a problem.

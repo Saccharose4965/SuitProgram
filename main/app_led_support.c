@@ -18,6 +18,15 @@ static uint32_t s_led_ui_fft_need_mask = 0;
 static bool s_led_ui_fft_owned = false;
 static bool s_bluetooth_app_active;
 static bool s_show_app_active;
+static bool s_paint_app_active;
+static bool s_synth_app_active;
+void led_ui_fft_set_synth_app(bool active)
+{
+    s_synth_app_active=active;
+    if(active) led_ui_fft_request(0,false);
+}
+static bool s_paint_threedee_active;
+static bool s_paint_armpose_active;
 static volatile bool s_call_app_active;
 void led_ui_fft_set_call_app(bool active) { s_call_app_active = active; }
 
@@ -30,6 +39,23 @@ void led_ui_fft_set_show_app(bool active)
     s_led_ui_fft_owned = false;
     if (!mic_rec_is_recording() && !audio_player_is_active() && !audio_output_active())
         (void)audio_release_idle_bus();
+}
+
+void led_ui_fft_set_paint_app(bool active)
+{
+    s_paint_app_active = active;
+    // Preserve pending clients; on exit the normal service tick resumes FFT.
+    if (active) led_ui_fft_request(0, false);
+}
+
+void led_ui_fft_set_threedee_app(bool active)
+{
+    s_paint_threedee_active = active;
+}
+
+void led_ui_fft_set_armpose_app(bool active)
+{
+    s_paint_armpose_active = active;
 }
 
 bool led_ui_fft_blocked_by_bluetooth(void)
@@ -69,7 +95,7 @@ void led_ui_fft_request(uint32_t client_mask, bool needed)
         s_led_ui_fft_need_mask &= ~client_mask;
     }
 
-    if (s_call_app_active || s_show_app_active || show_runtime_owns_leds() || led_ui_fft_blocked_by_bluetooth()) {
+    if (s_synth_app_active || s_paint_app_active || s_call_app_active || s_show_app_active || s_paint_threedee_active || s_paint_armpose_active || show_runtime_owns_leds() || led_ui_fft_blocked_by_bluetooth()) {
         if (fft_visualizer_running()) {
             fft_set_display_enabled(false);
             fft_visualizer_stop();

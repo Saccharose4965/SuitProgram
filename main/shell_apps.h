@@ -193,6 +193,19 @@ void threedee_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, 
 extern const shell_legend_t THREEDEE_LEGEND;
 
 void stickman_app_init(shell_app_context_t *ctx);
+void stickman_app_deinit(shell_app_context_t *ctx);
+void synth_init(shell_app_context_t *ctx);
+void synth_deinit(shell_app_context_t *ctx);
+void synth_input(shell_app_context_t *ctx,const input_event_t *ev);
+void synth_tick(shell_app_context_t *ctx,float dt);
+void synth_draw(shell_app_context_t *ctx,uint8_t *fb,int x,int y,int w,int h);
+void light_paint_init(shell_app_context_t *ctx);
+void light_paint_deinit(shell_app_context_t *ctx);
+void light_paint_input(shell_app_context_t *ctx,const input_event_t *ev);
+void light_paint_tick(shell_app_context_t *ctx,float dt);
+void light_paint_draw(shell_app_context_t *ctx,uint8_t *fb,int x,int y,int w,int h);
+void light_paint_receive(link_msg_type_t type,const uint8_t *mac,const uint8_t *data,size_t len);
+extern const shell_legend_t LIGHT_PAINT_LEGEND;
 void stickman_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void stickman_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t STICKMAN_LEGEND;

@@ -113,7 +113,7 @@ int main(void) {
     s_runtime.program_loaded=false; s_runtime.state=SHOW_RUNTIME_STOPPED;
     s_runtime.have_master=false; s_runtime.synced=false;
     show_wire_transport_t wire={.protocol=SHOW_SYNC_PROTOCOL,.kind=SHOW_WIRE_TRANSPORT,
-        .bytes=sizeof(wire),.session_id=session,.generation=10,.show_uid=7,
+        .bytes=sizeof(wire),.session_id=session,.generation=10,.show_uid=7,.leadership_term=1,
         .duration_ms=60000,.playhead_ms=10000,.role_count=3,.state=SHOW_RUNTIME_PLAYING};
     strcpy(wire.slug,"test");
     show_rx_event_t event={.len=sizeof(wire),.received_us=now};
@@ -131,6 +131,45 @@ int main(void) {
     for (unsigned i=0;i<35;++i) round_network(-1);
     unique(); assert(nodes[1].role_id==a && nodes[2].role_id==b && nodes[2].authority);
     open_node(0); settle(); unique(); assert(nodes[1].role_id==a && nodes[2].role_id==b);
+
+    // A follower explicitly starts a new song, even while the old leader plays.
+    select_node(1);
+    assert(show_runtime_load("test",s_runtime.role_id)==0);
+    assert(show_runtime_start_master()==0);
+    assert(s_runtime.leadership_term==2 && s_runtime.authority);
+    save_node(1);
+    wire.leadership_term=2; wire.session_id=s_runtime.session_id;
+    wire.generation=s_runtime.generation; wire.state=SHOW_RUNTIME_PAUSED;
+    wire.playhead_ms=0;
+    memcpy(event.src_mac,nodes[1].own_mac,6); memcpy(event.data,&wire,sizeof(wire));
+    event.received_us=now;
+    select_node(2); s_runtime.audio_started=true;
+    before_stops=stops; loads=package_loads;
+    handle_transport(&event,now);
+    assert(!s_runtime.authority && !s_runtime.audio_owned && stops==before_stops+1);
+    assert(s_runtime.leadership_term==2 && package_loads==loads);
+    handle_transport(&event,now); assert(stops==before_stops+1); // idempotent repeat
+    save_node(2);
+    select_node(1);
+    wire.leadership_term=1;
+    memcpy(event.src_mac,nodes[2].own_mac,6); memcpy(event.data,&wire,sizeof(wire));
+    handle_transport(&event,now);
+    assert(s_runtime.authority && s_runtime.leadership_term==2);
+    // Same-term simultaneous starts resolve by MAC, independently of audio timing.
+    wire.leadership_term=2; memcpy(event.data,&wire,sizeof(wire));
+    memcpy(event.src_mac,nodes[0].own_mac,6);
+    handle_transport(&event,now);
+    assert(!s_runtime.authority && same_mac(s_runtime.master_mac,nodes[0].own_mac));
+    show_wire_release_t release={.protocol=SHOW_SYNC_PROTOCOL,.kind=SHOW_WIRE_RELEASE,
+        .bytes=sizeof(release),.session_id=s_runtime.session_id,
+        .generation=UINT32_MAX,.leadership_term=1};
+    show_rx_event_t stop_event={.len=sizeof(release),.received_us=now};
+    memcpy(stop_event.src_mac,nodes[0].own_mac,6);
+    memcpy(stop_event.data,&release,sizeof(release));
+    handle_release(&stop_event,now);
+    assert(s_runtime.have_master && s_runtime.output_owned); // old stop cannot stop new song
+    assert(!master_packet_allowed(nodes[2].own_mac,2,now));
+    assert(master_packet_allowed(nodes[2].own_mac,3,now));
 
     // Simultaneous cold startup also converges without duplicate roles.
     for(unsigned i=0;i<3;++i) open_node(i);

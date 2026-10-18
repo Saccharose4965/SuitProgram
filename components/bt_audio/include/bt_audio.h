@@ -65,9 +65,13 @@ int bt_audio_get_peer_sample_rate(void);
 // Copy the current discovered devices into the caller buffer.
 int bt_audio_get_devices(bt_audio_device_t *out, int max_out);
 
-// Push interleaved stereo PCM16 frames into the A2DP source buffer.
-// Frames dropped if the queue is full
+// Legacy push API: currently returns ESP_ERR_NOT_SUPPORTED.
+// Use bt_audio_set_generator for live audio instead.
 esp_err_t bt_audio_feed_pcm(const int16_t *stereo, size_t frames);
+// Live mono PCM16 source at the negotiated rate. Must be fast/nonblocking.
+// Set NULL to detach and wait for any callback already running to finish.
+typedef size_t (*bt_audio_generator_t)(int16_t *mono, size_t frames, int rate, void *user);
+esp_err_t bt_audio_set_generator(bt_audio_generator_t generate, void *user);
 
 // Quick check: true when stack is ready and a peer is connected/streamable.
 bool bt_audio_can_stream(void);

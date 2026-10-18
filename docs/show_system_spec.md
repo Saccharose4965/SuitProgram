@@ -396,10 +396,10 @@ Current torso and arm IDs:
 - `right_upper_arm`
 - `right_forearm`
 
-Implemented leg section IDs (renderer and editor). Physical firmware layout
-support is incomplete: defaults contain only torso/arms, and the current
-24-section capacity cannot hold the full 33-section suit. These IDs do not
-automatically configure LED counts, wiring order or output pins:
+Implemented leg section IDs (renderer and editor). Firmware supports all 33
+sections, with zero-length leg placeholders between front and back on each
+strip. Existing physical addresses are unchanged until leg lengths are set.
+See `leg-layout.md` for migration and the unchanged 721-pixel output budget:
 
 - `left_thigh_front`
 - `left_thigh_back`
@@ -1288,3 +1288,21 @@ The editor/export/SD/renderer/sync vertical slice exists. The next target is a
 physical three-suit rehearsal with the same exported packages, followed by
 golden/corrupt package tests, measured long-song drift, seek controls, and
 single-owner `track.wav` playback with audio-delay calibration.
+# Playback leadership handoff (2026-10-19)
+
+Selecting a show on a follower and pressing D starts that show locally and
+announces a new leadership term. Costume roles A/B/C remain unchanged. The
+previous leader stops its audio when it accepts the new transport and becomes
+a follower. The existing audio-clock synchronization remains in use.
+
+Terms are retained across local load/stop operations, incremented on explicit
+starts, and compared before accepting transport. Equal-term competing leaders
+resolve to the lowest MAC. Old terms cannot steal leadership back; release
+messages must match the current term and session. These are in-memory terms,
+not persistent across reboot; a joining suit learns the active term from
+transport before starting. All suits need protocol 0x53 firmware.
+
+The radio handoff is asynchronous and not a guaranteed gapless audio switch.
+Test different-song takeover, same-song restart, simultaneous starts and late
+joining on hardware. Missing packages/audio files and radio partitions remain
+real-world failure cases, not claims covered by host tests.

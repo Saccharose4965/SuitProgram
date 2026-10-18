@@ -47,6 +47,10 @@ esp_err_t audio_play_wav_mem(const void* data, size_t size);
 esp_err_t audio_play_wav_file(const char* path);
 esp_err_t audio_play_embedded(void);
 esp_err_t audio_play_tone(int hz, int ms);
+// Blocking local-speaker generator. Fill mono PCM16; return 0 to finish.
+// Caller must stop other capture/playback users before entry.
+typedef size_t (*audio_generator_t)(int16_t *samples, size_t capacity, void *user);
+esp_err_t audio_play_generated(audio_generator_t generate, void *user, int rate);
 
 // New streaming helper used by audio_player.c
 esp_err_t audio_play_wav_local_stream(FILE *f, const audio_wav_info_t *info);

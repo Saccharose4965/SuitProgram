@@ -1,0 +1,9 @@
+menu "Suit OLED"
+config SUIT_OLED_PARTIAL_UPDATES
+    bool "Use changed-region OLED updates (experimental)"
+    default n
+    help
+        Send only changed regions instead of refreshing the whole screen.
+        Disabled for artefact testing. Enable only after checking both display
+        correctness and shared SPI load during audio/show playback.
+endmenu

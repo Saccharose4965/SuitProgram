@@ -9,6 +9,7 @@ class AudioGateTest(unittest.TestCase):
     def test_wait_and_resume(self):
         source = (Path(__file__).resolve().parents[1] / "app_led_support.c").read_text()
         function = source[source.index("void led_ui_fft_request("):]
+        function += source[source.index("void led_ui_fft_set_paint_app("):source.index("bool led_ui_fft_blocked_by_bluetooth(")]
         harness = r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -17,7 +18,9 @@ typedef int esp_err_t;
 #define ESP_OK 0
 #define ESP_LOGW(...) ((void)0)
 static uint32_t s_led_ui_fft_need_mask;
-static bool s_led_ui_fft_owned, s_show_app_active, s_call_app_active;
+static bool s_led_ui_fft_owned, s_show_app_active, s_call_app_active, s_paint_app_active;
+static bool s_paint_threedee_active, s_paint_armpose_active;
+static bool s_synth_app_active;
 static bool recording, playback, output, running, beat, bt;
 static int starts, inits;
 static bool show_runtime_owns_leds(void) { return false; }
@@ -31,7 +34,7 @@ static bool mic_rec_is_recording(void) { return recording; }
 static bool audio_player_is_active(void) { return playback; }
 static bool audio_output_active(void) { return output; }
 static bool shell_audio_init_if_needed(void) { ++inits; return true; }
-static int fft_visualizer_start(void) { ++starts; running=true; return 0; }
+static int fft_visualizer_start(void) { if (!running) ++starts; running=true; return 0; }
 static int64_t esp_timer_get_time(void) { return 0; }
 FUNCTION
 int main(void) {
@@ -50,8 +53,21 @@ int main(void) {
     assert(starts==1);
     recording=false; led_ui_fft_request(0,false);
     assert(starts==2 && running);
-    bt=true; led_ui_fft_request(0,false);
+    led_ui_fft_request(1,true);
+    led_ui_fft_set_paint_app(true);
+    assert(!running && s_led_ui_fft_need_mask==1);
+    for(int i=0;i<100;i++) led_ui_fft_request(1,true);
     assert(!running && starts==2);
+    led_ui_fft_set_paint_app(false);
+    assert(!running);
+    led_ui_fft_request(0,false);
+    assert(running && starts==3);
+    bt=true; led_ui_fft_request(0,false);
+    assert(!running && starts==3);
+    led_ui_fft_set_paint_app(true);
+    led_ui_fft_set_paint_app(false);
+    led_ui_fft_request(0,false);
+    assert(!running && starts==3); // exiting paint must not bypass BT ownership
 }
 '''.replace("FUNCTION", function)
         with tempfile.TemporaryDirectory(prefix="suit-audio-gate-") as tmp:

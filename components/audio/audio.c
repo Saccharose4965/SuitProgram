@@ -968,3 +968,38 @@ esp_err_t audio_play_wav_mem(const void *data, size_t size)
 { audio_output_enter(); return audio_output_leave(play_wav_mem(data, size)); }
 esp_err_t audio_play_tone(int hz, int ms)
 { audio_output_enter(); return audio_output_leave(play_tone(hz, ms)); }
+
+esp_err_t audio_play_generated(audio_generator_t generate, void *user, int rate)
+{
+    if (!generate || rate < 8000 || rate > 48000) return ESP_ERR_INVALID_ARG;
+    // Do not overlap another local output (including the startup tone).
+    portENTER_CRITICAL(&s_output_mux);
+    bool busy = s_output_users != 0;
+    if (!busy) ++s_output_users;
+    portEXIT_CRITICAL(&s_output_mux);
+    if (busy) return ESP_ERR_INVALID_STATE;
+    int16_t mono[256];
+    int32_t stereo[512];
+    esp_err_t err = audio_set_rate(rate);
+    bool enabled = false;
+    if (err == ESP_OK) { err = audio_enable_tx(); enabled = err == ESP_OK; }
+    while (err == ESP_OK) {
+        size_t n = generate(mono, 256, user);
+        if (!n) break;
+        if (n > 256) { err = ESP_ERR_INVALID_SIZE; break; }
+        for (size_t i = 0; i < n; ++i) {
+            int32_t v = (int32_t)(((int64_t)mono[i] * s_vol_q15) >> 15);
+            stereo[2*i] = stereo[2*i+1] = v * 65536;
+        }
+        size_t offset = 0, bytes = n * 2 * sizeof(int32_t);
+        while (offset < bytes && err == ESP_OK) {
+            size_t written = 0;
+            err = i2s_channel_write(s_tx, (uint8_t *)stereo + offset,
+                                    bytes - offset, &written, 60);
+            offset += written;
+            if (err == ESP_OK && !written) err = ESP_ERR_TIMEOUT;
+        }
+    }
+    if (enabled) (void)audio_quiet_tail(12, 8);
+    return audio_output_leave(err);
+}

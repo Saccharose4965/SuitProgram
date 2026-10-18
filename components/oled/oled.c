@@ -8,6 +8,7 @@
 
 #include "oled.h"
 #include "hw.h"
+#include "sdkconfig.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -130,6 +131,12 @@ void oled_clear(void){
 // ---- Full-screen 128x64 blit (buf is PANEL_W*PANEL_H/8) ----
 void oled_blit_full(const uint8_t* buf)
 {
+    if (!buf) return;
+#ifndef CONFIG_SUIT_OLED_PARTIAL_UPDATES
+    // Refresh the full panel, including unchanged/cleared pixels. One address
+    // window and page-sized transfers avoid a large task-stack framebuffer.
+    begin_window(0, PANEL_W-1, 0, PANEL_H/8-1);
+#endif
     uint8_t line[PANEL_W];
     for (int p = 0; p < PANEL_H/8; ++p) {
         for (int x = 0; x < PANEL_W; ++x) {
@@ -142,6 +149,11 @@ void oled_blit_full(const uint8_t* buf)
             }
             line[x] = b;
         }
+
+#ifndef CONFIG_SUIT_OLED_PARTIAL_UPDATES
+        tx(line, PANEL_W, true);
+        continue;
+#endif
 
         if (!s_oled_prev_valid) {
             begin_window(0, PANEL_W - 1, p, p);
@@ -196,7 +208,11 @@ void oled_blit_full(const uint8_t* buf)
             tx(&line[run_start], (size_t)(run_end - run_start + 1), true);
         }
     }
+#ifdef CONFIG_SUIT_OLED_PARTIAL_UPDATES
     s_oled_prev_valid = true;
+#else
+    s_oled_prev_valid = false;
+#endif
 }
 
 // ---- 64x64 centered blit (buf is 64x64) ----

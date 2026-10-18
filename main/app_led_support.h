@@ -12,5 +12,9 @@ enum {
 void led_ui_fft_request(uint32_t client_mask, bool needed);
 void led_ui_fft_set_bluetooth_app(bool active);
 void led_ui_fft_set_show_app(bool active);
+void led_ui_fft_set_paint_app(bool active);
+void led_ui_fft_set_synth_app(bool active);
+void led_ui_fft_set_threedee_app(bool active);
+void led_ui_fft_set_armpose_app(bool active);
 void led_ui_fft_set_call_app(bool active);
 bool led_ui_fft_blocked_by_bluetooth(void);

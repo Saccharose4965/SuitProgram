@@ -901,29 +901,31 @@ esp_err_t show_renderer_configure(show_renderer_t *renderer,
 {
     if (!renderer || !program || role_id >= SHOW_MAX_ROLES ||
         program->info.formation > SHOW_FORMATION_CIRCLE) return ESP_ERR_INVALID_ARG;
-    led_layout_config_t layout;
-    led_layout_snapshot(&layout);
-    if (layout.total_leds == 0 || layout.total_leds > LED_LAYOUT_MAX_PIXELS) {
+    led_layout_config_t *layout = heap_caps_malloc(sizeof(*layout), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!layout) return ESP_ERR_NO_MEM;
+    led_layout_snapshot(layout);
+    if (layout->total_leds == 0 || layout->total_leds > LED_LAYOUT_MAX_PIXELS) {
+        heap_caps_free(layout);
         return ESP_ERR_INVALID_STATE;
     }
 
     memset(renderer, 0, sizeof(*renderer));
     renderer->program = program;
     renderer->role_id = role_id;
-    renderer->led_count = layout.total_leds;
+    renderer->led_count = layout->total_leds;
     bool have_point = false;
     led_point_t ring_sum = {0};
     size_t ring_count = 0;
 
-    for (size_t section_index = 0; section_index < layout.section_count; ++section_index) {
-        const led_layout_section_t *section = &layout.sections[section_index];
+    for (size_t section_index = 0; section_index < layout->section_count; ++section_index) {
+        const led_layout_section_t *section = &layout->sections[section_index];
         show_section_id_t section_id = SHOW_SECTION_INVALID;
         (void)show_section_id_from_name(section->name, &section_id);
         for (size_t offset = 0; offset < section->length; ++offset) {
             size_t led = section->logical_start + offset;
             if (led >= renderer->led_count) break;
             led_point_t point = {0};
-            if (!led_layout_get_from_config(&layout, (int)led, &point)) continue;
+            if (!led_layout_get_from_config(layout, (int)led, &point)) continue;
             renderer->section_ids[led] = section_id;
             renderer->section_u[led] = section->length > 1
                 ? (float)offset / (float)(section->length - 1u) : 0.5f;
@@ -958,6 +960,7 @@ esp_err_t show_renderer_configure(show_renderer_t *renderer,
             }
         }
     }
+    heap_caps_free(layout);
     if (!have_point) return ESP_ERR_INVALID_STATE;
 
     renderer->role_spacing_x = fmaxf(1.0f, (renderer->max_x - renderer->min_x) * 1.5f);

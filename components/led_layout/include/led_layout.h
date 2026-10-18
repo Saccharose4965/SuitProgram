@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #define LED_LAYOUT_MAX_STRIPS   2
-#define LED_LAYOUT_MAX_SECTIONS 24
+#define LED_LAYOUT_MAX_SECTIONS 33
 #define LED_LAYOUT_NAME_LEN     20
 
 typedef struct {

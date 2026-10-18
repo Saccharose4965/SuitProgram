@@ -20,6 +20,63 @@ static uint32_t s_file_rate;
 #include "esp_timer.h"
 
 static const char *TAG = "bt_audio";
+static portMUX_TYPE s_generator_mux = portMUX_INITIALIZER_UNLOCKED;
+static bt_audio_generator_t s_generator;
+static void *s_generator_user;
+static unsigned s_generator_readers;
+
+esp_err_t bt_audio_set_generator(bt_audio_generator_t generate, void *user)
+{
+    if (generate && (!bt_audio_can_stream() || bt_audio_stream_queued_frames()))
+        return ESP_ERR_INVALID_STATE;
+    portENTER_CRITICAL(&s_generator_mux);
+    bool busy = generate && (s_generator || s_generator_readers);
+    if (!busy) { s_generator = generate; s_generator_user = user; }
+    portEXIT_CRITICAL(&s_generator_mux);
+    if (busy) return ESP_ERR_INVALID_STATE;
+    if (!generate) for (;;) {
+        portENTER_CRITICAL(&s_generator_mux);
+        unsigned readers = s_generator_readers;
+        portEXIT_CRITICAL(&s_generator_mux);
+        if (!readers) break;
+        vTaskDelay(1);
+    }
+    return ESP_OK;
+}
+
+static bool generate_live(uint8_t *data, int32_t len)
+{
+    portENTER_CRITICAL(&s_generator_mux);
+    bt_audio_generator_t generate = s_generator;
+    void *user = s_generator_user;
+    if (generate) ++s_generator_readers;
+    portEXIT_CRITICAL(&s_generator_mux);
+    if (!generate) return false;
+    memset(data, 0, len);
+    int rate = bt_audio_get_peer_sample_rate();
+    if (rate == 44100 || rate == 48000) {
+        int16_t mono[128];
+        int volume = bt_audio_volume_get_percent();
+        for (size_t offset = 0; offset + 4 <= (size_t)len;) {
+            size_t n = ((size_t)len-offset)/4;
+            if (n > 128) n = 128;
+            size_t got = generate(mono, n, rate, user);
+            if (got > n) got = n;
+            for (size_t i = 0; i < got; ++i) {
+                int v = mono[i]*volume/100;
+                int16_t sample = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
+                memcpy(data+offset+i*4, &sample, 2);
+                memcpy(data+offset+i*4+2, &sample, 2);
+            }
+            offset += n*4;
+            if (got < n) break;
+        }
+    }
+    portENTER_CRITICAL(&s_generator_mux);
+    --s_generator_readers;
+    portEXIT_CRITICAL(&s_generator_mux);
+    return true;
+}
 
 // ============================ File-backed source ============================
 static FILE    *s_bt_fp               = NULL;
@@ -670,6 +727,8 @@ int32_t bt_audio_a2dp_data_cb(uint8_t *data, int32_t len)
         return len;
     }
 
+    if (generate_live(data, len)) return len;
+
     if (s_bt_bytes_left == 0 || (s_bt_file_eof && bt_buf_level() == 0)) {
         memset(data, 0, len);
         return len;
@@ -718,6 +777,10 @@ esp_err_t bt_audio_play_wav(FILE *fp,
                             uint16_t num_channels,
                             uint16_t bits_per_sample)
 {
+    portENTER_CRITICAL(&s_generator_mux);
+    bool live = s_generator != NULL || s_generator_readers != 0;
+    portEXIT_CRITICAL(&s_generator_mux);
+    if (live) return ESP_ERR_INVALID_STATE;
     if (!fp || data_size == 0) return ESP_ERR_INVALID_ARG;
     if (bits_per_sample != 16) return ESP_ERR_NOT_SUPPORTED;
     if (num_channels != 1 && num_channels != 2) {

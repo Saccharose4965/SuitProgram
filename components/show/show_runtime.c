@@ -20,7 +20,7 @@
 #include "audio_player.h"
 #include "audio.h"
 
-#define SHOW_SYNC_PROTOCOL       0x52u
+#define SHOW_SYNC_PROTOCOL       0x53u
 #define SHOW_SYNC_QUEUE_DEPTH    12u
 #define SHOW_SYNC_MAX_PACKET     112u
 #define SHOW_SYNC_MAX_PEERS      8u
@@ -28,7 +28,6 @@
 #define SHOW_SYNC_PING_US        1000000LL
 #define SHOW_SYNC_START_LEAD_US  500000LL
 #define SHOW_SYNC_STALE_US       2000000LL
-#define SHOW_SYNC_MASTER_HOLD_US 5000000LL
 #define SHOW_RENDER_FPS          60u
 
 typedef enum {
@@ -89,6 +88,7 @@ typedef struct __attribute__((packed)) {
     uint32_t session_id;
     uint32_t generation;
     uint64_t show_uid;
+    uint32_t leadership_term;
     uint32_t duration_ms;
     uint32_t playhead_ms;
     int64_t target_anchor_us;
@@ -106,6 +106,7 @@ typedef struct __attribute__((packed)) {
     uint32_t session_id;
     uint32_t generation;
     uint64_t show_uid;
+    uint32_t leadership_term;
 } show_wire_release_t;
 
 typedef struct {
@@ -166,6 +167,8 @@ typedef struct {
     uint32_t generation;
     uint32_t sequence;
     uint32_t anchor_playhead_ms;
+    uint32_t leadership_term; // retained across load/stop, not a playback generation
+    uint8_t leadership_mac[6];
     int64_t anchor_local_us;
     uint32_t paused_playhead_ms;
     int64_t last_render_us;
@@ -345,6 +348,7 @@ static void send_transport_to(const uint8_t *peer_mac, int64_t target_anchor_us,
         .session_id = s_runtime.session_id,
         .generation = s_runtime.generation,
         .show_uid = s_runtime.program.info.show_uid,
+        .leadership_term = s_runtime.leadership_term,
         .duration_ms = s_runtime.program.info.duration_ms,
         .playhead_ms = s_runtime.state == SHOW_RUNTIME_PAUSED
             ? s_runtime.paused_playhead_ms
@@ -385,6 +389,7 @@ static void broadcast_transport(int64_t now_us)
 static void send_release(void)
 {
     show_wire_release_t packet = {
+        .leadership_term = s_runtime.leadership_term,
         .protocol = SHOW_SYNC_PROTOCOL,
         .kind = SHOW_WIRE_RELEASE,
         .bytes = sizeof(packet),
@@ -578,18 +583,16 @@ static void handle_ping_response(const show_rx_event_t *event, int64_t now_us)
     send_transport_to(peer->mac, s_runtime.anchor_local_us + peer->offset_us, now_us);
 }
 
-static bool master_packet_allowed(const uint8_t mac[6], uint32_t session_id,
+static bool master_packet_allowed(const uint8_t mac[6], uint32_t term,
                                   int64_t now_us)
 {
+    (void)now_us;
     if (!s_runtime.menu_open && !s_runtime.output_owned) return false;
-    if (s_runtime.authority) {
-        // Resolve near-simultaneous starts deterministically, before audio starts.
-        return !s_runtime.audio_started && memcmp(mac, s_runtime.own_mac, 6) < 0;
-    }
-    if (!s_runtime.have_master) return true;
-    if (same_mac(s_runtime.master_mac, mac)) return true;
-    (void)session_id;
-    return now_us - s_runtime.last_transport_rx_us > SHOW_SYNC_MASTER_HOLD_US;
+    if (!term) return false;
+    if (term != s_runtime.leadership_term) return term > s_runtime.leadership_term;
+    // Concurrent starts use the same next term; lower MAC wins on every suit,
+    // even if one audio task started earlier. Old leaders cannot take it back.
+    return memcmp(mac, s_runtime.leadership_mac, 6) <= 0;
 }
 
 static void handle_transport(const show_rx_event_t *event, int64_t now_us)
@@ -598,7 +601,7 @@ static void handle_transport(const show_rx_event_t *event, int64_t now_us)
     if (!packet_header_valid(event->data, event->len, SHOW_WIRE_TRANSPORT,
                              sizeof(show_wire_transport_t))) return;
     const show_wire_transport_t *packet = (const void *)event->data;
-    if (!master_packet_allowed(event->src_mac, packet->session_id, now_us)) return;
+    if (!master_packet_allowed(event->src_mac, packet->leadership_term, now_us)) return;
     if (packet->state != SHOW_RUNTIME_PLAYING &&
         packet->state != SHOW_RUNTIME_PAUSED) return;
     if (packet->playhead_ms > packet->duration_ms || packet->role_count == 0 ||
@@ -613,6 +616,7 @@ static void handle_transport(const show_rx_event_t *event, int64_t now_us)
     }
     // Coarse broadcasts must not overwrite a clock-corrected unicast anchor.
     if (s_runtime.synced && s_runtime.have_master &&
+        packet->leadership_term == s_runtime.leadership_term &&
         same_mac(s_runtime.master_mac, event->src_mac) &&
         packet->session_id == s_runtime.session_id &&
         packet->generation == s_runtime.generation && !packet->target_anchor_us &&
@@ -638,7 +642,8 @@ static void handle_transport(const show_rx_event_t *event, int64_t now_us)
         s_runtime.role_reload_after_us=now_us+1000000;
         if (load_program(s_runtime.slug,s_runtime.role_id)!=ESP_OK) return;
     }
-    if (packet->generation < s_runtime.generation &&
+    if (packet->leadership_term == s_runtime.leadership_term &&
+        packet->generation < s_runtime.generation &&
         s_runtime.session_id == packet->session_id) return;
     if (acquire_output() != ESP_OK) {
         set_error("LED output busy");
@@ -646,6 +651,8 @@ static void handle_transport(const show_rx_event_t *event, int64_t now_us)
     }
 
     memcpy(s_runtime.master_mac, event->src_mac, 6);
+    s_runtime.leadership_term = packet->leadership_term;
+    memcpy(s_runtime.leadership_mac, event->src_mac, 6);
     s_runtime.have_master = true;
     s_runtime.authority = false;
     s_runtime.session_id = packet->session_id;
@@ -670,6 +677,7 @@ static void handle_release(const show_rx_event_t *event, int64_t now_us)
     if (!packet_header_valid(event->data, event->len, SHOW_WIRE_RELEASE,
                              sizeof(show_wire_release_t))) return;
     const show_wire_release_t *packet = (const void *)event->data;
+    if (packet->leadership_term != s_runtime.leadership_term) return;
     if (s_runtime.authority || !s_runtime.have_master ||
         !same_mac(s_runtime.master_mac, event->src_mac) ||
         packet->session_id != s_runtime.session_id) return;
@@ -807,8 +815,8 @@ esp_err_t show_runtime_start_master(void)
         set_error("finding roles");
         return ESP_ERR_INVALID_STATE;
     }
-    if (status.master_roles && !s_runtime.authority) {
-        set_error("leader already active");
+    if (s_runtime.leadership_term == UINT32_MAX) {
+        set_error("restart show network");
         return ESP_ERR_INVALID_STATE;
     }
     if (status.role_conflict) {
@@ -838,6 +846,8 @@ esp_err_t show_runtime_start_master(void)
     uint32_t start_ms = s_runtime.state == SHOW_RUNTIME_PAUSED
         ? s_runtime.paused_playhead_ms : 0u;
     s_runtime.authority = true;
+    ++s_runtime.leadership_term;
+    memcpy(s_runtime.leadership_mac, s_runtime.own_mac, 6);
     s_runtime.synced = true;
     s_runtime.have_master = false;
     s_runtime.session_id = esp_random();

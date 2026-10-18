@@ -61,6 +61,7 @@ esp_err_t led_show_pixels(const uint8_t *frame, size_t count);
 typedef enum {
     LED_OUTPUT_OWNER_BASE = 0,
     LED_OUTPUT_OWNER_SHOW = 1,
+    LED_OUTPUT_OWNER_PAINT = 2,
 } led_output_owner_t;
 
 // Exclusive output ownership prevents independent renderer tasks from racing.

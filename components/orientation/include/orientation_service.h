@@ -15,6 +15,8 @@ esp_err_t orientation_service_start(void);
 
 // Returns true once orientation has received enough samples to be usable.
 bool orientation_service_ready(void);
+// Coherent absolute sensor orientation for locally calibrated consumers.
+bool orientation_service_snapshot(imu_quat_t *q, uint64_t *sample_us);
 
 // Access shared orientation state owned by the service.
 imu_orientation_t *orientation_service_ctx(void);

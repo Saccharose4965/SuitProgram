@@ -48,6 +48,12 @@ static const led_layout_default_section_t k_default_sections[] = {
     { "front_left_rib",        0, 47, false },
     { "front_left_abs",        0, 31, false },
     { "front_left_belt",       0, 39, false },
+    { "left_thigh_front", 0, 0, false },
+    { "left_shin_f_in", 0, 0, false },
+    { "left_shin_f_out", 0, 0, false },
+    { "left_thigh_back", 0, 0, false },
+    { "left_shin_b_in", 0, 0, false },
+    { "left_shin_b_out", 0, 0, false },
     { "back_left_belt",        0, 31, false },
     { "back_left_vertebra",    0, 28, false },
     { "back_left_rib",         0, 37, false },
@@ -58,6 +64,12 @@ static const led_layout_default_section_t k_default_sections[] = {
     { "front_right_rib",       1, 47, true  },
     { "front_right_abs",       1, 31, true  },
     { "front_right_belt",      1, 39, true  },
+    { "right_thigh_front", 1, 0, false },
+    { "right_shin_f_in", 1, 0, false },
+    { "right_shin_f_out", 1, 0, false },
+    { "right_thigh_back", 1, 0, false },
+    { "right_shin_b_in", 1, 0, false },
+    { "right_shin_b_out", 1, 0, false },
     { "back_right_belt",       1, 31, true  },
     { "back_right_vertebra",   1, 28, true  },
     { "back_right_rib",        1, 37, true  },
@@ -160,6 +172,12 @@ static const char *k_canonical_section_order[] = {
     "front_left_rib",
     "front_left_abs",
     "front_left_belt",
+    "left_thigh_front",
+    "left_shin_f_in",
+    "left_shin_f_out",
+    "left_thigh_back",
+    "left_shin_b_in",
+    "left_shin_b_out",
     "back_left_belt",
     "back_left_vertebra",
     "back_left_rib",
@@ -170,6 +188,12 @@ static const char *k_canonical_section_order[] = {
     "front_right_rib",
     "front_right_abs",
     "front_right_belt",
+    "right_thigh_front",
+    "right_shin_f_in",
+    "right_shin_f_out",
+    "right_thigh_back",
+    "right_shin_b_in",
+    "right_shin_b_out",
     "back_right_belt",
     "back_right_vertebra",
     "back_right_rib",
@@ -233,31 +257,17 @@ static void layout_normalize_section_order(led_layout_config_t *cfg)
 {
     if (!cfg || cfg->section_count < 2) return;
 
-    led_layout_section_t ordered[LED_LAYOUT_MAX_SECTIONS] = {0};
-    bool used[LED_LAYOUT_MAX_SECTIONS] = {0};
+    // In-place stable ordering avoids a full-layout temporary on task stacks.
     size_t out = 0;
-
-    for (size_t name_idx = 0;
-         name_idx < sizeof(k_canonical_section_order) / sizeof(k_canonical_section_order[0]) &&
-         out < cfg->section_count;
-         ++name_idx) {
-        const char *name = k_canonical_section_order[name_idx];
-        for (size_t sec_idx = 0; sec_idx < cfg->section_count; ++sec_idx) {
-            if (used[sec_idx]) continue;
-            if (strcmp(cfg->sections[sec_idx].name, name) != 0) continue;
-            ordered[out++] = cfg->sections[sec_idx];
-            used[sec_idx] = true;
+    for (size_t n = 0; n < sizeof(k_canonical_section_order) / sizeof(k_canonical_section_order[0]); ++n) {
+        for (size_t i = out; i < cfg->section_count; ++i) {
+            if (strcmp(cfg->sections[i].name, k_canonical_section_order[n])) continue;
+            led_layout_section_t section = cfg->sections[i];
+            memmove(&cfg->sections[out + 1], &cfg->sections[out],
+                    (i - out) * sizeof(section));
+            cfg->sections[out++] = section;
             break;
         }
-    }
-
-    for (size_t sec_idx = 0; sec_idx < cfg->section_count && out < cfg->section_count; ++sec_idx) {
-        if (used[sec_idx]) continue;
-        ordered[out++] = cfg->sections[sec_idx];
-    }
-
-    for (size_t i = 0; i < cfg->section_count; ++i) {
-        cfg->sections[i] = ordered[i];
     }
 }
 
@@ -487,6 +497,78 @@ static bool section_matches_polyline(const led_layout_section_t *sec,
 static bool layout_assign_measured_geometry(led_layout_section_t *sec)
 {
     if (!sec) return false;
+
+    // Same centimetre coordinates as ShowEditor; physical direction remains configurable.
+    if (!strcmp(sec->name, "left_thigh_front") || !strcmp(sec->name, "right_thigh_front")) {
+        led_point_t pts[] = {
+            { 13.9991060f, 36.8000000f, 1.0071594f },
+            { 12.9415875f, 36.8000000f, 4.3102400f },
+            { 11.0501704f, 39.6745573f, 5.7682270f },
+            { 11.0501704f, 53.2745573f, 5.7682270f },
+            { 12.9415875f, 56.1491146f, 4.3102400f },
+            { 13.9991060f, 56.1491146f, 1.0071594f },
+        };
+        if (sec->name[0] == 'r') for (size_t i = 0; i < sizeof(pts)/sizeof(pts[0]); ++i) pts[i].x = -pts[i].x;
+        section_set_polyline_points(sec, false, pts, sizeof(pts)/sizeof(pts[0]));
+        return true;
+    }
+    if (!strcmp(sec->name, "left_thigh_back") || !strcmp(sec->name, "right_thigh_back")) {
+        led_point_t pts[] = {
+            { 13.9991060f, 36.8000000f, -1.0071594f },
+            { 12.9415875f, 36.8000000f, -4.3102400f },
+            { 11.0501704f, 39.6745573f, -5.7682270f },
+            { 11.0501704f, 53.2745573f, -5.7682270f },
+            { 12.9415875f, 56.1491146f, -4.3102400f },
+            { 13.9991060f, 56.1491146f, -1.0071594f },
+        };
+        if (sec->name[0] == 'r') for (size_t i = 0; i < sizeof(pts)/sizeof(pts[0]); ++i) pts[i].x = -pts[i].x;
+        section_set_polyline_points(sec, false, pts, sizeof(pts)/sizeof(pts[0]));
+        return true;
+    }
+    if (!strcmp(sec->name, "left_shin_f_in") || !strcmp(sec->name, "right_shin_f_in")) {
+        led_point_t pts[] = {
+            { 9.1000000f, 80.5000000f, 2.4000000f },
+            { 8.8000000f, 71.5000000f, 2.4000000f },
+            { 8.4000000f, 63.8000000f, 2.5000000f },
+            { 6.8000000f, 58.4000000f, 3.7000000f },
+        };
+        if (sec->name[0] == 'r') for (size_t i = 0; i < sizeof(pts)/sizeof(pts[0]); ++i) pts[i].x = -pts[i].x;
+        section_set_polyline_points(sec, false, pts, sizeof(pts)/sizeof(pts[0]));
+        return true;
+    }
+    if (!strcmp(sec->name, "left_shin_f_out") || !strcmp(sec->name, "right_shin_f_out")) {
+        led_point_t pts[] = {
+            { 11.9000000f, 80.5000000f, 2.7000000f },
+            { 12.2000000f, 71.5000000f, 2.8000000f },
+            { 12.7000000f, 63.8000000f, 3.0000000f },
+            { 14.8000000f, 58.4000000f, 4.5000000f },
+        };
+        if (sec->name[0] == 'r') for (size_t i = 0; i < sizeof(pts)/sizeof(pts[0]); ++i) pts[i].x = -pts[i].x;
+        section_set_polyline_points(sec, false, pts, sizeof(pts)/sizeof(pts[0]));
+        return true;
+    }
+    if (!strcmp(sec->name, "left_shin_b_in") || !strcmp(sec->name, "right_shin_b_in")) {
+        led_point_t pts[] = {
+            { 9.2000000f, 80.5000000f, -2.4000000f },
+            { 8.9000000f, 71.5000000f, -2.6000000f },
+            { 8.5000000f, 63.8000000f, -2.9000000f },
+            { 6.9000000f, 58.4000000f, -4.1000000f },
+        };
+        if (sec->name[0] == 'r') for (size_t i = 0; i < sizeof(pts)/sizeof(pts[0]); ++i) pts[i].x = -pts[i].x;
+        section_set_polyline_points(sec, false, pts, sizeof(pts)/sizeof(pts[0]));
+        return true;
+    }
+    if (!strcmp(sec->name, "left_shin_b_out") || !strcmp(sec->name, "right_shin_b_out")) {
+        led_point_t pts[] = {
+            { 12.0000000f, 80.5000000f, -2.8000000f },
+            { 12.3000000f, 71.5000000f, -3.1000000f },
+            { 12.8000000f, 63.8000000f, -3.5000000f },
+            { 14.9000000f, 58.4000000f, -5.0000000f },
+        };
+        if (sec->name[0] == 'r') for (size_t i = 0; i < sizeof(pts)/sizeof(pts[0]); ++i) pts[i].x = -pts[i].x;
+        section_set_polyline_points(sec, false, pts, sizeof(pts)/sizeof(pts[0]));
+        return true;
+    }
 
     const float front_z = 0.0f;
     const float back_z = 0.0f;
@@ -942,9 +1024,6 @@ static void layout_finalize(led_layout_config_t *cfg)
         if (sec->strip >= cfg->strip_count) {
             sec->strip = (uint8_t)(cfg->strip_count - 1);
         }
-        if (sec->length == 0) {
-            sec->length = 1;
-        }
         if (sec->geom_kind == LED_LAYOUT_GEOM_POLYLINE) {
             if (sec->point_count < 2 || sec->point_count > LED_LAYOUT_MAX_SECTION_POINTS) {
                 layout_assign_default_geometry(sec, i);
@@ -1101,7 +1180,8 @@ static bool layout_load_from_sd_locked(led_layout_config_t *cfg)
     FILE *f = fopen(path, "r");
     if (!f) return false;
 
-    led_layout_config_t tmp;
+    // Protected by the layout mutex; keep the large parse buffer off task stacks.
+    static EXT_RAM_BSS_ATTR led_layout_config_t tmp;
     layout_fill_default(&tmp);
 
     char line[160];
@@ -1125,7 +1205,7 @@ static bool layout_load_from_sd_locked(led_layout_config_t *cfg)
             }
         } else if (strcmp(key, "section_count") == 0) {
             uint32_t count = 0;
-            if (parse_u32(val, &count) && count > 0) {
+            if (parse_u32(val, &count) && count > 0 && count <= LED_LAYOUT_MAX_SECTIONS) {
                 tmp.section_count = (uint8_t)count;
             }
         } else if (layout_parse_key_index(key, "strip", &suffix, &index)) {
@@ -1177,6 +1257,21 @@ static bool layout_load_from_sd_locked(led_layout_config_t *cfg)
 
     fclose(f);
     layout_upgrade_legacy_names(&tmp);
+    // Add absent leg placeholders to existing chestplate files without changing
+    // any physical address, saved length, direction or custom geometry.
+    for (size_t i = 0; i < sizeof(k_default_sections) / sizeof(k_default_sections[0]); ++i) {
+        const led_layout_default_section_t *def = &k_default_sections[i];
+        if (def->length || layout_find_section(&tmp, def->name)) continue;
+        const char *front = def->strip == 0 ? "front_left_belt" : "front_right_belt";
+        const char *back = def->strip == 0 ? "back_left_belt" : "back_right_belt";
+        if (!layout_find_section(&tmp, front) || !layout_find_section(&tmp, back) ||
+            tmp.section_count >= LED_LAYOUT_MAX_SECTIONS) continue;
+        led_layout_section_t *sec = &tmp.sections[tmp.section_count++];
+        memset(sec, 0, sizeof(*sec));
+        copy_name(sec->name, sizeof(sec->name), def->name);
+        sec->strip = def->strip;
+        layout_assign_default_geometry(sec, tmp.section_count - 1);
+    }
     layout_upgrade_placeholder_geometry(&tmp);
     layout_upgrade_worn_handedness(&tmp);
     layout_upgrade_arm_geometry(&tmp);
@@ -1272,10 +1367,7 @@ esp_err_t led_layout_init(void)
 
     esp_err_t mount_err = storage_mount_sd();
     if (mount_err == ESP_OK) {
-        led_layout_config_t loaded;
-        if (layout_load_from_sd_locked(&loaded)) {
-            s_layout = loaded;
-        } else {
+        if (!layout_load_from_sd_locked(&s_layout)) {
             esp_err_t save_err = layout_save_to_sd_locked(&s_layout);
             if (save_err != ESP_OK) {
                 ESP_LOGW(TAG, "default layout save failed: %s", esp_err_to_name(save_err));
@@ -1392,11 +1484,8 @@ esp_err_t led_layout_set_section_length(size_t idx, uint16_t length)
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (length == 0) length = 1;
-
     uint32_t other_total = s_layout.total_leds - s_layout.sections[idx].length;
     uint32_t max_len = LED_LAYOUT_MAX_PIXELS - other_total;
-    if (max_len == 0) max_len = 1;
     if (length > max_len) length = (uint16_t)max_len;
 
     s_layout.sections[idx].length = length;
@@ -1461,12 +1550,10 @@ esp_err_t led_layout_reload(void)
         layout_lock_give();
         return mount_err;
     }
-    led_layout_config_t loaded;
-    if (!layout_load_from_sd_locked(&loaded)) {
+    if (!layout_load_from_sd_locked(&s_layout)) {
         layout_lock_give();
         return ESP_ERR_NOT_FOUND;
     }
-    s_layout = loaded;
     layout_lock_give();
     return ESP_OK;
 }

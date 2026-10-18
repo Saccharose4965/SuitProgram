@@ -119,7 +119,7 @@ int main(void) {
     assert(show_runtime_load("test",1) == 0);
     assert(show_runtime_start_master() == 0);
     assert(playing && s_runtime.state == SHOW_RUNTIME_PAUSED);
-    assert(master_packet_allowed(other,99,now)); // simultaneous start tie-break
+    assert(master_packet_allowed(other,s_runtime.leadership_term,now)); // simultaneous start tie-break
     // No LED free-running while opening/prebuffering audio.
     now += 1000000;
     show_runtime_service_tick(0);
@@ -127,7 +127,8 @@ int main(void) {
     progress = (audio_progress_t){44100,44100,now,true};
     show_runtime_service_tick(0);
     assert(s_runtime.audio_started && s_runtime.state == SHOW_RUNTIME_PLAYING);
-    assert(!master_packet_allowed(other,99,now)); // established leader is not stolen
+    assert(!master_packet_allowed(other,0,now)); // retired/invalid terms never win
+    assert(master_packet_allowed(other,s_runtime.leadership_term+1,now)); // explicit new start wins
     assert(current_playhead_ms(now) == 900); // 100 ms default BT compensation
     now += 500000;
     show_runtime_service_tick(0);
@@ -146,10 +147,11 @@ int main(void) {
 
     // A coarse broadcast cannot replace the corrected clock anchor.
     s_runtime.have_master=true; memcpy(s_runtime.master_mac,other,6);
+    s_runtime.leadership_term=2; memcpy(s_runtime.leadership_mac,other,6);
     s_runtime.synced=true; s_runtime.session_id=5; s_runtime.generation=2;
     s_runtime.state=SHOW_RUNTIME_PLAYING; s_runtime.anchor_local_us=1234;
     show_wire_transport_t wire = {.protocol=SHOW_SYNC_PROTOCOL,.kind=SHOW_WIRE_TRANSPORT,
-        .bytes=sizeof(wire),.session_id=5,.generation=2,.show_uid=7,
+        .bytes=sizeof(wire),.session_id=5,.generation=2,.show_uid=7,.leadership_term=2,
         .duration_ms=60000,.role_count=3,.state=SHOW_RUNTIME_PLAYING};
     strcpy(wire.slug,"test");
     show_rx_event_t event={.len=sizeof(wire),.received_us=now};

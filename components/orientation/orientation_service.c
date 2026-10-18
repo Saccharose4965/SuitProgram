@@ -17,6 +17,9 @@ static bool s_started = false;
 static TaskHandle_t s_orient_task = NULL;
 static mpu6500_t s_imu = { .mux = portMUX_INITIALIZER_UNLOCKED };
 static imu_orientation_t s_ori = {0};
+static portMUX_TYPE s_snapshot_mux = portMUX_INITIALIZER_UNLOCKED;
+static imu_quat_t s_snapshot;
+static uint64_t s_snapshot_time;
 
 static void orientation_task(void *arg)
 {
@@ -37,6 +40,10 @@ static void orientation_task(void *arg)
             raw.gx_dps, raw.gy_dps, raw.gz_dps,
             raw.t_us
         );
+        portENTER_CRITICAL(&s_snapshot_mux);
+        s_snapshot = s_ori.q_BW;
+        s_snapshot_time = s_ori.ready ? raw.t_us : 0;
+        portEXIT_CRITICAL(&s_snapshot_mux);
     }
 }
 
@@ -96,6 +103,15 @@ esp_err_t orientation_service_start(void)
 bool orientation_service_ready(void)
 {
     return s_started && imu_orientation_ready(&s_ori);
+}
+
+bool orientation_service_snapshot(imu_quat_t *q, uint64_t *sample_us)
+{
+    if (!q || !sample_us) return false;
+    portENTER_CRITICAL(&s_snapshot_mux);
+    *q=s_snapshot; *sample_us=s_snapshot_time;
+    portEXIT_CRITICAL(&s_snapshot_mux);
+    return *sample_us != 0;
 }
 
 imu_orientation_t *orientation_service_ctx(void)

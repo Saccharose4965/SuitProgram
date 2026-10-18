@@ -1,6 +1,10 @@
 #include "app_shell.h"
+#include "app_led_support.h"
 
 #include "orientation_service.h"
+#include "arm_pose.h"
+#include "esp_timer.h"
+#include "oled.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -12,18 +16,22 @@
 #endif
 
 typedef struct { float x, y, z; } vec3;
-typedef struct { float w, x, y, z; } quat;
 
 typedef struct {
     vec3 a;
     vec3 b;
 } segment3_t;
 
-static bool s_track_left_arm = false;
+static bool s_track_left_arm = true;
 static float s_view_yaw = 0.0f;
+static arm_pose_t s_pose;
 
-// Match the screen-alignment correction used by the 3D renderer.
-static const quat kMountDs = { 0.70710678f, 0.0f, 0.0f, 0.70710678f };
+static bool pose_sample(imu_quat_t *q)
+{
+    uint64_t stamp;
+    return orientation_service_snapshot(q, &stamp) &&
+           (uint64_t)esp_timer_get_time() - stamp <= 250000;
+}
 
 const shell_legend_t STICKMAN_LEGEND = {
     .slots = { SHELL_ICON_LEFT, SHELL_ICON_RIGHT, SHELL_ICON_SELECT, SHELL_ICON_REFRESH },
@@ -66,55 +74,6 @@ static inline vec3 v3_norm(vec3 a)
     return v3_scale(a, 1.0f / n);
 }
 
-static inline quat q_ident(void)
-{
-    return (quat){ 1.0f, 0.0f, 0.0f, 0.0f };
-}
-
-static inline quat q_conj(quat q)
-{
-    return (quat){ q.w, -q.x, -q.y, -q.z };
-}
-
-static inline quat q_mul(quat a, quat b)
-{
-    return (quat){
-        .w = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
-        .x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-        .y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-        .z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
-    };
-}
-
-static inline quat q_normed(quat q)
-{
-    float n = sqrtf(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z);
-    if (n < 1e-9f) return q_ident();
-    float inv = 1.0f / n;
-    q.w *= inv;
-    q.x *= inv;
-    q.y *= inv;
-    q.z *= inv;
-    return q;
-}
-
-static inline vec3 q_rotate(quat q, vec3 v)
-{
-    quat p = { 0.0f, v.x, v.y, v.z };
-    quat r = q_mul(q_mul(q, p), q_conj(q));
-    return v3(r.x, r.y, r.z);
-}
-
-static inline quat imu_quat_to_local(imu_quat_t q)
-{
-    return (quat){ q.w, q.x, q.y, q.z };
-}
-
-static inline quat apply_mount(quat q_sw, quat q_ds)
-{
-    quat q_sd = q_conj(q_ds);
-    return q_normed(q_mul(q_mul(q_ds, q_sw), q_sd));
-}
 
 static vec3 guess_upper_arm_dir(bool left_arm, vec3 forearm_dir)
 {
@@ -250,9 +209,17 @@ static void sort_segments_by_depth(const segment3_t *src, size_t count, size_t *
 void stickman_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
-    s_track_left_arm = false;
+    s_pose = (arm_pose_t){0};
     s_view_yaw = 0.0f;
+    led_ui_fft_set_armpose_app(true);
 }
+
+void stickman_app_deinit(shell_app_context_t *ctx)
+{
+    (void)ctx;
+    led_ui_fft_set_armpose_app(false);
+}
+
 
 void stickman_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 {
@@ -267,8 +234,10 @@ void stickman_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev
         if (s_view_yaw > (float)M_PI) s_view_yaw -= 2.0f * (float)M_PI;
     } else if (ev->button == INPUT_BTN_C) {
         s_track_left_arm = !s_track_left_arm;
+        s_pose.calibrated = false;
     } else if (ev->button == INPUT_BTN_D) {
-        orientation_service_recenter();
+        imu_quat_t q;
+        if (pose_sample(&q)) arm_pose_calibrate(&s_pose, q);
     }
 }
 
@@ -283,11 +252,15 @@ void stickman_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int 
     const int clip_x1 = x + w;
     const int clip_y1 = y + h;
 
-    quat q_arm = q_ident();
-    imu_orientation_t *ori = orientation_service_ctx();
-    if (ori && imu_orientation_ready(ori)) {
-        q_arm = apply_mount(imu_quat_to_local(imu_orientation_get(ori)), kMountDs);
+    imu_quat_t q;
+    arm_vec3_t aim, span;
+    if (!pose_sample(&q)) return;
+    if (!s_pose.calibrated) {
+        oled_draw_text3x5(fb, x+4, y+4, "Fold arm; press D");
+        return;
     }
+    if (!arm_pose_direction(&s_pose,q,s_track_left_arm,&aim) ||
+        !arm_pose_vector(&s_pose,q,s_track_left_arm,(arm_vec3_t){1,0,0},&span)) return;
 
     const vec3 neck = v3(0.0f, 18.0f, 0.0f);
     const vec3 pelvis = v3(0.0f, -2.0f, 0.0f);
@@ -303,17 +276,16 @@ void stickman_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int 
 
     const vec3 active_shoulder = s_track_left_arm ? shoulder_l : shoulder_r;
     const vec3 static_shoulder = s_track_left_arm ? shoulder_r : shoulder_l;
-    const float hand_sign = s_track_left_arm ? -1.0f : 1.0f;
     const float upper_len = 14.0f;
     const float fore_len = 16.0f;
     const float hand_len = 3.5f;
 
-    const vec3 forearm_dir = v3_norm(q_rotate(q_arm, v3(0.0f, -1.0f, 0.0f)));
+    const vec3 forearm_dir = v3(aim.x, aim.y, aim.z);
     const vec3 upper_dir = guess_upper_arm_dir(s_track_left_arm, forearm_dir);
     const vec3 elbow = v3_add(active_shoulder, v3_scale(upper_dir, upper_len));
     const vec3 wrist = v3_add(elbow, v3_scale(forearm_dir, fore_len));
     const vec3 hand_center = v3_add(wrist, v3_scale(forearm_dir, hand_len));
-    const vec3 hand_span = q_rotate(q_arm, v3(4.0f * hand_sign, 0.0f, 0.0f));
+    const vec3 hand_span = v3_scale(v3(span.x,span.y,span.z),4.0f);
     const vec3 hand_a = v3_sub(hand_center, hand_span);
     const vec3 hand_b = v3_add(hand_center, hand_span);
 

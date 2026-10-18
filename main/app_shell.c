@@ -430,6 +430,7 @@ static void link_frame_handler(link_msg_type_t type, const uint8_t *src_mac,
 {
     (void)user_ctx;
     call_app_receive(type, src_mac, payload, len);
+    light_paint_receive(type, src_mac, payload, len);
     message_direct_receive(type, src_mac, payload, len);
     if (type == LINK_MSG_CONTROL && payload && len >= 2) {
         show_runtime_handle_link_frame(type, src_mac, payload, len);
@@ -723,12 +724,32 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .draw   = fluid_app_draw_wrapper,
     },
     {
+        .id = "synth",
+        .name = "Arm Synth",
+        .init = synth_init,
+        .deinit = synth_deinit,
+        .handle_input = synth_input,
+        .tick = synth_tick,
+        .draw = synth_draw,
+    },
+    {
+        .id     = "light_paint",
+        .name   = "Light Paint",
+        .flags  = 0,
+        .legend = NULL,
+        .init   = light_paint_init,
+        .deinit = light_paint_deinit,
+        .handle_input = light_paint_input,
+        .tick   = light_paint_tick,
+        .draw   = light_paint_draw,
+    },
+    {
         .id     = "stickman",
         .name   = "Arm Pose",
         .flags  = SHELL_APP_FLAG_SHOW_LEGEND,
         .legend = &STICKMAN_LEGEND,
         .init   = stickman_app_init,
-        .deinit = NULL,
+        .deinit = stickman_app_deinit,
         .tick   = NULL,
         .handle_input = stickman_app_handle_input,
         .draw   = stickman_app_draw,
