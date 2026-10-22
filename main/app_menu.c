@@ -1,6 +1,8 @@
 #include "app_shell.h"
 
 #include <string.h>
+#include <stdio.h>
+#include "message_notifications.h"
 
 #include "esp_system.h"
 
@@ -227,6 +229,12 @@ void menu_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h
         shell_ui_menu_reset(g_menu_state.selected);
     }
 
+    char notification[32];
+    unsigned unseen=message_unseen_count();
+    if(unseen && (g_menu_state.page==MENU_ROOT || g_menu_state.page==MENU_COMM)) {
+        snprintf(notification,sizeof(notification),"%s / MSG %u%s",title,unseen,unseen==99?"+":"");
+        title=notification;
+    }
     shell_menu_view_t view = {
         .entries  = entries,
         .count    = count,

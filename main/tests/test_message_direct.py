@@ -79,6 +79,7 @@ int main(void) {
         input[4]=input[3]; // repeat END after lost final ACK
         index_in=0;count_in=bad?4:5;acknowledgements=0;
         if(!setjmp(done))receiver(NULL);
+        assert(notifications==1); // repeated END and checksum failure never notify twice
         assert(acknowledgements==count_in && last_status==bad);
         char name[128];snprintf(name,sizeof(name),"010000000000_%08x.wav",sid);
         FILE*f=fopen(name,"rb");
@@ -98,7 +99,8 @@ class DirectMessageTest(unittest.TestCase):
         source = source[source.index('enum { START'):]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)
-            (path / 'test.c').write_text(STUBS + source + TEST)
+            notification_stub = '\nstatic unsigned notifications;\nstatic void telemetry_file_received(const char *path){(void)path;notifications++;}\n'
+            (path / 'test.c').write_text(STUBS + notification_stub + source + TEST)
             subprocess.run(['gcc', '-std=c11', '-Wall', '-Wextra',
                             '-fsanitize=address,undefined', str(path / 'test.c'),
                             '-o', str(path / 'test')], check=True)

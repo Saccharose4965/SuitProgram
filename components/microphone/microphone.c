@@ -2,6 +2,7 @@
 #include "audio.h"
 #include "storage_sd.h"
 #include "hw.h"
+#include "recording_envelope.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -33,6 +34,22 @@ static size_t s_bytes_data = 0;
 static char   s_last_path[128] = {0};
 static int    s_rate = MIC_REC_RATE_HZ;
 static TaskHandle_t s_rec_task = NULL;
+static portMUX_TYPE s_envelope_mux=portMUX_INITIALIZER_UNLOCKED;
+static recording_envelope_t s_envelope;
+size_t mic_rec_envelope(uint8_t *out,size_t capacity)
+{
+    if(!out)return 0;
+    portENTER_CRITICAL(&s_envelope_mux);
+    size_t n=recording_envelope_copy(&s_envelope,out,capacity);
+    portEXIT_CRITICAL(&s_envelope_mux);
+    return n;
+}
+static void publish_envelope(const recording_envelope_t *e)
+{
+    portENTER_CRITICAL(&s_envelope_mux);
+    s_envelope=*e;
+    portEXIT_CRITICAL(&s_envelope_mux);
+}
 
 /* WAV helpers */
 static void write_wav_header(FILE *f, int fs, int bits, int ch, uint32_t data_bytes){
@@ -75,6 +92,8 @@ static esp_err_t make_autopath(char out[128]){
 /* Task: pull 32-bit samples from RX, scale to s16, write to SD */
 static void recorder_task(void *arg){
     (void)arg;
+    recording_envelope_t envelope={.window=(unsigned)s_rate/20};
+    publish_envelope(&envelope);
     const size_t frames    = 256;                               // per DMA frame
     const size_t in_bytes  = frames * sizeof(int32_t) * 2;      // 32-bit L+R
     const size_t out_bytes = frames * sizeof(int16_t);          // mono s16
@@ -131,6 +150,8 @@ static void recorder_task(void *arg){
 
         size_t wrote = fwrite(pcm16, 1, frames_rd * sizeof(int16_t), s_wav);
         s_bytes_data += wrote;
+        recording_envelope_feed(&envelope,pcm16,wrote/sizeof(int16_t));
+        publish_envelope(&envelope);
         if(wrote != frames_rd * sizeof(int16_t)) {
             ESP_LOGE(TAG, "SD write failed; stopping recording");
             s_rec=false;
@@ -140,6 +161,8 @@ static void recorder_task(void *arg){
         if ((++flush_ctr & 0x1F) == 0) fflush(s_wav); // periodic flush
     }
 
+    if(envelope.frames)recording_envelope_push(&envelope);
+    publish_envelope(&envelope);
     if (s_wav) {
         finalize_wav(s_wav, s_rate, s_bytes_data);
         fclose(s_wav);
@@ -198,6 +221,8 @@ esp_err_t mic_rec_start(const char *path){
     // Bluetooth may have released/recreated the I2S bus since mic_rec_init.
     s_rx = audio_rx_handle();
 
+    recording_envelope_t empty={0};
+    publish_envelope(&empty);
     s_rec = true;
     BaseType_t ok = xTaskCreatePinnedToCore(recorder_task, "mic_rec", 4096, NULL, 5, &s_rec_task, BG_TASK_CORE);
     if (ok != pdPASS) {

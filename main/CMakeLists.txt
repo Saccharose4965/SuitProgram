@@ -22,6 +22,7 @@ idf_component_register(
         "app_show_player.c"
         "app_bt.c"
         "app_message.c"
+        "message_notifications.c"
         "app_call.c"
         "message_direct.c"
         "app_file_rx.c"

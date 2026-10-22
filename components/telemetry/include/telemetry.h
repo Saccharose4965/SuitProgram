@@ -40,6 +40,8 @@ static inline esp_err_t telemetry_send_file_udp(const char *path,
 // Start a simple UDP file receiver (best-effort). Saves incoming files to the
 // given directory. Call after telemetry_start(). Runs until reboot.
 esp_err_t telemetry_start_file_receiver(uint16_t listen_port, const char *save_dir);
+// Optional application hook, invoked only after successful final-file rename.
+void telemetry_file_received(const char *path);
 
 // Stream an in-memory buffer to a peer over UDP (best-effort + final ACK).
 // Useful for real-time “call”-style audio without SD. Buffer must stay valid

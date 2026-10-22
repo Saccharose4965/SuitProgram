@@ -2,6 +2,7 @@
 #include "esp_err.h"
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,6 +30,8 @@ bool      mic_rec_is_recording(void);
 
 /** Optional: return the last path used (NULL if none yet). */
 const char* mic_rec_last_path(void);
+// 50 ms peak-amplitude columns, oldest first (up to 96), frozen after stop.
+size_t mic_rec_envelope(uint8_t *out, size_t capacity);
 
 #ifdef __cplusplus
 }

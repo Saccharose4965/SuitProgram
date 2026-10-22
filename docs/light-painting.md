@@ -1,5 +1,8 @@
 # Light painting and Arm Pose
 
+For file-level implementation, contracts, timing and limitations, see
+[Orientation and Paint internals](documentation/orientation-and-paint.md).
+
 Open **Simulations → Light Paint** on each participating suit. Select **Painter**
 on the suit with the forearm IMU; select **Canvas** on the receiving suits.
 Only open Canvas apps accept paint. All connected canvases receive the same

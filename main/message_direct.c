@@ -76,7 +76,10 @@ static void receiver(void *arg)
             valid=check && audio_wav_parse_file(check,&info)==ESP_OK && info.data_size>0 &&
                 (uint64_t)info.data_offset+info.data_size<=total;
             if(check) fclose(check);
-            if(valid && rename(partial,final)==0) { completed=id;completed_size=received;memcpy(completed_peer,peer,6); }
+            if(valid && rename(partial,final)==0) {
+                completed=id;completed_size=received;memcpy(completed_peer,peer,6);
+                telemetry_file_received(final);
+            }
             else { reply[3]=1;remove(partial); }
             memcpy(reply+8,&received,4);
         } else if(p.wire[2]==END && sid==completed && !memcmp(p.mac,completed_peer,6)) {

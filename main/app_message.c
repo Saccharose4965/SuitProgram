@@ -1,5 +1,6 @@
 #include "app_shell.h"
 #include "message_direct.h"
+#include "message_notifications.h"
 
 #include <errno.h>
 #include <ctype.h>
@@ -27,6 +28,15 @@
 #include "storage_sd.h"
 #include "telemetry.h"
 #include "audio_wav.h"
+#include "esp_attr.h"
+
+enum { MSG_MENU, MSG_NEW, MSG_OUTBOX, MSG_INBOX, MSG_FILE_LIMIT=96 };
+static int s_page, s_choice;
+static size_t s_file_count, s_file_selected;
+static bool s_list_full;
+static bool s_record_graph;
+static EXT_RAM_BSS_ATTR char s_files[MSG_FILE_LIMIT][64];
+static char s_playing_path[128];
 
 static bool message_valid_wav(const char *path)
 {
@@ -90,7 +100,13 @@ shell_legend_t MESSAGE_LEGEND = {
 
 static void message_update_legend(void)
 {
-    MESSAGE_LEGEND.slots[0] = mic_rec_is_recording() ? SHELL_ICON_STOP : SHELL_ICON_RECORD;
+    MESSAGE_LEGEND.slots[0] = s_page==MSG_NEW ? SHELL_ICON_LEFT : SHELL_ICON_UP;
+    MESSAGE_LEGEND.slots[1] = s_page==MSG_NEW ? SHELL_ICON_SELECT : SHELL_ICON_DOWN;
+    MESSAGE_LEGEND.slots[2] = s_page==MSG_NEW ?
+        (mic_rec_is_recording()?SHELL_ICON_STOP:SHELL_ICON_RECORD) :
+        s_page==MSG_OUTBOX ? SHELL_ICON_PLAY : SHELL_ICON_NONE;
+    MESSAGE_LEGEND.slots[3] = s_page==MSG_NEW || s_page==MSG_INBOX ?
+        SHELL_ICON_PLAY : SHELL_ICON_SELECT;
 }
 
 static uint16_t message_port(void)
@@ -206,6 +222,7 @@ static bool message_parse_outbox_number(const char *name, uint64_t *out_num)
 
     uint64_t num = 0;
     while (isdigit((unsigned char)*p)) {
+        if(num>(UINT64_MAX-(uint64_t)(*p-'0'))/10u)return false;
         num = (num * 10u) + (uint64_t)(*p - '0');
         ++p;
     }
@@ -284,8 +301,15 @@ static esp_err_t message_build_record_path(char *out, size_t out_len)
         next_num = scan.latest_num + 1u;
     }
 
-    int n = snprintf(out, out_len, "%s/msg%" PRIu64 ".wav", s_message.outbox_dir, next_num);
-    return (n > 0 && (size_t)n < out_len) ? ESP_OK : ESP_ERR_NO_MEM;
+    // Invalid/unfinished old recordings must never be overwritten either.
+    for (;;) {
+        int n = snprintf(out, out_len, "%s/msg%" PRIu64 ".wav", s_message.outbox_dir, next_num);
+        if(n<=0 || (size_t)n>=out_len) return ESP_ERR_NO_MEM;
+        struct stat st;
+        if(stat(out,&st)!=0) return errno==ENOENT ? ESP_OK : ESP_FAIL;
+        if(next_num==UINT64_MAX) return ESP_ERR_INVALID_STATE;
+        ++next_num;
+    }
 }
 
 static void message_capture_last_path(void)
@@ -307,68 +331,6 @@ static void message_restore_latest_outbox_path(void)
     }
 }
 
-static esp_err_t message_select_random_outbox_path(void)
-{
-    if (mic_rec_is_recording()) return ESP_ERR_INVALID_STATE;
-    if (s_message.send_active) return ESP_ERR_INVALID_STATE;
-    if (!s_message.sd_ready && !message_prepare_dirs()) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    const char *dirs[]={s_message.outbox_dir,s_message.inbox_dir};
-    char chosen[sizeof(s_message.last_path)]={0};
-    unsigned count=0;
-    for(unsigned i=0;i<2;i++) {
-        DIR *dir=opendir(dirs[i]);if(!dir)continue;
-        struct dirent *entry;
-        while((entry=readdir(dir))) {
-            size_t n=strlen(entry->d_name);
-            if(n<4 || strcmp(entry->d_name+n-4,".wav"))continue;
-            char path[256];
-            int length=snprintf(path,sizeof(path),"%s/%s",dirs[i],entry->d_name);
-            if(length<0 || (size_t)length>=sizeof(chosen) || !message_valid_wav(path))continue;
-            if(esp_random()%++count==0)strcpy(chosen,path);
-        }
-        closedir(dir);
-    }
-    if(!count)return ESP_ERR_NOT_FOUND;
-    if(audio_player_is_active())audio_player_stop();
-    strcpy(s_message.last_path,chosen);return ESP_OK;
-}
-
-static esp_err_t message_delete_latest_outbox_path(void)
-{
-    if (mic_rec_is_recording()) return ESP_ERR_INVALID_STATE;
-    if (s_message.send_active) return ESP_ERR_INVALID_STATE;
-    if (!s_message.sd_ready && !message_prepare_dirs()) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    message_outbox_scan_t scan = {0};
-    esp_err_t err = message_scan_outbox(&scan);
-    if (err != ESP_OK) return err;
-    if (!scan.latest_name[0]) return ESP_ERR_NOT_FOUND;
-
-    char latest_path[128];
-    err = message_build_outbox_path_from_name(scan.latest_name, latest_path, sizeof(latest_path));
-    if (err != ESP_OK) return err;
-
-    bool selected_was_latest = (s_message.last_path[0] != 0) &&
-                               (strcmp(s_message.last_path, latest_path) == 0);
-
-    if (audio_player_is_active()) {
-        audio_player_stop();
-    }
-    if (remove(latest_path) != 0) {
-        return ESP_FAIL;
-    }
-
-    if (selected_was_latest) {
-        s_message.last_path[0] = 0;
-        message_restore_latest_outbox_path();
-    }
-    return ESP_OK;
-}
 
 static void message_send_progress(size_t sent, size_t total, void *user_ctx)
 {
@@ -429,6 +391,7 @@ static esp_err_t message_start_recording(void)
     message_interrupt_services_for_recording();
     err = mic_rec_start(path);
     if (err == ESP_OK) {
+        s_record_graph=true;
         s_message.rec_started_us = esp_timer_get_time();
         strncpy(s_message.last_path, path, sizeof(s_message.last_path) - 1);
         s_message.last_path[sizeof(s_message.last_path) - 1] = 0;
@@ -450,10 +413,12 @@ static esp_err_t message_toggle_playback(void)
     if (mic_rec_is_recording()) return ESP_ERR_INVALID_STATE;
     if (s_message.send_active) return ESP_ERR_INVALID_STATE;
     if (audio_player_is_active()) {
+        if(!strcmp(s_playing_path,s_message.last_path)) return audio_player_toggle_play_pause();
         audio_player_stop();
-        return ESP_OK;
     }
-    return audio_player_play(s_message.last_path);
+    esp_err_t err=audio_player_play(s_message.last_path);
+    if(err==ESP_OK) snprintf(s_playing_path,sizeof(s_playing_path),"%s",s_message.last_path);
+    return err;
 }
 
 static esp_err_t message_start_send(void)
@@ -489,6 +454,7 @@ static esp_err_t message_start_send(void)
 void message_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
+    s_page=MSG_MENU; s_choice=0;
     s_message.last_err = ESP_OK;
     s_message.send_err = ESP_OK;
     s_message.sd_ready = storage_sd_is_mounted();
@@ -513,86 +479,146 @@ void message_app_deinit(shell_app_context_t *ctx)
     message_update_legend();
 }
 
-void message_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
+static int message_name_compare(const void *a,const void *b)
 {
-    (void)ctx;
-    if (!ev) return;
-
-    if (ev->type == INPUT_EVENT_PRESS) {
-        if (ev->button == INPUT_BTN_B) {
-            s_message.last_err = message_toggle_playback();
-            return;
-        }
-
-        if (ev->button == INPUT_BTN_A) {
-            s_message.last_err = mic_rec_is_recording()
-                ? message_stop_recording()
-                : message_start_recording();
-            message_update_legend();
-            return;
-        }
-
-        if (ev->button == INPUT_BTN_C) {
-            s_message.last_err = message_select_random_outbox_path();
-            return;
-        }
-
-        if (ev->button == INPUT_BTN_D) {
-            s_message.last_err = message_start_send();
-        }
-        return;
-    }
-
-    if (ev->type == INPUT_EVENT_LONG_PRESS && ev->button == INPUT_BTN_C) {
-        s_message.last_err = message_delete_latest_outbox_path();
-    }
+    uint64_t na,nb;
+    if(message_parse_outbox_number(a,&na) && message_parse_outbox_number(b,&nb))
+        return na<nb?1:na>nb?-1:0;
+    return strcmp(b,a);
 }
 
-void message_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)
+static void message_open_list(int page)
+{
+    uint32_t arrivals=message_arrival_snapshot();
+    s_page=page; s_file_count=0; s_file_selected=0; s_list_full=false;
+    if(!message_prepare_dirs()) {s_message.last_err=ESP_FAIL;return;}
+    const char *base=page==MSG_INBOX?s_message.inbox_dir:s_message.outbox_dir;
+    DIR *dir=opendir(base);
+    if(!dir){s_message.last_err=ESP_ERR_NOT_FOUND;return;}
+    struct dirent *entry;
+    while((entry=readdir(dir))) {
+        size_t n=strlen(entry->d_name);
+        if(n<4 || n>=sizeof(s_files[0]) || strcmp(entry->d_name+n-4,".wav"))continue;
+        char path[256];
+        int length=snprintf(path,sizeof(path),"%s/%s",base,entry->d_name);
+        if(length<0 || length>=(int)sizeof(s_message.last_path) || !message_valid_wav(path))continue;
+        if(s_file_count==MSG_FILE_LIMIT){s_list_full=true;continue;}
+        strcpy(s_files[s_file_count++],entry->d_name);
+    }
+    closedir(dir);
+    qsort(s_files,s_file_count,sizeof(s_files[0]),message_name_compare);
+    if(page==MSG_INBOX && !s_list_full) message_mark_seen(arrivals);
+    s_message.last_err=ESP_OK;
+}
+
+static void message_new(void)
+{
+    s_record_graph=false;
+    s_page=MSG_NEW;
+    s_message.last_path[0]=0;
+}
+
+static void message_play_selected(void)
+{
+    if(!s_file_selected || s_file_selected>s_file_count)return;
+    const char *base=s_page==MSG_INBOX?s_message.inbox_dir:s_message.outbox_dir;
+    int n=snprintf(s_message.last_path,sizeof(s_message.last_path),"%s/%s",
+                   base,s_files[s_file_selected-1]);
+    s_message.last_err=n<0 || n>=(int)sizeof(s_message.last_path)?
+        ESP_ERR_INVALID_SIZE:message_toggle_playback();
+}
+
+void message_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
+{
+    if(!ev || ev->type!=INPUT_EVENT_PRESS)return;
+    if(s_message.send_active)return; // keep transfer source immutable
+    s_message.last_err=ESP_OK;
+    if(s_page==MSG_MENU) {
+        if(ev->button==INPUT_BTN_A && s_choice>0)--s_choice;
+        else if(ev->button==INPUT_BTN_B && s_choice<3)++s_choice;
+        else if(ev->button==INPUT_BTN_D) {
+            if(s_choice==0)message_new();
+            else if(s_choice<3)message_open_list(s_choice==1?MSG_OUTBOX:MSG_INBOX);
+            else if(ctx && ctx->request_switch)ctx->request_switch("menu_comm",ctx->request_user_data);
+        }
+    } else if(s_page==MSG_NEW) {
+        if(ev->button==INPUT_BTN_A) {
+            if(mic_rec_is_recording())s_message.last_err=message_stop_recording();
+            s_page=MSG_MENU;
+        } else if(ev->button==INPUT_BTN_B)s_message.last_err=message_start_send();
+        else if(ev->button==INPUT_BTN_C)s_message.last_err=mic_rec_is_recording()?
+            message_stop_recording():message_start_recording();
+        else if(ev->button==INPUT_BTN_D)s_message.last_err=message_toggle_playback();
+    } else {
+        if(ev->button==INPUT_BTN_A && s_file_selected>0)--s_file_selected;
+        else if(ev->button==INPUT_BTN_B && s_file_selected<s_file_count)++s_file_selected;
+        else if(ev->button==INPUT_BTN_D && !s_file_selected)s_page=MSG_MENU;
+        else if(ev->button==INPUT_BTN_D && s_page==MSG_OUTBOX)message_new();
+        else if((ev->button==INPUT_BTN_D && s_page==MSG_INBOX) ||
+                (ev->button==INPUT_BTN_C && s_page==MSG_OUTBOX))message_play_selected();
+    }
+    message_update_legend();
+}
+
+static void message_line(uint8_t *fb,int x,int y,int w,int h,int row,const char *text)
+{
+    if(w<8 || row<0 || 2+row*8+5>h)return;
+    char clipped[40];
+    int n=(w-4)/4;
+    if(n>(int)sizeof(clipped)-1)n=sizeof(clipped)-1;
+    snprintf(clipped,sizeof(clipped),"%.*s",n,text);
+    oled_draw_text3x5(fb,x+2,y+2+row*8,clipped);
+}
+
+void message_app_draw(shell_app_context_t *ctx,uint8_t *fb,int x,int y,int w,int h)
 {
     (void)ctx;
-    (void)w;
-    (void)h;
-    if (!fb) return;
-
-    char line[48];
-    oled_draw_text3x5(fb, x + 2, y + 2, "MESSAGE");
-
-    if (mic_rec_is_recording()) {
-        int secs = (int)((esp_timer_get_time() - s_message.rec_started_us) / 1000000LL);
-        snprintf(line, sizeof(line), "rec:%ds", secs);
-    } else if (s_message.send_active) {
-        if (s_message.send_total > 0) {
-            unsigned pct = (unsigned)((100u * s_message.send_sent) / s_message.send_total);
-            snprintf(line, sizeof(line), "send:%u%%", pct);
-        } else {
-            snprintf(line, sizeof(line), "send:starting");
+    if(!fb)return;
+    char line[80];
+    const char *title=s_page==MSG_MENU?"MESSAGES":s_page==MSG_NEW?"NEW / auto route":
+        s_page==MSG_OUTBOX?"OUTBOX C play D new":"INBOX D play/pause";
+    if(s_message.last_err!=ESP_OK)title=esp_err_to_name(s_message.last_err);
+    message_line(fb,x,y,w,h,0,title);
+    if(s_page==MSG_MENU) {
+        const char *items[]={"New","Outbox","Inbox","Back"};
+        for(int i=0;i<4;i++){snprintf(line,sizeof(line),"%c %s",s_choice==i?'>':' ',items[i]);message_line(fb,x,y,w,h,i+1,line);}
+    } else if(s_page==MSG_NEW) {
+        if(mic_rec_is_recording())snprintf(line,sizeof(line),"Recording %ds",(int)((esp_timer_get_time()-s_message.rec_started_us)/1000000));
+        else if(s_message.send_active)snprintf(line,sizeof(line),"Sending...");
+        else snprintf(line,sizeof(line),"%s",basename_or_self(s_message.last_path));
+        message_line(fb,x,y,w,h,1,line);
+        message_line(fb,x,y,w,h,2,"C record/stop D preview");
+        message_line(fb,x,y,w,h,3,"A back B send");
+        // One column per 50 ms of captured audio, not per UI frame. Peak
+        // envelope, frozen after stop; no SD reads and no second I2S consumer.
+        if(s_record_graph && w>4 && h>=37) {
+            uint8_t peaks[96];
+            size_t capacity=w-4<96?(size_t)(w-4):96;
+            size_t n=mic_rec_envelope(peaks,capacity);
+            int top=y+33, bottom=y+h-2, centre=(top+bottom)/2;
+            int radius=(bottom-top)/2;
+            for(size_t i=0;i<n;i++) {
+                int px=x+2+(int)i;
+                // Modest display gain only; recorded samples are untouched.
+                unsigned level=(unsigned)peaks[i]*4;
+                if(level>255)level=255;
+                int extent=(int)level*radius/255;
+                for(int py=centre-extent;py<=centre+extent;py++) {
+                    if(px<0 || px>=PANEL_W || py<0 || py>=PANEL_H)continue;
+                    unsigned bit=py*PANEL_W+px;
+                    fb[bit/8]|=(uint8_t)(1u<<(7-bit%8));
+                }
+            }
         }
-    } else if (s_message.last_path[0]) {
-        snprintf(line, sizeof(line), "ready");
     } else {
-        snprintf(line, sizeof(line), "idle");
-    }
-    oled_draw_text3x5(fb, x + 2, y + 10, line);
-
-    snprintf(line, sizeof(line), "%s", basename_or_self(s_message.last_path));
-    oled_draw_text3x5(fb, x + 2, y + 18, line);
-
-    if (s_message.last_path[0]) {
-        struct stat st = {0};
-        if (stat(s_message.last_path, &st) == 0 && st.st_size > 0) {
-            snprintf(line, sizeof(line), "sz:%luk p:%u",
-                     (unsigned long)((st.st_size + 1023) / 1024),
-                     (unsigned)message_port());
-        } else {
-            snprintf(line, sizeof(line), "p:%u", (unsigned)message_port());
+        int rows=(h-7)/8-1;
+        if(rows<1)return;
+        size_t first=s_file_selected>=(size_t)rows?s_file_selected-rows+1:0;
+        for(int row=0;row<rows && first+(size_t)row<=s_file_count;row++) {
+            size_t i=first+row;
+            snprintf(line,sizeof(line),"%c %s",i==s_file_selected?'>':' ',
+                     i?s_files[i-1]:(s_list_full?"Back (96+ files)":"Back"));
+            message_line(fb,x,y,w,h,row+1,line);
         }
-    } else {
-        snprintf(line, sizeof(line), "p:%u", (unsigned)message_port());
     }
-    oled_draw_text3x5(fb, x + 2, y + 26, line);
-
-    snprintf(line, sizeof(line), "last:%s", esp_err_to_name(s_message.last_err));
-    oled_draw_text3x5(fb, x + 2, y + 34, line);
-
 }

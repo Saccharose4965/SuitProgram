@@ -382,9 +382,25 @@ Light Paint (`main/app_light_paint.c`):
 - Controls, mounting assumptions and verification: docs/light-painting.md.
 
 Message (`main/app_message.c`):
-- `A`: start/stop mic recording
-- `B`: play/stop the current saved message
-- `D`: send the current saved message
+- Menu: A/B navigate New, Outbox, Inbox, Back; D selects.
+- New: C records/stops, D previews (play/pause), B sends using the existing
+  direct-first/PC-fallback route, A returns (finishing a recording if active).
+- New recordings show a 50 ms/column peak-amplitude envelope (latest 4.8 s
+  on a full-width display). It freezes on stop and clears on new recording.
+  Display gain is 4x, saturating at full height; WAV samples are unchanged.
+  This is a live recording overview, not a playback waveform for old files.
+- Outbox: A/B browse, C plays/pauses, D opens New; select Back with D to return.
+- Inbox: A/B browse, D plays/pauses; select Back with D to return.
+- Lists refresh on entry, cache up to 96 valid WAV names, and do no SD work
+  during drawing/scrolling. A full cache is marked "96+ files" on the Back row.
+  Outbox is recordings, not confirmed delivery history. Random selection and
+  the hidden long-C delete shortcut have been removed; existing files remain.
+- Main/Comm headings show MSG N for completed inbox arrivals this boot, from
+  direct suit transfer or the PC receiver. Opening Inbox acknowledges the
+  pre-scan arrival snapshot; arrivals during the scan stay flagged. A truncated
+  96+ file list does not clear the badge. This is an arrival indicator, not
+  persistent per-file read state. Open Messages once after boot to initialise
+  the existing receivers; no new always-on startup allocations were added.
 - Recording is forced to the left mic slot
 - Records save to `/sdcard/messages/outbox`; incoming files go to `/sdcard/messages/inbox`
 
@@ -817,7 +833,26 @@ Power / thermal notes (legacy hardware sizing):
 
 Open TODO / wishlist
 ---------------------
+- [ ] Document the entire ESP32/suit system in English, down to logic choices
+  and their rationale. Track every live file in docs/documentation/file-checklist.md.
+  A tick requires an explicit file-level review, not merely an overview mention;
+  source changes invalidate that tick. Review rules and regeneration commands:
+  docs/documentation/README.md. Include APIs, state/timing, task and resource
+  ownership, errors/recovery, hardware assumptions, tradeoffs and test limits.
+  Add separate inventories for ShowEditor, localFFT, relay/server utilities,
+  SD packages, wiring and ESP-IDF local patches before declaring system coverage.
+  Never reproduce credentials. Unknown rationale must be labelled unknown.
 Progress review (2026-10-19; keep the requests below as the design backlog):
+- Message UI first pass: explicit New/Outbox/Inbox navigation, deterministic
+  cached browsing, real play/pause, no draw-time SD calls or hidden deletion.
+  Recording names avoid overwriting incomplete files. UI bounds/control tests
+  and direct-transfer tests pass. Still TODO: named recipient selection,
+  per-suit sent history and persistent unread state. Recording now has a live
+  peak-envelope graph fed by captured PCM, with ring/window tests; it freezes
+  after stopping. No extra microphone reader or draw-time file access.
+  Main/Comm arrival badges now exist for this boot, with tests for successful
+  delivery, failed checksums, ACK retries and scan-time arrival races.
+  New-message A/B are temporarily back/send, not recipient selection.
 - Button consistency first pass: animation grid now uses A left/B down/C right/
   D select; Light Paint's list uses A/B and D with an explicit Back row.
   Speed still adjusts both ways in a D-entered edit mode. Host controls tests

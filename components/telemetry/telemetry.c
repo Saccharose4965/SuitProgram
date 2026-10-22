@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #define TEL_DEBUG 1   // set 0 to silence the breadcrumbs
+void __attribute__((weak)) telemetry_file_received(const char *path) {(void)path;}
 #define TEL_MAGIC 0x46494C45u  // 'FILE'
 
 static int  s_sock = -1;
@@ -405,6 +406,7 @@ static void telemetry_rx_task(void *arg){
         if(fclose(f)!=0) valid=false;
         timeout.tv_sec=0;setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
         if(!valid || rename(partial,path)!=0) {remove(partial);continue;}
+        telemetry_file_received(path);
         uint32_t ack[2]={TEL_MAGIC,total};
         sendto(sock,ack,sizeof(ack),0,(struct sockaddr *)&sender,sizeof(sender));
 #if TEL_DEBUG
