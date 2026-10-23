@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class SynthBluetoothTest(unittest.TestCase):
     def test_generator_bridge(self):
-        source = (ROOT / 'components/bt_audio/bt_audio_stream_file.c').read_text()
+        source = (ROOT / 'services/bt_audio/bt_audio_stream_file.c').read_text()
         bridge = source[source.index('static portMUX_TYPE s_generator_mux'):source.index('// ============================ File-backed')]
         harness = r'''
 #include <assert.h>

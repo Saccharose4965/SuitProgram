@@ -1,7 +1,7 @@
 #pragma once
 
 #include "app_shell.h"
-#include "app_keyboard.h"
+#include "keyboard.h"
 #include "link.h"
 
 #ifdef __cplusplus
@@ -172,10 +172,10 @@ void tetris_app_deinit(shell_app_context_t *ctx);
 void tetris_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t TETRIS_LEGEND;
 
-void snake_app_init_wrapper(shell_app_context_t *ctx);
-void snake_handle_input_wrapper(shell_app_context_t *ctx, const input_event_t *ev);
-void snake_tick_wrapper(shell_app_context_t *ctx, float dt_sec);
-void snake_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
+void snake_app_init(shell_app_context_t *ctx);
+void snake_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
+void snake_app_tick(shell_app_context_t *ctx, float dt_sec);
+void snake_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t SNAKE_LEGEND;
 
 void pong_app_init_wrapper(shell_app_context_t *ctx);
@@ -185,14 +185,19 @@ void pong_tick_wrapper(shell_app_context_t *ctx, float dt_sec);
 void pong_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t PONG_LEGEND;
 
-void threedee_app_init_wrapper(shell_app_context_t *ctx);
-void threedee_app_deinit_wrapper(shell_app_context_t *ctx);
-void threedee_handle_input_wrapper(shell_app_context_t *ctx, const input_event_t *ev);
-void threedee_tick_wrapper(shell_app_context_t *ctx, float dt_sec);
-void threedee_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
+void threedee_app_init(shell_app_context_t *ctx);
+void threedee_app_deinit(shell_app_context_t *ctx);
+void threedee_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
+void threedee_app_tick(shell_app_context_t *ctx, float dt_sec);
+void threedee_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);
 extern const shell_legend_t THREEDEE_LEGEND;
 
 void stickman_app_init(shell_app_context_t *ctx);
+void gyro_app_init(shell_app_context_t *ctx);
+void gyro_app_deinit(shell_app_context_t *ctx);
+void gyro_app_tick(shell_app_context_t *ctx,float dt);
+void gyro_app_input(shell_app_context_t *ctx,const input_event_t *ev);
+void gyro_app_draw(shell_app_context_t *ctx,uint8_t *fb,int x,int y,int w,int h);
 void stickman_app_deinit(shell_app_context_t *ctx);
 void synth_init(shell_app_context_t *ctx);
 void synth_deinit(shell_app_context_t *ctx);
@@ -204,7 +209,6 @@ void light_paint_deinit(shell_app_context_t *ctx);
 void light_paint_input(shell_app_context_t *ctx,const input_event_t *ev);
 void light_paint_tick(shell_app_context_t *ctx,float dt);
 void light_paint_draw(shell_app_context_t *ctx,uint8_t *fb,int x,int y,int w,int h);
-void light_paint_receive(link_msg_type_t type,const uint8_t *mac,const uint8_t *data,size_t len);
 extern const shell_legend_t LIGHT_PAINT_LEGEND;
 void stickman_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev);
 void stickman_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h);

@@ -1,4 +1,5 @@
 #include "app_shell.h"
+#include "ui_draw.h"
 #include "message_direct.h"
 #include "message_notifications.h"
 
@@ -167,7 +168,6 @@ static bool message_prepare_dirs(void)
 
 static void message_interrupt_services_for_recording(void)
 {
-    fft_set_display_enabled(false);
     fft_visualizer_stop();
     audio_player_stop();
 

@@ -1,5 +1,5 @@
 #include "shell_apps.h"
-#include "shell_audio.h"
+#include "audio_bus.h"
 
 #include <stdio.h>
 
@@ -72,7 +72,7 @@ void fft_sync_app_init(shell_app_context_t *ctx)
     s_offset_press_count = 0;
     shell_ui_menu_reset(s_selected);
 
-    if (led_source_mode_get() == LED_SOURCE_FFT && !shell_audio_init_if_needed()) {
+    if (led_source_mode_get() == LED_SOURCE_FFT && !audio_bus_init_if_needed()) {
         ESP_LOGE(TAG, "audio_init failed; FFT source unavailable");
     }
     led_source_service_tick(0.0f);

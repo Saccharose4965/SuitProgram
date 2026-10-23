@@ -1,0 +1,1 @@
+idf_component_register(SRCS show_renderer.c INCLUDE_DIRS include REQUIRES show_package suit_geometry led_layout led_modes)

@@ -3,7 +3,7 @@
 #include <math.h>
 #include <stdio.h>
 
-#include "app_led_support.h"
+#include "audio_policy.h"
 #include "fft.h"
 #include "led_modes.h"
 
@@ -93,7 +93,7 @@ void led_source_mode_set(led_source_mode_t mode)
         s_fft_phase_valid = false;
     }
     led_source_refresh_labels();
-    led_ui_fft_request(LED_UI_FFT_REQ_LED_SOURCE,
+    audio_policy_fft_request(AUDIO_POLICY_FFT_REQ_LED_SOURCE,
                        (s_source_mode == LED_SOURCE_FFT) && !led_source_blocked_by_slave());
     fft_led_export_enable((s_source_mode == LED_SOURCE_FFT) && !led_source_blocked_by_slave());
 }
@@ -153,7 +153,7 @@ void led_source_service_tick(float dt_sec)
 {
     bool blocked = led_source_blocked_by_slave();
     bool want_fft = (s_source_mode == LED_SOURCE_FFT) && !blocked;
-    led_ui_fft_request(LED_UI_FFT_REQ_LED_SOURCE, want_fft);
+    audio_policy_fft_request(AUDIO_POLICY_FFT_REQ_LED_SOURCE, want_fft);
     fft_led_export_enable(want_fft);
 
     if (blocked) {

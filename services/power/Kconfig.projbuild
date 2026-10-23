@@ -1,0 +1,15 @@
+menu "Power sensing"
+
+config POWER_PACK_DIVIDER_RATIO
+    string "Pack divider ratio (Vpack/Vadc), e.g. 5.7"
+    default "6.0"
+
+config POWER_CELL_V_EMPTY
+    string "Per-cell empty voltage (V)"
+    default "3.30"
+
+config POWER_CELL_V_FULL
+    string "Per-cell full voltage (V)"
+    default "4.15"
+
+endmenu

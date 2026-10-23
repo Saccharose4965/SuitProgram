@@ -1,4 +1,5 @@
 #include "app_shell.h"
+#include "ui_draw.h"
 #include "shell_apps.h"
 
 #include <math.h>

@@ -42,6 +42,7 @@ static const menu_entry_t g_menu_settings_entries[] = {
     { "bt",        "Bluetooth" },
     { "volume",    "Volume"    },
     { "preferences", "Preferences" },
+    { "gyro_calibration", "Gyro calibration" },
     { "master_control", "Master Control" },
     { "service_restart", "Svc Restart" },
     { "reboot",    "Restart"   },

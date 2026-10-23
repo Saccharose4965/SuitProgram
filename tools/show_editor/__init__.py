@@ -1,1 +1,0 @@
-"""Music show editor scaffolding."""

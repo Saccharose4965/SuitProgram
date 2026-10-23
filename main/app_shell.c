@@ -1,11 +1,13 @@
 #include "app_shell.h"
-#include "app_call.h"
+#include "call_app.h"
+#include "call_service.h"
 #include "message_direct.h"
 #include "shell_apps.h"
-#include "shell_audio.h"
+#include "audio_bus.h"
 #include "shell_profiler.h"
 #include "app_settings.h"
 #include "audio.h"
+#include "audio_i2s.h"
 #include "audio_player.h"
 #include "audio_rx.h"
 #include "fft.h"
@@ -30,8 +32,11 @@
 #include "link.h"
 #include "bt_audio.h"
 #include "orientation_service.h"
+#include "gyro_calibration.h"
+#include "input_audio_policy.h"
 #include "pong.h"
 #include "show_runtime.h"
+#include "paint_service.h"
 
 static const char *TAG = "shell";
 enum { OLED_FB_BYTES = PANEL_W * PANEL_H / 8 };
@@ -383,7 +388,6 @@ static void shell_graceful_restart(void)
     led_modes_enable(false);
     led_beat_enable(false);
 
-    fft_set_display_enabled(false);
     fft_visualizer_stop();
 
     audio_player_stop();
@@ -413,7 +417,7 @@ static void shell_graceful_restart(void)
         ESP_LOGW(TAG, "graceful restart: link rx detach failed: %s", esp_err_to_name(link_rx_err));
     }
 
-    esp_err_t audio_err = audio_disable_all();
+    esp_err_t audio_err = audio_i2s_disable_all();
     if (audio_err != ESP_OK) {
         ESP_LOGW(TAG, "graceful restart: audio disable failed: %s", esp_err_to_name(audio_err));
     }
@@ -429,8 +433,8 @@ static void link_frame_handler(link_msg_type_t type, const uint8_t *src_mac,
                                const uint8_t *payload, size_t len, void *user_ctx)
 {
     (void)user_ctx;
-    call_app_receive(type, src_mac, payload, len);
-    light_paint_receive(type, src_mac, payload, len);
+    call_service_receive(type, src_mac, payload, len);
+    paint_service_receive(type, src_mac, payload, len);
     message_direct_receive(type, src_mac, payload, len);
     if (type == LINK_MSG_CONTROL && payload && len >= 2) {
         show_runtime_handle_link_frame(type, src_mac, payload, len);
@@ -504,6 +508,11 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .tick   = NULL,
         .handle_input = volume_handle_input,
         .draw   = volume_draw,
+    },
+    {
+        .id = "gyro_calibration", .name = "Gyro calibration",
+        .flags = 0, .init = gyro_app_init, .deinit = gyro_app_deinit,
+        .tick = gyro_app_tick, .handle_input = gyro_app_input, .draw = gyro_app_draw,
     },
     {
         .id     = "preferences",
@@ -759,11 +768,11 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .name   = "3D Render",
         .flags  = 0,
         .legend = NULL,
-        .init   = threedee_app_init_wrapper,
-        .deinit = threedee_app_deinit_wrapper,
-        .tick   = threedee_tick_wrapper,
-        .handle_input = threedee_handle_input_wrapper,
-        .draw   = threedee_draw_wrapper,
+        .init   = threedee_app_init,
+        .deinit = threedee_app_deinit,
+        .tick   = threedee_app_tick,
+        .handle_input = threedee_app_handle_input,
+        .draw   = threedee_app_draw,
     },
     {
         .id     = "bad_apple",
@@ -792,11 +801,11 @@ static const shell_app_desc_t s_builtin_apps[] = {
         .name   = "Snake",
         .flags  = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
         .legend = &SNAKE_LEGEND,
-        .init   = snake_app_init_wrapper,
+        .init   = snake_app_init,
         .deinit = NULL,
-        .tick   = snake_tick_wrapper,
-        .handle_input = snake_handle_input_wrapper,
-        .draw   = snake_draw_wrapper,
+        .tick   = snake_app_tick,
+        .handle_input = snake_app_handle_input,
+        .draw   = snake_app_draw,
     },
     {
         .id     = "flappy",
@@ -900,7 +909,7 @@ static bool shell_init_hw_and_display(void)
     shell_start_logo_async();
 
     // Audio bus for FFT (shared RX/TX)
-    if (!shell_audio_init_if_needed()) {
+    if (!audio_bus_init_if_needed()) {
         ESP_LOGE(TAG, "audio_init failed; FFT won't run");
     } else {
         // Startup speaker sanity check (async so shell task does not trip WDT).
@@ -975,6 +984,7 @@ static void shell_seed_initial_system_state(void)
 static void shell_init_input_and_apps(void)
 {
     input_init();
+    input_set_activity_callback(input_audio_policy_activity);
 
     bt_audio_set_disconnect_cb(music_stop_playback);
 
@@ -1096,6 +1106,7 @@ void app_shell_start(void)
     system_state_init();
     ESP_LOGI(TAG, "stage: system_state_init done");
     app_settings_init();
+    (void)gyro_calibration_load();
     ESP_LOGI(TAG, "stage: settings init done");
     {
         esp_err_t layout_err = led_layout_init();

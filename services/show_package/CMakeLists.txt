@@ -1,0 +1,1 @@
+idf_component_register(SRCS show_package.c show_effect_presets.c INCLUDE_DIRS include REQUIRES storage_sd suit_geometry)

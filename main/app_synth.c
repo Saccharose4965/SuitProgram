@@ -1,6 +1,7 @@
 #include "app_shell.h"
-#include "app_led_support.h"
-#include "shell_audio.h"
+#include "ui_draw.h"
+#include "audio_policy.h"
+#include "audio_bus.h"
 #include "arm_pose.h"
 #include "orientation_service.h"
 #include "audio.h"
@@ -94,7 +95,7 @@ static void worker(void *unused)
     if(!stopping()) {
         s_voice.rate=SYNTH_RATE;
         s_voice.gain=0; // fade in on route change, never jump in amplitude
-        if(shell_audio_init_if_needed()) err=audio_play_generated(generate,NULL,SYNTH_RATE);
+        if(audio_bus_init_if_needed()) err=audio_play_generated(generate,NULL,SYNTH_RATE);
         else err=ESP_FAIL;
     }
     portENTER_CRITICAL(&s_mux);
@@ -106,7 +107,7 @@ static void worker(void *unused)
 void synth_init(shell_app_context_t *ctx)
 {
     (void)ctx;
-    led_ui_fft_set_synth_app(true);
+    audio_policy_fft_set_synth_app(true);
     s_pose=(arm_pose_t){0}; s_muted=true; s_worker=false;
     s_stop=false; s_bluetooth=false; s_hz=220; s_gain=0; s_updated=esp_timer_get_time(); s_error=ESP_OK;
     bt_audio_status_t status;
@@ -127,7 +128,7 @@ void synth_deinit(shell_app_context_t *ctx)
     // Bounded writes and a short release envelope; never delete a task in I2S.
     if(s_worker) xSemaphoreTake(s_done,portMAX_DELAY);
     s_worker=false;
-    led_ui_fft_set_synth_app(false);
+    audio_policy_fft_set_synth_app(false);
 }
 void synth_input(shell_app_context_t *ctx,const input_event_t *ev)
 {

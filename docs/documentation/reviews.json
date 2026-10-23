@@ -1,114 +1,114 @@
 {
   "components/microphone/include/recording_envelope.h": {
-    "doc": "docs/documentation/message-observability.md",
+    "doc": "docs/reference/technical/message-observability.md",
     "sha256": "49e252f3ce4931390eae4b1b5fce4aa75dd9a640604a6d7c8b182bf08f4d826d"
   },
   "components/mpu6500/CMakeLists.txt": {
-    "doc": "docs/documentation/imu-filter-and-driver.md",
+    "doc": "docs/reference/technical/imu-filter-and-driver.md",
     "sha256": "4836afd67e0e05c9eba44c75ddf42010deccf1b87ce2954a00a1ec01e610cb39"
   },
   "components/mpu6500/include/mpu6500.h": {
-    "doc": "docs/documentation/imu-filter-and-driver.md",
+    "doc": "docs/reference/technical/imu-filter-and-driver.md",
     "sha256": "38211528e11157b476c6f7184bca0d3f9a74a7e9ebd95bd6ebb82188dfee28e3"
   },
   "components/mpu6500/mpu6500.c": {
-    "doc": "docs/documentation/imu-filter-and-driver.md",
+    "doc": "docs/reference/technical/imu-filter-and-driver.md",
     "sha256": "3a1017bb4d80541853185ad93f8d47e249c002371767092b7aaf1ef5a0aa18bc"
   },
   "components/orientation/CMakeLists.txt": {
-    "doc": "docs/documentation/orientation-and-paint.md",
+    "doc": "docs/reference/technical/orientation-and-paint.md",
     "sha256": "a7aa25952428e842a183c89237ab7af2270c33d279749eed2656e0adffdc1258"
   },
   "components/orientation/arm_pose.c": {
-    "doc": "docs/documentation/orientation-and-paint.md",
+    "doc": "docs/reference/technical/orientation-and-paint.md",
     "sha256": "aec41683a408d7b528ca4621233fe7f5619768d62fab8d0cc60fd9e591e12547"
   },
   "components/orientation/include/arm_pose.h": {
-    "doc": "docs/documentation/orientation-and-paint.md",
+    "doc": "docs/reference/technical/orientation-and-paint.md",
     "sha256": "81dea6d9c363a7b6d2611d765c79396c4ca43fda523f101909d6edc6cc26ba95"
   },
   "components/orientation/include/orientation.h": {
-    "doc": "docs/documentation/imu-filter-and-driver.md",
+    "doc": "docs/reference/technical/imu-filter-and-driver.md",
     "sha256": "7909b96916f239031482336f7086593cfd3cec9073a64c8071b11ed750b9800e"
   },
   "components/orientation/include/orientation_service.h": {
-    "doc": "docs/documentation/orientation-and-paint.md",
+    "doc": "docs/reference/technical/orientation-and-paint.md",
     "sha256": "1d3fc554beb822eb1371d090b3731a92985e77becb8b043de977a3d6b7260635"
   },
   "components/orientation/orientation.c": {
-    "doc": "docs/documentation/imu-filter-and-driver.md",
+    "doc": "docs/reference/technical/imu-filter-and-driver.md",
     "sha256": "e55e47b5201595530650acfe09ae52dec6d5bd879f3bcf11881777ceb054169a"
   },
   "components/orientation/orientation_service.c": {
-    "doc": "docs/documentation/orientation-and-paint.md",
+    "doc": "docs/reference/technical/orientation-and-paint.md",
     "sha256": "fe8235c9a474c07ad63b7dabf4c5b5de265137d2d0faf0a6bdca562220f3880a"
   },
   "components/threedee/CMakeLists.txt": {
-    "doc": "docs/documentation/pose-displays.md",
+    "doc": "docs/reference/technical/pose-displays.md",
     "sha256": "89c6b2a7074675dd83ad38d1e70130333b1121a2f76f12a6b194b310c8627749"
   },
   "components/threedee/include/threedee.h": {
-    "doc": "docs/documentation/pose-displays.md",
+    "doc": "docs/reference/technical/pose-displays.md",
     "sha256": "b282791e105e5d882da0bfa0d5c1b32f4cb626e2dbe60075185920130930b795"
   },
   "components/threedee/threedee.c": {
-    "doc": "docs/documentation/pose-displays.md",
+    "doc": "docs/reference/technical/pose-displays.md",
     "sha256": "ca1d848f1519d2cb1f7370a23b9f96063af95685f0c010323168069393d5ee53"
   },
   "main/app_light_paint.c": {
-    "doc": "docs/documentation/orientation-and-paint.md",
+    "doc": "docs/reference/technical/orientation-and-paint.md",
     "sha256": "da062be56413ce38174bb45d71818321ca0a46e3544b2584101b990d5bc9fc61"
   },
   "main/app_stickman.c": {
-    "doc": "docs/documentation/pose-displays.md",
+    "doc": "docs/reference/technical/pose-displays.md",
     "sha256": "f1b97603b1b8b8234cfbc4e76e20d0e7fddaf4f2a365e6fc074ee2c6eaeda1d4"
   },
   "main/app_synth.c": {
-    "doc": "docs/documentation/arm-synth.md",
+    "doc": "docs/reference/technical/arm-synth.md",
     "sha256": "ec987a7daefc00aab11abf77f6bee597f659707749352339ea8823507dda97fe"
   },
   "main/app_threedee.c": {
-    "doc": "docs/documentation/pose-displays.md",
+    "doc": "docs/reference/technical/pose-displays.md",
     "sha256": "ab600ecf3c4a50c2385fff5965172ddd491a0900c88cf843b60b41660206e4f2"
   },
   "main/message_notifications.c": {
-    "doc": "docs/documentation/message-observability.md",
+    "doc": "docs/reference/technical/message-observability.md",
     "sha256": "4628745a4f8523ba5f38bdb5d8ab2ff0f7e07964d734506853740bf701094d7a"
   },
   "main/message_notifications.h": {
-    "doc": "docs/documentation/message-observability.md",
+    "doc": "docs/reference/technical/message-observability.md",
     "sha256": "49566f4204763825726403dd36f4a6103c0c6720ad84358bb7eb93dbcf3317d7"
   },
   "main/shell_audio.c": {
-    "doc": "docs/documentation/arm-synth.md",
+    "doc": "docs/reference/technical/arm-synth.md",
     "sha256": "b9dd9a5d4baeb111d2a144eef44a2cd8d1d0d9d61eccfbfd320cec3db738ac67"
   },
   "main/shell_audio.h": {
-    "doc": "docs/documentation/arm-synth.md",
+    "doc": "docs/reference/technical/arm-synth.md",
     "sha256": "a2afbc6fe34bb18cb06e3a78d85e179f9f7bc22e328307dd294e5a86dba836dd"
   },
   "main/synth_voice.h": {
-    "doc": "docs/documentation/arm-synth.md",
+    "doc": "docs/reference/technical/arm-synth.md",
     "sha256": "9fbed7d86f684aa629c33f7d0b2a04301909b7b71a63d309c1ccdaa0ed53ee16"
   },
   "main/tests/test_light_paint.py": {
-    "doc": "docs/documentation/pose-displays.md",
+    "doc": "docs/reference/technical/pose-displays.md",
     "sha256": "3cc6860edc4382c4d90c3d3bb97e0b170eb119659a24f484900e9b3bcc3f74b0"
   },
   "main/tests/test_message_notifications.py": {
-    "doc": "docs/documentation/message-observability.md",
+    "doc": "docs/reference/technical/message-observability.md",
     "sha256": "93c2aed4427ed777d4d836f1aaba6e137abbd07632c7e09b4816bdae4a616a38"
   },
   "main/tests/test_recording_envelope.py": {
-    "doc": "docs/documentation/message-observability.md",
+    "doc": "docs/reference/technical/message-observability.md",
     "sha256": "2afaa3f99837e08fedef73dd1e03eafb5cd9dd9c143f8af1ba3777582d328454"
   },
   "main/tests/test_synth.py": {
-    "doc": "docs/documentation/arm-synth.md",
+    "doc": "docs/reference/technical/arm-synth.md",
     "sha256": "3940988d685df9d6694165f2da2b89bcf0163bc30dd9e10a552fed36b31fa856"
   },
   "main/tests/test_synth_bt.py": {
-    "doc": "docs/documentation/arm-synth.md",
+    "doc": "docs/reference/technical/arm-synth.md",
     "sha256": "4ed8967dfc70e23c4da8423dca8fc58c57396e29bb4a64c2b0a9bd40a244aeef"
   }
 }

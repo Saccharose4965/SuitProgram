@@ -1,6 +1,10 @@
 # Architecture: apps, services, drivers
 
-Discussion draft, not an implemented migration. The agreed layers are apps,
+Original proposal and dependency snapshot, retained as migration context.
+See [progress](../PROGRESS.md) for completed changes and the
+[documentation index](README.md) for current module explanations.
+
+The agreed layers are apps,
 services (background work **and** shared logic), and drivers. There is no fourth
 shared-logic layer. The purpose is to make ownership obvious, not to add wrappers.
 
@@ -13,20 +17,19 @@ An arrow means “uses”; a build dependency alone does not prove an active cal
 | Feature | Current path | Boundary problem |
 | --- | --- | --- |
 | Arm input | MPU driver → orientation service → arm maths → Paint/Arm Pose/Synth | Mostly separated already; 3D Render still reads mutable filter state directly. |
-| Painting | `main/app_light_paint.c` → orientation, link, show geometry, LED output | UI, protocol handling, brush rendering and ownership live in one app file. |
-| Beat tracking | FFT component → audio, microphone, player, LEDs and OLED | Processing and display belong to different layers but share a component. |
-| Bluetooth playback | player ↔ Bluetooth component → audio/ESP-IDF | Both build and source dependencies run both ways; BT remote play/pause calls the player. The BT component also contains its screen. |
-| Lighting | show/modes → LED component → RMT/hardware/layout | `led.c` contains effects and audio brightness as well as transmission. It is not just a driver. |
-| Shows | show runtime → rendering/package/layout, link and playback | A reasonable service grouping, but reusable suit geometry is named/owned as show-specific. |
+| Painting | Paint app → Paint/orientation/geometry services → Link and LED output | Split; hardware acceptance of the shared orientation remains open. |
+| Beat tracking | FFT service → audio, microphone and LEDs; FFT viewer → OLED | Split; the detector continues independently of its screen. |
+| Bluetooth playback | Audio Player ↔ Bluetooth service → audio/ESP-IDF | The screen is separated; the two services still have cyclic playback and disconnect ownership. |
+| Lighting | show/modes → LED service → strip driver/layout | Split; effect policy remains above the physical RMT boundary. |
+| Shows | player → package/renderer/runtime → layout, link and playback | Split; package, pixels, session and UI now have separate owners. |
 | Network reception | link → shell dispatch → call app, Paint app, messages, show, Pong | The shell understands packet consumers instead of just screens. |
-| Button noise handling | input driver → FFT suppression | Hardware input knows about a particular consumer's analysis policy. |
-| Resource conflicts | apps → `app_led_support.c` → FFT/audio/BT/show state | System-wide policy is housed and named like LED UI support. |
+| Button noise handling | input driver → input/audio policy → FFT suppression | Split; policy translates hardware events into analysis suppression. |
+| Resource conflicts | apps → audio policy → FFT/audio/BT/show state | Partially centralized; remaining ownership rules need subsystem review. |
 
-Evidence anchors: `main/app_shell.c` (`link_frame_handler`, shell loop),
-`main/app_led_support.c`, `components/input/input.c`,
-`components/bt_audio/bt_audio.c` (remote playback command), and component
-`CMakeLists.txt` files. `components/led/led.c` contains both RMT transmission
-and beat-colour/brightness helpers. These are concrete seams, not inferred bugs.
+Evidence anchors: `main/app_shell.c` (`link_frame_handler`, shell loop), the
+audio-policy and input modules, `services/bt_audio/bt_audio.c` (remote playback
+command), and the app/service/driver `CMakeLists.txt` files. This table now
+records the outcome of the migration as well as the remaining seams.
 
 There is also an important scheduling distinction: some services have their own
 tasks, while show/source coordination is ticked by the shell loop. Moving code
@@ -145,4 +148,4 @@ Separate three kinds of statement: current behaviour visible in code, design
 intent supported by our decisions/comments, and a proposed improvement. When a
 historical reason is unknown, say so. Existing technical reviews remain reference
 notes; their checkmarks mean source was inspected, not that this new explanation
-standard is complete. The pilot is [How light painting works](design/light-painting.md).
+standard is complete. The pilot is [How light painting works](../services/paint/README.md).

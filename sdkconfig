@@ -725,6 +725,12 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
+# Shell Performance
+#
+# CONFIG_SHELL_PERF_LOG_ENABLE is not set
+# end of Shell Performance
+
+#
 # Power sensing
 #
 # default:
@@ -734,12 +740,6 @@ CONFIG_POWER_CELL_V_EMPTY="3.30"
 # default:
 CONFIG_POWER_CELL_V_FULL="4.15"
 # end of Power sensing
-
-#
-# Shell Performance
-#
-# CONFIG_SHELL_PERF_LOG_ENABLE is not set
-# end of Shell Performance
 
 #
 # Compiler options
@@ -4006,6 +4006,13 @@ CONFIG_LINK_WIFI_PC_PORT=9000
 # default:
 CONFIG_LINK_ESPNOW_PEER_MAC=""
 # end of Link settings
+
+#
+# Suit OLED
+#
+# default:
+# CONFIG_SUIT_OLED_PARTIAL_UPDATES is not set
+# end of Suit OLED
 # end of Component config
 
 # default:

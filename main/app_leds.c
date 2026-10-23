@@ -1,4 +1,5 @@
 #include "app_shell.h"
+#include "ui_draw.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -9,7 +10,7 @@
 #include "led_modes.h"
 #include "oled.h"
 
-#include "app_led_support.h"
+#include "audio_policy.h"
 
 const shell_legend_t LEDS_LEGEND = {
     .slots = { SHELL_ICON_LEFT, SHELL_ICON_DOWN, SHELL_ICON_RIGHT, SHELL_ICON_SELECT },
@@ -176,7 +177,7 @@ static void leds_apply_current_mode(void)
     led_beat_ring_background_enable(s_leds.ring_bg);
     led_modes_ring_background_enable(s_leds.ring_bg);
     led_modes_set_speed_percent(s_leds.custom_speed_percent);
-    led_ui_fft_request(LED_UI_FFT_REQ_LED_APPS, false);
+    audio_policy_fft_request(AUDIO_POLICY_FFT_REQ_LED_APPS, false);
 
     if (s_leds.current_backend == LEDS_BACKEND_BEAT) {
         int mode_idx = clamp_int(s_leds.current_mode, 0, led_beat_anim_count() - 1);
@@ -232,7 +233,7 @@ void leds_animations_app_init(shell_app_context_t *ctx)
 void leds_app_deinit(shell_app_context_t *ctx)
 {
     (void)ctx;
-    led_ui_fft_request(LED_UI_FFT_REQ_LED_APPS, false);
+    audio_policy_fft_request(AUDIO_POLICY_FFT_REQ_LED_APPS, false);
 }
 
 void leds_app_tick(shell_app_context_t *ctx, float dt_sec)

@@ -55,8 +55,8 @@ can still produce gaps. End-to-end voice quality needs hardware testing.
 ## Verification
 
 Host tests: main/tests/test_message_direct.py (production receiver state machine,
-duplicate data/final ACK and bad checksum); main/tests/test_fft_audio_gate.py;
-components/bt_audio/tests/test_voice_resample.py (frame counts, interpolation,
+duplicate data/final ACK and bad checksum); tests/services/test_fft_audio_gate.py;
+services/bt_audio/tests/test_voice_resample.py (frame counts, interpolation,
 extreme PCM values and boundary cases); ../MessageServer/test_message_server.py.
 Firmware builds; actual BT playback, two-suit delivery and live calling still
 need physical testing. This does not resolve the separate SBC queue-pressure

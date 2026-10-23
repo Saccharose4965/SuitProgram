@@ -1,4 +1,5 @@
 #include "app_shell.h"
+#include "ui_draw.h"
 #include "shell_apps.h"
 
 #include <math.h>
@@ -552,7 +553,6 @@ static void master_ctrl_force_remote_led_state(bool custom_active, int mode,
                                                uint8_t custom_speed_percent,
                                                bool plane_bg, bool ring_bg)
 {
-    fft_set_display_enabled(false);
     if (fft_visualizer_running()) {
         fft_visualizer_stop();
     }
@@ -577,7 +577,6 @@ static void master_ctrl_force_remote_led_state(bool custom_active, int mode,
 
 static void master_ctrl_enforce_slave_override(void)
 {
-    fft_set_display_enabled(false);
     if (fft_visualizer_running()) {
         fft_visualizer_stop();
     }

@@ -1,15 +1,17 @@
 #include "app_shell.h"
+#include "ui_draw.h"
 
 #include <stdio.h>
 #include <string.h>
 
 #include "audio.h"
+#include "audio_i2s.h"
 #include "audio_rx.h"
 #include "bt_audio.h"
 #include "esp_err.h"
 #include "fft.h"
 #include "oled.h"
-#include "shell_audio.h"
+#include "audio_bus.h"
 #include "storage_sd.h"
 
 typedef enum {
@@ -93,10 +95,10 @@ static void restart_do_action(shell_app_context_t *ctx, restart_item_id_t id)
             return;
 
         case RESTART_ITEM_AUDIO_IDLE:
-            if (!shell_audio_init_if_needed()) {
+            if (!audio_bus_init_if_needed()) {
                 err = ESP_FAIL;
             } else {
-                err = audio_disable_all();
+                err = audio_i2s_disable_all();
             }
             restart_set_status((err == ESP_OK) ? "Audio set to idle" : "Audio idle failed", err);
             return;
@@ -114,7 +116,6 @@ static void restart_do_action(shell_app_context_t *ctx, restart_item_id_t id)
         }
 
         case RESTART_ITEM_FFT_STOP:
-            fft_set_display_enabled(false);
             fft_visualizer_stop();
             restart_set_status("FFT stopped", ESP_OK);
             return;

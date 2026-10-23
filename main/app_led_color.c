@@ -5,7 +5,7 @@
 #include "led.h"
 #include "led_modes.h"
 
-#include "app_led_support.h"
+#include "audio_policy.h"
 
 const shell_legend_t LED_COLOR_LEGEND = {
     .slots = { SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_LEFT, SHELL_ICON_RIGHT },
@@ -247,7 +247,7 @@ static void led_color_apply(void)
     led_modes_highlight_mode_set(s_led_color.highlight_mode);
     led_modes_set_brightness(s_led_color.brightness);
 
-    led_ui_fft_request(LED_UI_FFT_REQ_COLOR_APP, s_led_color.audio_brightness_enabled);
+    audio_policy_fft_request(AUDIO_POLICY_FFT_REQ_COLOR_APP, s_led_color.audio_brightness_enabled);
 
     s_led_color.preset_idx = find_preset_match(s_led_color.color_cycle,
                                                s_led_color.color_style,
@@ -429,7 +429,7 @@ void led_color_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
     led_color_load();
-    led_ui_fft_request(LED_UI_FFT_REQ_COLOR_APP, s_led_color.audio_brightness_enabled);
+    audio_policy_fft_request(AUDIO_POLICY_FFT_REQ_COLOR_APP, s_led_color.audio_brightness_enabled);
     s_led_color.selected = clamp_sel(s_led_color.selected, build_entries());
     shell_ui_menu_reset(s_led_color.selected);
 }
@@ -437,7 +437,7 @@ void led_color_app_init(shell_app_context_t *ctx)
 void led_color_app_deinit(shell_app_context_t *ctx)
 {
     (void)ctx;
-    led_ui_fft_request(LED_UI_FFT_REQ_COLOR_APP, false);
+    audio_policy_fft_request(AUDIO_POLICY_FFT_REQ_COLOR_APP, false);
 }
 
 void led_color_app_tick(shell_app_context_t *ctx, float dt_sec)
