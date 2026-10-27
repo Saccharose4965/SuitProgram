@@ -1,7 +1,6 @@
 #include "bt_audio_app.h"
 #include "ui_draw.h"
 #include "bt_audio.h"
-#include "bt_audio_internal.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -20,7 +19,6 @@ typedef struct {
 static const int k_bt_list_max_vis = 4;
 
 static bt_ui_state_t s_bt_ui = {0};
-static bt_audio_state_t s_bt_prev_state = BT_AUDIO_STATE_DISABLED;
 
 static int bt_find_dev_idx(const bt_audio_device_t *list, int count, const uint8_t bda[6])
 {
@@ -142,11 +140,6 @@ void bt_audio_app_draw(uint8_t *fb, int x, int y, int w, int h)
     bt_refresh_list();
     bt_audio_status_t st = {0};
     bt_audio_get_status(&st);
-    if ((s_bt_prev_state == BT_AUDIO_STATE_CONNECTED || s_bt_prev_state == BT_AUDIO_STATE_STREAMING) &&
-        !(st.state == BT_AUDIO_STATE_CONNECTED || st.state == BT_AUDIO_STATE_STREAMING)) {
-        bt_audio_invoke_disconnect_cb();
-    }
-    s_bt_prev_state = st.state;
 
     char line[48];
     snprintf(line, sizeof(line), "BT:%s", bt_audio_state_name(st.state));

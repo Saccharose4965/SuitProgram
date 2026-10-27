@@ -13,28 +13,32 @@ Keys contain 1–40 alphanumeric, underscore or hyphen characters. This keeps
 game names inside the scores directory. The service mounts SD and creates that
 directory if needed, then reads scores/<key>.txt as a decimal integer.
 
-A missing file returns zero successfully. Other open failures return an error.
-An unreadable numeric value currently also returns zero successfully. Parsing
-accepts a numeric prefix without checking trailing content or overflow; stricter
-validation remains pending.
+A missing score returns zero successfully. A stored value must contain one
+unsigned 32-bit decimal integer with optional surrounding whitespace. Empty
+files, signs, overflow, embedded zero bytes and trailing content are rejected.
+
+Loading inspects the primary, backup and temporary copies. It returns the
+highest valid value, matching the monotonic high-score rule, and repairs the
+primary copy when recovery won. If files exist but none are valid, loading
+returns `ESP_ERR_INVALID_RESPONSE`; corrupt evidence is not silently replaced
+with zero.
 
 ## Updating
 
 The current score is loaded before comparing. Equal or lower candidates cause
-no write. A higher candidate is written to a temporary file, flushed, synced
-when a file descriptor is available, and closed. Any detected failure removes
-the temporary file and returns an error.
-
-The final step renames the temporary file onto the destination. This keeps
-the write separate from the old file, but replacement depends on filesystem
-rename semantics. FAT replacement of an existing file needs verification and
-may require the backup/install approach used elsewhere. There is no backup
-recovery here, so this must not be described as guaranteed atomic persistence.
+no write. A higher candidate is written, flushed and synced to a temporary
+file. A valid primary is then moved to the backup name before the temporary file
+is installed as primary, avoiding replacement-rename assumptions on FAT. An
+invalid primary is removed while an existing valid backup is retained. Failed
+installation attempts restore the previous primary where possible; remaining
+backup or temporary files are handled by the next load.
 
 On success the caller receives the resulting high score. There is no mutex
 around read/compare/write and the temporary filename is shared per key.
 Callers must serialize updates to the same game.
 
-The module already has a coherent service boundary: score policy and persistence
-stay together, with card access supplied by the SD driver. Migration preserves
-the API, file format and current error behaviour.
+The decimal primary format and public API remain unchanged. Host regressions
+cover missing files, monotonic updates, strict parsing and recovery from backup
+or an interrupted temporary write. Hardware acceptance should remove power at
+different points of a record update on the actual FAT card and confirm the next
+boot retains one of the valid monotonic values.

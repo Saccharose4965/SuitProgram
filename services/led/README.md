@@ -59,10 +59,12 @@ state when it changes. Breathe and audio-energy modes remain continuously
 active between beat triggers. Background options add low-level ring, plane or
 comet fields before brighter moving features.
 
-Settings are currently individual shared scalars. Setters use the beat mutex
-for some compound colors, while several enum/boolean settings rely on aligned
-scalar access. Publishing all settings as one snapshot remains the next
-consistency cleanup.
+Colour, style, backgrounds, brightness and audio-response choices form one
+protected configuration. A caller can replace that complete configuration in
+one operation, and the beat worker copies it once before constructing a frame.
+Every helper used for that frame reads the immutable copy, so one frame cannot
+combine values from two presets. The older narrow setters remain available for
+single-setting changes and update the same protected configuration.
 
 ## Hardware test pattern
 

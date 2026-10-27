@@ -19,6 +19,23 @@ int         led_modes_current(void);
 void        led_modes_enable(bool enabled);
 bool        led_modes_enabled(void);
 
+// Complete standalone-renderer configuration. Whole-structure updates become
+// visible together at the next rendered frame.
+typedef struct {
+    uint8_t brightness;
+    uint8_t speed_percent;
+    uint8_t primary_r, primary_g, primary_b;
+    uint8_t secondary_r, secondary_g, secondary_b;
+    bool plane_background_enabled;
+    bool ring_background_enabled;
+    led_color_cycle_t color_cycle;
+    led_color_style_t color_style;
+    led_highlight_mode_t highlight_mode;
+} led_modes_settings_t;
+
+void led_modes_settings_get(led_modes_settings_t *settings);
+void led_modes_settings_apply(const led_modes_settings_t *settings);
+
 // Sync control: when disabled, beat-reactive modes fall back to free-run.
 void led_modes_set_sync(bool enabled);
 bool led_modes_sync_enabled(void);

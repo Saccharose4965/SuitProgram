@@ -45,6 +45,9 @@ bool input_poll(input_event_t *out_event, TickType_t now_ticks);
 // Sample the ladder and expose the decoded logical button + raw mV (for HUD/debug).
 bool input_sample(input_button_t *out_btn, int *out_mv);
 
+// Return the last debounced logical level without sampling the ADC again.
+input_button_t input_current_button(void);
+
 #ifdef __cplusplus
 }
 #endif

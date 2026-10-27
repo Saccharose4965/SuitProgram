@@ -18,6 +18,7 @@ void      audio_player_stop(void);
 bool      audio_player_should_abort(void);
 bool      audio_player_is_active(void);
 bool      audio_player_is_paused(void);
+void      audio_player_notify_bt_disconnected(void);
 
 #ifdef __cplusplus
 }

@@ -22,6 +22,12 @@
 #define TIMEOUT_US 3000000
 #define SERVE_US 400000
 #define PONG_VERSION 2
+#define AI_REACTION_US 180000
+#define AI_PADDLE_SPEED 26.0f
+#define AI_ERROR_RANGE 10.0f
+#define AI_ERROR_DRIFT_SPEED 12.0f
+#define PLAYER_PADDLE_SPEED 38.0f
+#define PLAYER_PADDLE_ACCEL 160.0f
 
 enum { MENU, WAITING, OFFERING, CONNECTING, HUMAN, AI };
 enum { HELLO=1, OFFER, ACCEPT, STATE, LEAVE };
@@ -53,6 +59,11 @@ typedef struct {
     int64_t last_tick, serve_until, event_time, correction_start;
     uint32_t rtt_us;
     float paddle[2], correction_x, correction_y, correction_seconds;
+    float ai_error, ai_error_target;
+    float paddle_velocity;
+    int paddle_input;
+    int64_t ai_react_at;
+    bool ai_incoming;
     pong_ball_t ball;
     uint16_t score[2];
     pong_event_t local_event;
@@ -66,6 +77,12 @@ static const uint8_t broadcast[6]={255,255,255,255,255,255};
 static float clamp(float x,float lo,float hi) { return fmaxf(lo,fminf(hi,x)); }
 static bool same_mac(const uint8_t *a,const uint8_t *b) { return memcmp(a,b,6)==0; }
 static float plane(unsigned side) { return side ? RIGHT_X : LEFT_X; }
+
+static float random_signed(float range)
+{
+    float unit=(float)(esp_random()&0xffffu)/65535.0f;
+    return (unit*2.0f-1.0f)*range;
+}
 
 static void visual_position(int64_t now,float *x,float *y)
 {
@@ -107,6 +124,7 @@ static void reset_ball(unsigned next_side,int64_t now)
         (s_pong.sequence & 2) ? -17 : 17};
     s_pong.serve_until=now+SERVE_US;
     s_pong.stalled=false; s_pong.correction_seconds=0;
+    s_pong.ai_incoming=false;
 }
 
 static void record_event(bool serve,int64_t when)
@@ -286,15 +304,12 @@ void pong_service_start_human(void)
     enter_waiting(esp_timer_get_time());
 }
 
-void pong_service_move_paddle(int direction)
+void pong_service_set_paddle_input(int direction)
 {
     if (s_pong.mode != AI && s_pong.mode != HUMAN) return;
     if (direction < -1) direction = -1;
     if (direction > 1) direction = 1;
-    if (!direction) return;
-    unsigned side=s_pong.side;
-    s_pong.paddle[side]=clamp(s_pong.paddle[side]+direction*4.0f,TOP,BOTTOM-PADDLE_H);
-    if (s_pong.mode==HUMAN) send_packet(STATE);
+    s_pong.paddle_input=direction;
 }
 
 void pong_service_toggle_pause(void)
@@ -317,13 +332,40 @@ void pong_service_tick(void)
     }
     int64_t start=s_pong.last_tick; s_pong.last_tick=now;
     if (s_pong.mode!=AI && s_pong.mode!=HUMAN) return;
-    if (s_pong.paused || now<=s_pong.serve_until) return;
-    if (start<s_pong.serve_until) start=s_pong.serve_until;
     // Bound long shell stalls rather than doing an unbounded catch-up burst.
     float dt=clamp((now-start)*1e-6f,0,.1f);
+    float target_velocity=s_pong.paused?0.0f:(float)s_pong.paddle_input*PLAYER_PADDLE_SPEED;
+    s_pong.paddle_velocity+=clamp(target_velocity-s_pong.paddle_velocity,
+                                  -PLAYER_PADDLE_ACCEL*dt,PLAYER_PADDLE_ACCEL*dt);
+    unsigned local_side=s_pong.side;
+    float old_paddle=s_pong.paddle[local_side];
+    s_pong.paddle[local_side]=clamp(old_paddle+s_pong.paddle_velocity*dt,
+                                    TOP,BOTTOM-PADDLE_H);
+    if(s_pong.paddle[local_side]==old_paddle &&
+       ((old_paddle<=TOP && s_pong.paddle_velocity<0) ||
+        (old_paddle>=BOTTOM-PADDLE_H && s_pong.paddle_velocity>0)))
+        s_pong.paddle_velocity=0;
+    if (s_pong.paused || now<=s_pong.serve_until) return;
+    if (start<s_pong.serve_until) start=s_pong.serve_until;
+    dt=clamp((now-start)*1e-6f,0,.1f);
     if (s_pong.mode==AI) {
-        float target=s_pong.ball.y-PADDLE_H*.5f;
-        s_pong.paddle[1]=clamp(s_pong.paddle[1]+clamp(target-s_pong.paddle[1],-36*dt,36*dt),TOP,BOTTOM-PADDLE_H);
+        bool incoming=s_pong.ball.vx>0;
+        if (incoming && !s_pong.ai_incoming) {
+            s_pong.ai_incoming=true;
+            s_pong.ai_react_at=now+AI_REACTION_US;
+            s_pong.ai_error_target=random_signed(AI_ERROR_RANGE);
+        } else if (!incoming) {
+            s_pong.ai_incoming=false;
+        }
+        if (incoming) {
+            s_pong.ai_error+=clamp(s_pong.ai_error_target-s_pong.ai_error,
+                                   -AI_ERROR_DRIFT_SPEED*dt,AI_ERROR_DRIFT_SPEED*dt);
+            if (now>=s_pong.ai_react_at) {
+                float target=s_pong.ball.y-PADDLE_H*.5f+s_pong.ai_error;
+                s_pong.paddle[1]=clamp(s_pong.paddle[1]+clamp(target-s_pong.paddle[1],
+                    -AI_PADDLE_SPEED*dt,AI_PADDLE_SPEED*dt),TOP,BOTTOM-PADDLE_H);
+            }
+        }
     }
     simulate(dt,now-(int64_t)(dt*1000000));
 }

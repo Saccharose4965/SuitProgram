@@ -6,7 +6,6 @@
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
-#include "driver/i2s_std.h"
 
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
@@ -44,10 +43,6 @@ typedef struct {
     spi_device_handle_t handle;
 } spi2_device_slot_t;
 static spi2_device_slot_t s_spi2_devices[SPI2_TRACKED_DEVICES];
-
-// I2S
-static i2s_chan_handle_t s_i2s_tx = NULL;
-static i2s_chan_handle_t s_i2s_rx = NULL;
 
 // ADC (oneshot)
 static adc_oneshot_unit_handle_t s_adc_unit = NULL;
@@ -262,67 +257,6 @@ esp_err_t hw_spi2_add_device(gpio_num_t cs_pin, uint32_t clock_hz,
 
 
 // ======================================================================
-// I2S (std API) — MAX98357A TX (16-bit mono @ 48 kHz), INMP441 RX (24-bit)
-// ======================================================================
-
-esp_err_t hw_i2s_init_tx_16bit_mono_48k(void)
-{
-    if (s_i2s_tx) return ESP_OK;
-
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, &s_i2s_tx, NULL), TAG, "i2s_new_channel TX");
-
-    i2s_std_config_t std_cfg = {
-        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(48000),
-        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
-        .gpio_cfg = {
-            .mclk = I2S_GPIO_UNUSED,
-            .bclk = PIN_I2S_BCLK,
-            .ws   = PIN_I2S_LRCK,
-            .dout = PIN_I2S_DOUT,
-            .din  = I2S_GPIO_UNUSED,
-        },
-    };
-    // Mono Left output for MAX98357A
-    std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
-
-    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_i2s_tx, &std_cfg), TAG, "i2s_channel_init_std_mode TX");
-    ESP_RETURN_ON_ERROR(i2s_channel_enable(s_i2s_tx), TAG, "i2s_channel_enable TX");
-    ESP_LOGI(TAG, "I2S TX ready: 16-bit mono-left @48k (BCLK=%d, LRCK=%d, DOUT=%d)",
-             PIN_I2S_BCLK, PIN_I2S_LRCK, PIN_I2S_DOUT);
-    return ESP_OK;
-}
-
-esp_err_t hw_i2s_init_rx_24bit_mono_48k(void)
-{
-    if (s_i2s_rx) return ESP_OK;
-
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
-    ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, NULL, &s_i2s_rx), TAG, "i2s_new_channel RX");
-
-    i2s_std_config_t std_cfg = {
-        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(48000),
-        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_24BIT, I2S_SLOT_MODE_MONO),
-        .gpio_cfg = {
-            .mclk = I2S_GPIO_UNUSED,
-            .bclk = PIN_I2S_BCLK,
-            .ws   = PIN_I2S_LRCK,
-            .dout = I2S_GPIO_UNUSED,
-            .din  = PIN_I2S_DIN,
-        },
-    };
-    // INMP441 outputs on LEFT channel by default
-    std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
-
-    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_i2s_rx, &std_cfg), TAG, "i2s_channel_init_std_mode RX");
-    ESP_RETURN_ON_ERROR(i2s_channel_enable(s_i2s_rx), TAG, "i2s_channel_enable RX");
-    ESP_LOGI(TAG, "I2S RX ready: 24-bit mono-left @48k (BCLK=%d, LRCK=%d, DIN=%d)",
-             PIN_I2S_BCLK, PIN_I2S_LRCK, PIN_I2S_DIN);
-    return ESP_OK;
-}
-
-
-// ======================================================================
 // ADC1 — bring-up + raw / mV reads (Hall A/B + buttons ladder)
 // ======================================================================
 
@@ -485,39 +419,5 @@ esp_err_t hw_adc1_read_mv(adc_channel_t ch, int *out_mv)
 
     *out_mv = (raw * HW_ADC_FALLBACK_FS_MV) / 4095;
     hw_adc_unlock();
-    return ESP_OK;
-}
-
-esp_err_t hw_buttons_read(hw_button_id_t *out_button)
-{
-    if (!out_button) return ESP_ERR_INVALID_ARG;
-
-    int mv = 0;
-    ESP_RETURN_ON_ERROR(hw_adc1_read_mv(HW_BUTTONS_ADC_CH, &mv), TAG, "read mv");
-
-    // Target levels (mV): A≈825, B≈1650, C≈2475, D≈3300
-    // Include diagnostic taps around 1.1 V and 2.2 V for divider calibration.
-    const struct { int mv; hw_button_id_t id; } targets[] = {
-        {3300, HW_BTN_D},
-        {2475, HW_BTN_C},
-        {2200, HW_BTN_NONE}, // divider sanity check
-        {1650, HW_BTN_B},
-        {1100, HW_BTN_NONE}, // divider sanity check
-        {825,  HW_BTN_A},
-    };
-    const int tol = 200; // +/-200 mV window per step
-
-    int best_diff = tol + 1;
-    hw_button_id_t best = HW_BTN_NONE;
-    for (size_t i = 0; i < sizeof(targets)/sizeof(targets[0]); ++i){
-        int diff = targets[i].mv - mv;
-        if (diff < 0) diff = -diff;
-        if (diff <= tol && diff < best_diff){
-            best_diff = diff;
-            best = targets[i].id;
-        }
-    }
-
-    *out_button = best;
     return ESP_OK;
 }

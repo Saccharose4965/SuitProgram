@@ -1,7 +1,5 @@
 #include "app_shell.h"
-#include "ui_draw.h"
 #include "gyro_calibration.h"
-#include "oled.h"
 #include <stdio.h>
 
 void gyro_app_init(shell_app_context_t *ctx) { (void)ctx;gyro_calibration_cancel(); }
@@ -21,7 +19,7 @@ void gyro_app_input(shell_app_context_t *ctx,const input_event_t *ev)
 }
 void gyro_app_draw(shell_app_context_t *ctx,uint8_t *fb,int x,int y,int w,int h)
 {
-    (void)ctx;(void)w;(void)h;
+    (void)ctx;
     gyro_calibration_status_t status=gyro_calibration_status();
     char line[32]; const char *text="D start / A back";
     switch(status.state) {
@@ -35,11 +33,14 @@ void gyro_app_draw(shell_app_context_t *ctx,uint8_t *fb,int x,int y,int w,int h)
     case GYRO_SAVE_FAILED: text="SD error: D retry save";break;
     default: break;
     }
-    oled_draw_text3x5(fb,x+2,y+2,"Gyro calibration");
-    oled_draw_text3x5(fb,x+2,y+13,"Rest sensor on table");
-    oled_draw_text3x5(fb,x+2,y+24,text);
+    const char *lines[3] = { "Rest sensor on table", text, NULL };
+    size_t line_count = 2;
     if(status.state==GYRO_READY || status.state==GYRO_SAVED || status.state==GYRO_SAVE_FAILED) {
         snprintf(line,sizeof(line),"%.2f %.2f %.2f d/s",status.bias[0],status.bias[1],status.bias[2]);
-        oled_draw_text3x5(fb,x+2,y+35,line);
+        lines[line_count++] = line;
     }
+    const shell_text_page_t page = {
+        .title = "Gyro calibration", .lines = lines, .line_count = line_count,
+    };
+    shell_ui_draw_text_page(fb,x,y,w,h,&page);
 }

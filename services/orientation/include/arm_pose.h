@@ -1,8 +1,8 @@
 #pragma once
-#include "orientation.h"
+#include "orientation_reference.h"
 
 typedef struct { float x, y, z; } arm_vec3_t;
-typedef struct { imu_quat_t zero; bool calibrated; } arm_pose_t;
+typedef orientation_reference_t arm_pose_t;
 
 // Estimated upper-arm direction from forearm pose; shoulder is not measured.
 arm_vec3_t arm_pose_estimate_upper_arm(bool left, arm_vec3_t forearm);

@@ -10,7 +10,7 @@ settings, animation clock, geometry caches and one background render task. The
 `led` component accepts the completed logical RGB frame and maps it to physical
 outputs.
 
-The catalogue index is part of runtime control and suit-to-suit master-control
+The catalogue index is part of runtime control and suit-to-suit Live Sync
 state. Its order therefore remains stable. The final `random` entry is a
 shuffle controller; it chooses from the animated entries and never selects
 itself, off or static fill.
@@ -59,11 +59,11 @@ Enabling and disabling only changes service state; the task persists for the
 boot. Shows and physical layout preview temporarily disable this renderer while
 they own LED submission, then restore the previous state.
 
-The sync clock pair is protected by a critical section. Other settings are
-currently individual shared scalars. A multi-field update such as changing an
-RGB pair can therefore appear as a mixed setting for one frame. The LED
-service/driver separation should replace these scalars with one atomically
-published render-configuration snapshot.
+The sync clock pair has its own protected state. Colour, style, backgrounds,
+brightness and speed form a second protected configuration. Whole presets are
+published in one operation, and the render worker copies the configuration
+once at the start of each frame. All rendering and final brightness work from
+that immutable frame copy.
 
 ## Verification
 

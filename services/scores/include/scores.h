@@ -8,7 +8,8 @@
 extern "C" {
 #endif
 
-// Loads persisted high score for a game key. Missing file returns 0 + ESP_OK.
+// Loads the highest valid primary/recovery copy. Missing files return 0 + ESP_OK;
+// malformed files without a valid recovery copy return ESP_ERR_INVALID_RESPONSE.
 esp_err_t scores_load_high(const char *game_key, uint32_t *out_high);
 
 // Persists candidate if higher than current score, returns resulting high score.

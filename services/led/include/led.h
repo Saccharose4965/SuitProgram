@@ -103,6 +103,21 @@ typedef enum {
     LED_AUDIO_ENERGY_RANGE_HIGH = 2,
 } led_audio_energy_range_t;
 
+// Complete beat-renderer configuration. Get, modify, then apply this as one
+// update when several related values must change together.
+typedef struct {
+    uint8_t primary_r, primary_g, primary_b;
+    uint8_t secondary_r, secondary_g, secondary_b;
+    led_color_cycle_t color_cycle;
+    led_color_style_t color_style;
+    led_highlight_mode_t highlight_mode;
+    bool plane_background_enabled;
+    bool ring_background_enabled;
+    bool audio_brightness_enabled;
+    led_audio_energy_range_t audio_energy_range;
+    uint8_t brightness;
+} led_beat_settings_t;
+
 typedef enum {
     LED_BEAT_ANIM_FLASH = 0,
     LED_BEAT_ANIM_PULSE = 1,
@@ -139,6 +154,8 @@ bool led_beat_enabled(void);
 void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b);
 void led_audio_levels_set(float overall, float low, float mid, float high);
 void led_audio_raw_volume_set(float volume);
+void led_beat_settings_get(led_beat_settings_t *settings);
+void led_beat_settings_apply(const led_beat_settings_t *settings);
 void led_audio_brightness_enable(bool enabled);
 bool led_audio_brightness_enabled(void);
 float led_audio_brightness_scale_get(void);

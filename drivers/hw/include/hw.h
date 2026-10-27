@@ -23,7 +23,6 @@
 // Use the classic header paths; the includes are provided by split components.
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
-#include "driver/i2s_std.h"
 
 // New ADC lives in esp_adc component on your snapshot
 #if __has_include("esp_adc/adc_oneshot.h")
@@ -127,12 +126,6 @@ static inline esp_err_t hw_spi2_add_mpu(gpio_num_t cs_pin, spi_device_handle_t* 
 }
 
 // ======================================================================
-// I2S helpers — (MAX98357A TX / INMP441 RX)
-// ======================================================================
-esp_err_t hw_i2s_init_tx_16bit_mono_48k(void);
-esp_err_t hw_i2s_init_rx_24bit_mono_48k(void);
-
-// ======================================================================
 // ADC — Hall sensors and buttons
 // ======================================================================
 
@@ -141,18 +134,3 @@ esp_err_t hw_adc1_init_default(void);
 // Low-level reads
 esp_err_t hw_adc1_read_raw(adc_channel_t ch, int *out_value);
 esp_err_t hw_adc1_read_mv(adc_channel_t ch, int *out_mv);
-
-// ----------------------------------------------------------------------
-// Buttons ladder (GPIO39 / ADC1_CH3)
-// ----------------------------------------------------------------------
-
-typedef enum {
-    HW_BTN_NONE = 0,
-    HW_BTN_A,
-    HW_BTN_B,
-    HW_BTN_C,
-    HW_BTN_D,
-} hw_button_id_t;
-
-// Reads the ladder and returns which button is pressed (or NONE)
-esp_err_t hw_buttons_read(hw_button_id_t *out_button);

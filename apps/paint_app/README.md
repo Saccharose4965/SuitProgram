@@ -4,7 +4,8 @@ Pending review
 
 ## Controls and lifecycle
 
-The app owns menu selection, button interpretation and screen text. Selecting
+The app owns menu selection, button interpretation and screen text. Role and
+arm choices use the shared three-visible-item menu blocks and scrolling. Selecting
 Painter or Canvas sends a command to the [Paint service](../../services/paint/README.md).
 The displayed role follows the returned status, so a failed Canvas entry leaves
 the user in the menu with an explanation.

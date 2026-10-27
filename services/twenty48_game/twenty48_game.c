@@ -120,4 +120,18 @@ bool t48_game_move(int direction)
     return true;
 }
 void t48_game_commit(void) { copy_grid(s.grid_old, s.grid_new); }
+
+bool t48_game_is_over(void)
+{
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            int value = s.grid_old[row][col];
+            if (value == 0) return false;
+            if (col + 1 < 4 && value == s.grid_old[row][col + 1]) return false;
+            if (row + 1 < 4 && value == s.grid_old[row + 1][col]) return false;
+        }
+    }
+    return true;
+}
+
 const t48_state_t *t48_game_state(void) { return &s; }

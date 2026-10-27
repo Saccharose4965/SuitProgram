@@ -12,7 +12,6 @@
 #include "orientation.h"
 #include "orientation_service.h"
 #include "orientation_reference.h"
-#include "esp_timer.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -21,15 +20,12 @@
 typedef struct { float w, x, y, z; } quat;
 typedef struct { float x, y, z; } vec3;
 
-static imu_quat_t s_zero = {1,0,0,0};
+static orientation_reference_t s_reference;
 static imu_quat_t s_last_relative = {1,0,0,0};
-static bool s_calibrated;
 
 static bool orientation_sample(imu_quat_t *q)
 {
-    uint64_t stamp;
-    return orientation_service_snapshot(q, &stamp) &&
-        (uint64_t)esp_timer_get_time() - stamp <= 250000;
+    return orientation_service_fresh_snapshot(q, 250000);
 }
 // Sensor is rotated 90 deg clockwise around Z relative to the screen.
 // Apply a 90 deg CCW correction (about +Z) to align to the screen frame.
@@ -288,9 +284,8 @@ void threedee_app_init(shell_app_context_t *ctx)
     audio_policy_fft_set_threedee_app(true);
     if (!ctx) return;
     s_scene_time = 0.0f;
-    s_zero = (imu_quat_t){1,0,0,0};
+    orientation_reference_reset(&s_reference);
     s_last_relative = (imu_quat_t){1,0,0,0};
-    s_calibrated = false;
 }
 
 void threedee_app_deinit(shell_app_context_t *ctx)
@@ -307,8 +302,8 @@ void threedee_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev
     // Recenter (define current pose as zero)
     if (ev->type == INPUT_EVENT_PRESS && ev->button == INPUT_BTN_D) {
         imu_quat_t q;
-        if (orientation_sample(&q) && orientation_reference_calibrate(&s_zero,q))
-            s_calibrated = true;
+        if (orientation_sample(&q))
+            (void)orientation_reference_calibrate(&s_reference,q);
     }
 }
 
@@ -337,10 +332,13 @@ void threedee_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int 
     quat q_rel = imu_quat_to_local(s_last_relative);
     imu_quat_t qf;
     if (orientation_sample(&qf)) {
-        if (!s_calibrated)
-            s_calibrated = orientation_reference_calibrate(&s_zero,qf);
-        q_rel = q_mul(q_conj(imu_quat_to_local(s_zero)), imu_quat_to_local(qf));
-        s_last_relative = (imu_quat_t){q_rel.w,q_rel.x,q_rel.y,q_rel.z};
+        if (!s_reference.calibrated)
+            (void)orientation_reference_calibrate(&s_reference,qf);
+        imu_quat_t relative;
+        if (orientation_reference_relative(&s_reference,qf,&relative)) {
+            q_rel = imu_quat_to_local(relative);
+            s_last_relative = relative;
+        }
     }
     quat q_dw = apply_mount(q_rel, s_mount_ds); // device -> world
     // World->camera (view) uses the inverse rotation.

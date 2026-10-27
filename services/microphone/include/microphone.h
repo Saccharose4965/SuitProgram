@@ -19,7 +19,8 @@ typedef struct {
 /** Initialize the I²S RX channel (does not start recording). */
 esp_err_t mic_rec_init(const mic_rec_cfg_t *cfg);
 
-/** Start recording to a WAV file. If path == NULL, auto-creates /sdcard/rec_XXXXX.wav */
+/** Start a new WAV recording without overwriting an existing WAV or .part file.
+ *  If path == NULL, chooses the next free /sdcard/rec_XXXXX.wav name. */
 esp_err_t mic_rec_start(const char *path);
 
 /** Stop the current recording (finalizes WAV header). Safe to call if not recording. */

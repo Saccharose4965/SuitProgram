@@ -29,12 +29,10 @@ or conversion fails, they use a linear 0–3300 mV approximation. Channel setup
 errors are logged without aborting, so initialization success alone does not
 prove every channel works.
 
-## Remaining ownership cleanup
+## Ownership boundaries
 
-Legacy fixed-rate I2S setup helpers still exist alongside the audio component's
-bus setup. Their independent handles and partial-initialization behaviour need
-an audited consolidation before further use.
-
-A legacy voltage-based button decoder also remains here. The active input
-driver owns its decoding and debounce; callers and diagnostic uses must be
-checked before removing the older API.
+This module retains the physical I2S pin definitions, while the
+[audio I2S driver](../audio_i2s/README.md) exclusively owns channel creation,
+sample-rate changes and TX/RX direction. The [input driver](../input/README.md)
+owns button-voltage decoding and debounce. Board support exposes the shared ADC
+reads those drivers need and contains no competing I2S or button state.

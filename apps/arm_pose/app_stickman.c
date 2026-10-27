@@ -4,7 +4,6 @@
 
 #include "orientation_service.h"
 #include "arm_pose.h"
-#include "esp_timer.h"
 #include "oled.h"
 
 #include <math.h>
@@ -29,9 +28,7 @@ static arm_pose_t s_pose;
 
 static bool pose_sample(imu_quat_t *q)
 {
-    uint64_t stamp;
-    return orientation_service_snapshot(q, &stamp) &&
-           (uint64_t)esp_timer_get_time() - stamp <= 250000;
+    return orientation_service_fresh_snapshot(q, 250000);
 }
 
 const shell_legend_t STICKMAN_LEGEND = {
@@ -179,7 +176,7 @@ static void sort_segments_by_depth(const segment3_t *src, size_t count, size_t *
 void stickman_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
-    s_pose = (arm_pose_t){0};
+    orientation_reference_reset(&s_pose);
     s_view_yaw = 0.0f;
     audio_policy_fft_set_armpose_app(true);
 }
@@ -204,7 +201,7 @@ void stickman_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev
         if (s_view_yaw > (float)M_PI) s_view_yaw -= 2.0f * (float)M_PI;
     } else if (ev->button == INPUT_BTN_C) {
         s_track_left_arm = !s_track_left_arm;
-        s_pose.calibrated = false;
+        orientation_reference_reset(&s_pose);
     } else if (ev->button == INPUT_BTN_D) {
         imu_quat_t q;
         if (pose_sample(&q)) arm_pose_calibrate(&s_pose, q);

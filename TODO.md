@@ -2,6 +2,11 @@
 
 ## Agreed rework
 
+- [ ] Hardware-check Remote Control with two suits: peer discovery, initial
+  main-menu state, list/grid/settings navigation, target-only app startup,
+  custom-view placeholder, ignored target buttons, three-second A+B exit from
+  either suit and three-second peer-loss recovery.
+
 - [ ] Hardware-check the split audio pipeline: FFT acquisition, recording,
   half-duplex Call, startup tone, local mono/stereo WAV, generated synth and
   repeated local/Bluetooth transitions. Confirm 44.1/48 kHz clock changes,
@@ -34,74 +39,87 @@
 
 - [ ] Version and authenticate Link frames, define byte order and sender
   identity across ESP-NOW/UDP, and introduce a proper subscriber dispatcher.
-  Review every Show, master-control, Paint, Pong, Message and Call packet
+  Review every Show, Live Sync, Paint, Pong, Message and Call packet
   together; add runtime shutdown/reinitialization only with concurrency tests.
 
-- [ ] Publish LED beat and standalone animation settings as coherent snapshots.
-  Current colour/style/background scalars can be observed across separate
-  writes for one rendered frame. Hardware-test every beat/standalone mode and
-  synchronized shuffle before changing effect maths.
+- [x] Publish LED beat and standalone animation settings as coherent snapshots.
+  Complete presets now become visible atomically and each worker uses one
+  immutable settings copy per frame. Effect maths and defaults are unchanged;
+  hardware visual review remains before any effect tuning.
 
 - [ ] Hardware-review the LED layout editor across both strips: walk every
   section and ring start, change/revert a length and direction, save, reboot and
-  confirm the physical mapping. Define crash-safe recovery for the FAT
-  remove-then-rename fallback before treating SD writes as transactional.
+  confirm the physical mapping. Primary, synced temporary and backup files now
+  provide tested interrupted-save recovery; physical SD fault injection remains.
 
-- [ ] Replace Bluetooth's Music-specific disconnect callback with a service
-  event consumed outside draw callbacks. Break the Audio Player/Bluetooth build
-  cycle only alongside playback regression tests; retain the no-sniff policy
-  until long-duration hardware tests prove an alternative.
+- [x] Replace Bluetooth's Music-specific disconnect callback with a static
+  service event queue consumed by the shell. Audio Player/Bluetooth no longer
+  form a build cycle; PCM delivery and the no-sniff policy are unchanged.
+  Long-duration play, pause, drain, disconnect and rapid-track hardware tests
+  remain required.
 
-- [ ] Move File RX's FFT/Bluetooth interruption decision into shared resource
-  policy. Add authenticated/versioned framing, byte count/checksum and receiver
-  progress before treating TCP close as a verified file transfer.
+- [ ] Discuss fallback file transfer through a server before changing File RX.
+  Define what must be transferable, who initiates it, whether the PC relays
+  between suits, how recipients are selected and how it coexists with direct
+  ESP communication. If retained, redesign it around shared resource policy,
+  authenticated/versioned framing, declared size, checksum, progress and safe
+  partial-file recovery. Preserve the current receiver only as a prototype
+  until that workflow is agreed.
 
-- [ ] Validate Bad Apple audio/video timing on local speaker and Bluetooth;
-  replace the fixed one-second offset only with measured or shared-clock timing.
-  Decide whether source cycling should restart matching audio.
+- [ ] Validate Bad Apple audio/video timing on local speaker and Bluetooth.
+  The implementation now uses Audio's shared audible clock, and source cycling
+  restarts both streams; confirm the 100 ms Bluetooth calibration on hardware.
 
 - [ ] Redesign Telemetry session/transfer concurrency with Link, Messages, Call
   and Comms together: serialize socket ownership and ACK routing, version the
   native-endian protocol, define buffer delivery semantics and add receiver
   shutdown/multiple-sender handling.
 
-- [ ] Once shared orientation startup is guaranteed, remove Fluid's direct MPU
-  recovery path so every orientation consumer uses the same calibration. Review
-  the 300 ms force-delete fallback before changing its worker lifecycle.
-
-- [ ] Fix Flappy exit during splash and preserve worker ownership until actual
-  termination; prevent overlapping sessions. Review repeat-counted pipe scores.
-
-- [ ] Review 2048's direct legacy button polling, framebuffer publication and
-  worker-stop timeout before changing lifecycle/input behaviour.
-  Tetris also needs framebuffer publication, stop-timeout ownership and
-  task-creation error handling reviewed.
+- [x] Give Fluid explicit sensor and worker ownership. It uses only the shared
+  calibrated Orientation stream, falls back to neutral gravity, and waits for
+  its worker's completion signal before resetting simulation buffers.
 
 - [ ] Before reusing keyboard as an overlay: define accept/cancel without losing
   text, handle UTF-8 editing, connect held input, align popup hit-testing and
   respect the content rectangle. Existing standalone behaviour is preserved.
 
-- [ ] Verify high-score replacement on FAT and tighten malformed-file handling;
-  preserve existing scores during any persistence fix.
+- [x] Validate high-score text strictly and preserve valid primary, backup or
+  temporary copies through FAT-safe replacement. Host recovery tests pass;
+  interrupted-write testing on the physical SD card remains in the Scores
+  service hardware checklist.
 
-- [ ] Finish cleanup within migrated drivers: audit legacy I2S/button helpers in hw.
-- [ ] Review recording persistence and failure cleanup: collision-safe automatic
-  names, checked writes, counter recovery and RX release on task-start failure.
-- [ ] Review SD mount serialization, shared-state initialization ordering and
-  MPU sampler stack-size naming/default. Documented limitations remain open.
+- [x] Finish cleanup within migrated drivers: removed the unused fixed-rate I2S
+  constructors and duplicate button decoder from `drivers/hw`; audio I2S and
+  input are now the sole owners of those behaviours.
+- [x] Make recording names collision-safe, recover the automatic counter from
+  backup/temporary copies, finalize through `.part`, check WAV headers and
+  release RX on every task-start failure. Physical fault injection remains in
+  the Microphone service hardware checklist.
+- [x] Serialize SD mount/unmount and Orientation startup. The MPU sampler names
+  its stack size in bytes and uses its intended 4096-byte default. Orientation
+  publishes readiness only after both worker tasks exist and cleans failed SPI
+  attempts before permitting a retry.
 
 - [x] Separate OLED transport from app drawing helpers; separate input events
   from FFT suppression policy. Host checks pass; hardware verification pending.
 
-- [ ] Pilot apps/services/drivers separation with orientation and Paint.
-- [ ] Centralize gravity-preserving calibration in orientation; audit every consumer, including Arm Pose, Synth and 3D Render. Keep reference ownership explicit so one app does not silently recalibrate another.
+- [x] Pilot apps/services/drivers separation with Orientation and Paint. Their
+  UI, shared logic and MPU/LED hardware boundaries now follow the architecture.
+- [x] Centralize gravity-preserving calibration in Orientation. The filter
+  publishes absolute pose, freshness policy is shared, and Arm Pose, Paint,
+  Synth and 3D own independent heading references through one reference type.
 - [x] Extract Paint protocol/session/rendering from its UI, preserving timing and ownership (host tests/build pass; hardware acceptance pending).
 - [x] Share posed suit geometry across normal animations, Paint and Shows (hardware visual acceptance pending).
 - [ ] Extract existing resource policy and packet dispatch without changing scheduling.
   FFT/audio policy is now in services/audio_policy; packet dispatch and broader
   resource coordination remain.
-- [ ] Separate FFT/BT screens from background logic.
-- [ ] Compare screens, then introduce shared list/scroll/title/status/legend helpers under app infrastructure. Keep custom graph/game drawing. No separate display app.
+- [x] Separate FFT/BT screens from background logic. The FFT viewer now owns
+  only a policy request and snapshot rendering; leaving releases its request
+  without stopping other clients. Bluetooth UI owns selection and commands,
+  while discovery, connection and streaming remain in the service.
+- [x] Compare screens and centralize list, grid, scroll, title/status-page and
+  legend presentation in UI Shell. Apps own motion and wording; dynamic
+  transport lists, graphs, games and geometric renderers remain specialized.
 - [ ] Separate lighting effects from hardware transmission; audit audio/BT boundaries before changing them.
 - [ ] Write one design explanation per app/service/driver. Validate each by
   removing its first `Pending review` line; see [documentation](docs/README.md).
@@ -112,9 +130,8 @@
 
 ## Preserved earlier wishlist
 
-Copied from the old README; not revalidated. Some items are complete, partial or
-stale. Reconcile per subsystem, never assume every item is a defect. Earlier
-status sections remain in [the archive](docs/reference/previous-readme.txt).
+Copied from the earlier project notes; not revalidated. Some items are complete,
+partial or stale. Reconcile each item against its owning subsystem before acting.
 
 Open TODO / wishlist
 ---------------------
@@ -145,7 +162,9 @@ Progress review (2026-10-19; keep the requests below as the design backlog):
   individual review; gameplay, recording and playback shortcuts are unchanged.
 - Implemented, hardware acceptance pending: Light Paint + shared arm math,
   heading-only Paint calibration, 1.5 m waist-centred target; Arm Synth with
-  local/Bluetooth output. See controls above and docs/reference/technical/light-painting-guide.md.
+  local/Bluetooth output. See [Paint](services/paint/README.md),
+  [Orientation](services/orientation/README.md) and
+  [Arm Synth](apps/synth/README.md).
 - OLED artefact experiment: full-frame refresh is now the default. Every call
   sends all 1024 panel bytes, even for unchanged frames. Existing app frame
   rates are unchanged. To compare, menuconfig -> Suit OLED -> changed-region
@@ -168,7 +187,7 @@ Progress review (2026-10-19; keep the requests below as the design backlog):
   Update ALL participating suits (show sync protocol 0x53). Radio delivery and
   audio startup are asynchronous: brief overlap during handoff is possible;
   this is not a crossfade or a simultaneous hard audio cut.
-- Defer broad rewrites until each has a bounded test: master-control sync,
+- Defer broad rewrites until each has a bounded test: Live Sync,
   message navigation/notifications, animation catalogue and button consistency.
   Game SFX need audio ownership/mixing first; do not interrupt music or calls.
 
@@ -188,13 +207,14 @@ Progress review (2026-10-19; keep the requests below as the design backlog):
 - tron
 - pacman
 - asteroids game !
-- confirm for pong that the trajectory is computed only once upon collision, by the person where the collision happens and sent only at that point to the other suit for it to correct it's own trajectory given the data it recieved. because the collision might be interpreded differently as the position might not have been the same on the two, we do interpolation of the trajectory by starting from initial thought to be the correct trajectory and slowly merge towards the other one, smoothly. so that means we don't get lag.
-- uniformity with the buttons : the last one is always the select button (if there needs one) if we have a 2d navigation, we do left and right with A and C, B does the down, if we only have a simple list 1D, we do A and B up and down, or left and right.
 -fix message : we want to have main menu notification that a new one arrived, on the message app we want to be able to select either send new message, view sent list or listen to recieved message (find appropriate not too long names) on the view app : we have a history of costume specific messages, which we can navigate with A and B, listen to with C (play pause) and a shortcut to new message with D; on new message app we have a visual audio graph that starts drawing when we press record, stops when we press again (button start stop C), the button D is play pause to listen to it and AB select target ([name1],[name2] or everyone) which means we need names for each suits, maybe we got that already but if not, add it (same name used for game leaderboards)
 on the listen app, we get a list of recieved message, scroll through with A/B listen to with D.
 any suggestions are welcome, tell me if you think any other features could be great to include.
-- fix master control, it should have the same sync method as the show, that one worked very well(master control is broken), settings changes should sync as well any changes are accepted, from both costumes, master control can be taken from the other or deactivated.
-- fix the absolute disaster mess that the animations app is. we want all those animations to be bpm controlled, some of them are not, some of them are dupliacted, add an app for non bpm syncable animations.
+- [ ] Review the animation catalogues visually. Beat-triggered and continuous
+  Ambient modes now have separate apps without changing effect maths or stable
+  mode indices. Decide with hardware feedback which similar-looking modes are
+  genuine duplicates and whether any Ambient mode belongs in Beat before
+  removing or converting it.
 
 - maybe the keyboard could find a use when choosing names for messages for example, maybe we make it an overlay.
 - global UI rework, prettify, normalize, animate. there are artefacts because of our screen optimization, i don't know if i like that, well i don't. but sometimes it might be required to avoid clutter on the SPI. this needs testing but i would like to try to disable it for now so that i can complain if it's actually a problem.

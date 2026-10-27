@@ -159,20 +159,17 @@ static uint8_t s_wave_g = 0;
 static uint8_t s_wave_b = 0;
 static float s_wave_phase = 0.0f;
 static float s_wave_amp = 0.0f;
-static uint8_t s_beat_color_r = 255;
-static uint8_t s_beat_color_g = 96;
-static uint8_t s_beat_color_b = 0;
-static uint8_t s_beat_secondary_r = 0;
-static uint8_t s_beat_secondary_g = 72;
-static uint8_t s_beat_secondary_b = 255;
-static volatile led_color_cycle_t s_beat_color_cycle = LED_COLOR_CYCLE_STATIC;
-static volatile led_color_style_t s_beat_color_style = LED_COLOR_STYLE_MONO;
-static volatile led_highlight_mode_t s_beat_highlight_mode = LED_HIGHLIGHT_OFF;
-static volatile bool s_beat_plane_background_enabled = false;
-static volatile bool s_beat_ring_background_enabled = false;
-static volatile bool s_audio_brightness_enabled = false;
-static volatile led_audio_energy_range_t s_audio_energy_range = LED_AUDIO_ENERGY_RANGE_FULL;
-static uint8_t s_beat_brightness = 96;
+static portMUX_TYPE s_beat_settings_mux = portMUX_INITIALIZER_UNLOCKED;
+static led_beat_settings_t s_beat_settings = {
+    .primary_r = 255, .primary_g = 96, .primary_b = 0,
+    .secondary_r = 0, .secondary_g = 72, .secondary_b = 255,
+    .color_cycle = LED_COLOR_CYCLE_STATIC,
+    .color_style = LED_COLOR_STYLE_MONO,
+    .highlight_mode = LED_HIGHLIGHT_OFF,
+    .audio_energy_range = LED_AUDIO_ENERGY_RANGE_FULL,
+    .brightness = 96,
+};
+static led_beat_settings_t s_beat_frame_settings;
 static uint32_t s_beat_duo_flip = 0;
 static float s_audio_energy_phase = 0.0f;
 static volatile float s_audio_raw_volume = 0.0f;
@@ -349,10 +346,63 @@ static void sample_siren_phase(float phase, uint8_t *r, uint8_t *g, uint8_t *b)
     }
 }
 
+static led_beat_settings_t led_beat_settings_snapshot(void)
+{
+    led_beat_settings_t value;
+    portENTER_CRITICAL(&s_beat_settings_mux);
+    value = s_beat_settings;
+    portEXIT_CRITICAL(&s_beat_settings_mux);
+    return value;
+}
+
+static led_beat_settings_t led_beat_settings_sanitize(led_beat_settings_t value)
+{
+    if (value.color_cycle < LED_COLOR_CYCLE_STATIC ||
+        value.color_cycle > LED_COLOR_CYCLE_BIOHAZARD) {
+        value.color_cycle = LED_COLOR_CYCLE_STATIC;
+    }
+    if (value.color_style < LED_COLOR_STYLE_MONO ||
+        value.color_style > LED_COLOR_STYLE_PALETTE) {
+        value.color_style = LED_COLOR_STYLE_MONO;
+    }
+    if (value.highlight_mode < LED_HIGHLIGHT_OFF ||
+        value.highlight_mode > LED_HIGHLIGHT_PEAKS) {
+        value.highlight_mode = LED_HIGHLIGHT_OFF;
+    }
+    if (value.audio_energy_range < LED_AUDIO_ENERGY_RANGE_FULL ||
+        value.audio_energy_range > LED_AUDIO_ENERGY_RANGE_HIGH) {
+        value.audio_energy_range = LED_AUDIO_ENERGY_RANGE_FULL;
+    }
+    return value;
+}
+
+void led_beat_settings_get(led_beat_settings_t *settings)
+{
+    if (settings) *settings = led_beat_settings_snapshot();
+}
+
+void led_beat_settings_apply(const led_beat_settings_t *settings)
+{
+    if (!settings) return;
+    led_beat_settings_t value = led_beat_settings_sanitize(*settings);
+    portENTER_CRITICAL(&s_beat_settings_mux);
+    bool style_changed = s_beat_settings.color_style != value.color_style;
+    s_beat_settings = value;
+    portEXIT_CRITICAL(&s_beat_settings_mux);
+    if (style_changed) {
+        if (s_pulse_lock && xSemaphoreTake(s_pulse_lock, portMAX_DELAY) == pdTRUE) {
+            s_beat_duo_flip = 0;
+            xSemaphoreGive(s_pulse_lock);
+        } else if (!s_pulse_lock) {
+            s_beat_duo_flip = 0;
+        }
+    }
+}
+
 static void led_beat_sample_cycle_color(float t_sec, float phase_offset,
                                         uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    switch (s_beat_color_cycle) {
+    switch (s_beat_frame_settings.color_cycle) {
         case LED_COLOR_CYCLE_RAINBOW:
             sample_rainbow_phase(0.10f * t_sec + phase_offset, r, g, b);
             break;
@@ -379,46 +429,46 @@ static void led_beat_sample_cycle_color(float t_sec, float phase_offset,
             break;
         case LED_COLOR_CYCLE_STATIC:
         default:
-            if (r) *r = s_beat_color_r;
-            if (g) *g = s_beat_color_g;
-            if (b) *b = s_beat_color_b;
+            if (r) *r = s_beat_frame_settings.primary_r;
+            if (g) *g = s_beat_frame_settings.primary_g;
+            if (b) *b = s_beat_frame_settings.primary_b;
             break;
     }
 }
 
 static void led_beat_sample_primary_color(float t_sec, uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    if (s_beat_color_style == LED_COLOR_STYLE_PALETTE &&
-        s_beat_color_cycle != LED_COLOR_CYCLE_STATIC) {
+    if (s_beat_frame_settings.color_style == LED_COLOR_STYLE_PALETTE &&
+        s_beat_frame_settings.color_cycle != LED_COLOR_CYCLE_STATIC) {
         led_beat_sample_cycle_color(t_sec, 0.0f, r, g, b);
         return;
     }
-    if (r) *r = s_beat_color_r;
-    if (g) *g = s_beat_color_g;
-    if (b) *b = s_beat_color_b;
+    if (r) *r = s_beat_frame_settings.primary_r;
+    if (g) *g = s_beat_frame_settings.primary_g;
+    if (b) *b = s_beat_frame_settings.primary_b;
 }
 
 static void led_beat_sample_secondary_color(float t_sec, uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    if (s_beat_color_style == LED_COLOR_STYLE_PALETTE &&
-        s_beat_color_cycle != LED_COLOR_CYCLE_STATIC) {
+    if (s_beat_frame_settings.color_style == LED_COLOR_STYLE_PALETTE &&
+        s_beat_frame_settings.color_cycle != LED_COLOR_CYCLE_STATIC) {
         led_beat_sample_cycle_color(t_sec, 0.33f, r, g, b);
         return;
     }
-    if (s_beat_color_style == LED_COLOR_STYLE_DUO) {
-        if (r) *r = s_beat_secondary_r;
-        if (g) *g = s_beat_secondary_g;
-        if (b) *b = s_beat_secondary_b;
+    if (s_beat_frame_settings.color_style == LED_COLOR_STYLE_DUO) {
+        if (r) *r = s_beat_frame_settings.secondary_r;
+        if (g) *g = s_beat_frame_settings.secondary_g;
+        if (b) *b = s_beat_frame_settings.secondary_b;
         return;
     }
-    if (r) *r = s_beat_color_r;
-    if (g) *g = s_beat_color_g;
-    if (b) *b = s_beat_color_b;
+    if (r) *r = s_beat_frame_settings.primary_r;
+    if (g) *g = s_beat_frame_settings.primary_g;
+    if (b) *b = s_beat_frame_settings.primary_b;
 }
 
 static void led_beat_select_trigger_color(float t_sec, uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    if (s_beat_color_style == LED_COLOR_STYLE_DUO) {
+    if (s_beat_frame_settings.color_style == LED_COLOR_STYLE_DUO) {
         bool use_secondary = (s_beat_duo_flip++ & 1u) != 0u;
         if (use_secondary) {
             led_beat_sample_secondary_color(t_sec, r, g, b);
@@ -432,15 +482,15 @@ static void led_beat_select_trigger_color(float t_sec, uint8_t *r, uint8_t *g, u
 
 static float led_beat_highlight_scale(void)
 {
-    return (s_beat_highlight_mode == LED_HIGHLIGHT_PEAKS) ? 1.0f : 0.0f;
+    return (s_beat_frame_settings.highlight_mode == LED_HIGHLIGHT_PEAKS) ? 1.0f : 0.0f;
 }
 
-static float led_audio_volume_range_scale(void)
+static float led_audio_volume_range_scale(const led_beat_settings_t *settings)
 {
     float floor_scale = 0.0f;
-    if (s_audio_energy_range == LED_AUDIO_ENERGY_RANGE_MID) {
+    if (settings->audio_energy_range == LED_AUDIO_ENERGY_RANGE_MID) {
         floor_scale = 127.0f / 255.0f;
-    } else if (s_audio_energy_range == LED_AUDIO_ENERGY_RANGE_HIGH) {
+    } else if (settings->audio_energy_range == LED_AUDIO_ENERGY_RANGE_HIGH) {
         floor_scale = 191.0f / 255.0f;
     }
 
@@ -456,10 +506,11 @@ static float led_audio_volume_range_scale(void)
 
 static float led_audio_brightness_live_scale(void)
 {
-    if (!s_audio_brightness_enabled) {
+    led_beat_settings_t settings = led_beat_settings_snapshot();
+    if (!settings.audio_brightness_enabled) {
         return 1.0f;
     }
-    return led_audio_volume_range_scale();
+    return led_audio_volume_range_scale(&settings);
 }
 
 static void led_apply_audio_brightness_inplace(uint8_t *buf, size_t len_bytes)
@@ -491,12 +542,14 @@ void led_audio_raw_volume_set(float volume)
 
 void led_audio_brightness_enable(bool enabled)
 {
-    s_audio_brightness_enabled = enabled;
+    portENTER_CRITICAL(&s_beat_settings_mux);
+    s_beat_settings.audio_brightness_enabled = enabled;
+    portEXIT_CRITICAL(&s_beat_settings_mux);
 }
 
 bool led_audio_brightness_enabled(void)
 {
-    return s_audio_brightness_enabled;
+    return led_beat_settings_snapshot().audio_brightness_enabled;
 }
 
 float led_audio_brightness_scale_get(void)
@@ -1126,7 +1179,7 @@ static void led_geo_add_rgb_locked(size_t led, float add_r, float add_g, float a
 
 static bool led_geo_fill_plane_background_locked(size_t count, float brightness_scale)
 {
-    if (!s_beat_plane_background_enabled || count == 0 || brightness_scale <= 0.0f) {
+    if (!s_beat_frame_settings.plane_background_enabled || count == 0 || brightness_scale <= 0.0f) {
         return false;
     }
 
@@ -1149,7 +1202,7 @@ static bool led_geo_fill_plane_background_locked(size_t count, float brightness_
 
 static bool led_geo_fill_ring_background_locked(size_t count, float brightness_scale)
 {
-    if (!s_beat_ring_background_enabled || count == 0 || brightness_scale <= 0.0f) {
+    if (!s_beat_frame_settings.ring_background_enabled || count == 0 || brightness_scale <= 0.0f) {
         return false;
     }
 
@@ -1526,7 +1579,7 @@ static bool led_geo_plane_render_locked(const led_layout_config_t *cfg, size_t c
     (void)cfg;
     bool rendered = false;
     float white_scale = led_beat_highlight_scale();
-    bool background_enabled = s_beat_plane_background_enabled;
+    bool background_enabled = s_beat_frame_settings.plane_background_enabled;
 
     float cx = 0.5f * (stats->min_x + stats->max_x);
     float cy = 0.5f * (stats->min_y + stats->max_y);
@@ -1780,9 +1833,10 @@ static void led_pulse_spawn(uint8_t r, uint8_t g, uint8_t b){
 }
 
 static bool led_pulse_step_locked(void){
+    s_beat_frame_settings = led_beat_settings_snapshot();
     bool any_active = false;
     size_t active = led_active_count();
-    float brightness_scale = (float)s_beat_brightness / 255.0f;
+    float brightness_scale = (float)s_beat_frame_settings.brightness / 255.0f;
     int64_t now_us = esp_timer_get_time();
     led_beat_anim_t effective_mode = led_beat_effective_mode_locked(now_us);
     memset(s_pulse_frame, 0, LED_COUNT * 3);
@@ -2136,134 +2190,112 @@ static int led_beat_chase_profile(led_beat_anim_t mode)
 }
 
 void led_beat_color_set(uint8_t r, uint8_t g, uint8_t b){
-    if (led_pulse_lock()){
-        s_beat_color_r = r;
-        s_beat_color_g = g;
-        s_beat_color_b = b;
-        led_pulse_unlock();
-    } else {
-        s_beat_color_r = r;
-        s_beat_color_g = g;
-        s_beat_color_b = b;
-    }
+    portENTER_CRITICAL(&s_beat_settings_mux);
+    s_beat_settings.primary_r = r;
+    s_beat_settings.primary_g = g;
+    s_beat_settings.primary_b = b;
+    portEXIT_CRITICAL(&s_beat_settings_mux);
 }
 
 void led_beat_color_get(uint8_t *r, uint8_t *g, uint8_t *b){
-    if (led_pulse_lock()){
-        if (r) *r = s_beat_color_r;
-        if (g) *g = s_beat_color_g;
-        if (b) *b = s_beat_color_b;
-        led_pulse_unlock();
-        return;
-    }
-    if (r) *r = s_beat_color_r;
-    if (g) *g = s_beat_color_g;
-    if (b) *b = s_beat_color_b;
+    led_beat_settings_t value = led_beat_settings_snapshot();
+    if (r) *r = value.primary_r;
+    if (g) *g = value.primary_g;
+    if (b) *b = value.primary_b;
 }
 
 void led_beat_secondary_color_set(uint8_t r, uint8_t g, uint8_t b){
-    if (led_pulse_lock()){
-        s_beat_secondary_r = r;
-        s_beat_secondary_g = g;
-        s_beat_secondary_b = b;
-        led_pulse_unlock();
-    } else {
-        s_beat_secondary_r = r;
-        s_beat_secondary_g = g;
-        s_beat_secondary_b = b;
-    }
+    portENTER_CRITICAL(&s_beat_settings_mux);
+    s_beat_settings.secondary_r = r;
+    s_beat_settings.secondary_g = g;
+    s_beat_settings.secondary_b = b;
+    portEXIT_CRITICAL(&s_beat_settings_mux);
 }
 
 void led_beat_secondary_color_get(uint8_t *r, uint8_t *g, uint8_t *b){
-    if (led_pulse_lock()){
-        if (r) *r = s_beat_secondary_r;
-        if (g) *g = s_beat_secondary_g;
-        if (b) *b = s_beat_secondary_b;
-        led_pulse_unlock();
-        return;
-    }
-    if (r) *r = s_beat_secondary_r;
-    if (g) *g = s_beat_secondary_g;
-    if (b) *b = s_beat_secondary_b;
+    led_beat_settings_t value = led_beat_settings_snapshot();
+    if (r) *r = value.secondary_r;
+    if (g) *g = value.secondary_g;
+    if (b) *b = value.secondary_b;
 }
 
 void led_beat_plane_background_enable(bool enabled){
-    s_beat_plane_background_enabled = enabled;
+    portENTER_CRITICAL(&s_beat_settings_mux);
+    s_beat_settings.plane_background_enabled = enabled;
+    portEXIT_CRITICAL(&s_beat_settings_mux);
 }
 
 bool led_beat_plane_background_enabled(void){
-    return s_beat_plane_background_enabled;
+    return led_beat_settings_snapshot().plane_background_enabled;
 }
 
 void led_beat_ring_background_enable(bool enabled){
-    s_beat_ring_background_enabled = enabled;
+    portENTER_CRITICAL(&s_beat_settings_mux);
+    s_beat_settings.ring_background_enabled = enabled;
+    portEXIT_CRITICAL(&s_beat_settings_mux);
 }
 
 bool led_beat_ring_background_enabled(void){
-    return s_beat_ring_background_enabled;
+    return led_beat_settings_snapshot().ring_background_enabled;
 }
 
 void led_beat_color_cycle_set(led_color_cycle_t mode){
     if (mode < LED_COLOR_CYCLE_STATIC || mode > LED_COLOR_CYCLE_BIOHAZARD) {
         mode = LED_COLOR_CYCLE_STATIC;
     }
-    s_beat_color_cycle = mode;
+    portENTER_CRITICAL(&s_beat_settings_mux);
+    s_beat_settings.color_cycle = mode;
+    portEXIT_CRITICAL(&s_beat_settings_mux);
 }
 
 led_color_cycle_t led_beat_color_cycle_get(void){
-    return s_beat_color_cycle;
+    return led_beat_settings_snapshot().color_cycle;
 }
 
 void led_beat_color_style_set(led_color_style_t style){
-    if (style < LED_COLOR_STYLE_MONO || style > LED_COLOR_STYLE_PALETTE) {
-        style = LED_COLOR_STYLE_MONO;
-    }
-    s_beat_color_style = style;
-    s_beat_duo_flip = 0;
+    led_beat_settings_t value = led_beat_settings_snapshot();
+    value.color_style = style;
+    led_beat_settings_apply(&value);
 }
 
 led_color_style_t led_beat_color_style_get(void){
-    return s_beat_color_style;
+    return led_beat_settings_snapshot().color_style;
 }
 
 void led_beat_highlight_mode_set(led_highlight_mode_t mode){
     if (mode < LED_HIGHLIGHT_OFF || mode > LED_HIGHLIGHT_PEAKS) {
         mode = LED_HIGHLIGHT_OFF;
     }
-    s_beat_highlight_mode = mode;
+    portENTER_CRITICAL(&s_beat_settings_mux);
+    s_beat_settings.highlight_mode = mode;
+    portEXIT_CRITICAL(&s_beat_settings_mux);
 }
 
 led_highlight_mode_t led_beat_highlight_mode_get(void){
-    return s_beat_highlight_mode;
+    return led_beat_settings_snapshot().highlight_mode;
 }
 
 void led_beat_brightness_set(uint8_t level){
-    if (led_pulse_lock()){
-        s_beat_brightness = level;
-        led_pulse_unlock();
-    } else {
-        s_beat_brightness = level;
-    }
+    portENTER_CRITICAL(&s_beat_settings_mux);
+    s_beat_settings.brightness = level;
+    portEXIT_CRITICAL(&s_beat_settings_mux);
 }
 
 uint8_t led_beat_brightness_get(void){
-    if (led_pulse_lock()){
-        uint8_t level = s_beat_brightness;
-        led_pulse_unlock();
-        return level;
-    }
-    return s_beat_brightness;
+    return led_beat_settings_snapshot().brightness;
 }
 
 void led_audio_energy_range_set(led_audio_energy_range_t range){
     if (range < LED_AUDIO_ENERGY_RANGE_FULL || range > LED_AUDIO_ENERGY_RANGE_HIGH) {
         range = LED_AUDIO_ENERGY_RANGE_FULL;
     }
-    s_audio_energy_range = range;
+    portENTER_CRITICAL(&s_beat_settings_mux);
+    s_beat_settings.audio_energy_range = range;
+    portEXIT_CRITICAL(&s_beat_settings_mux);
 }
 
 led_audio_energy_range_t led_audio_energy_range_get(void){
-    return s_audio_energy_range;
+    return led_beat_settings_snapshot().audio_energy_range;
 }
 
 void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
@@ -2275,10 +2307,11 @@ void led_trigger_beat(uint8_t r, uint8_t g, uint8_t b){
     }
     int64_t now_us = esp_timer_get_time();
     float t_sec = (float)now_us / 1000000.0f;
-    led_beat_select_trigger_color(t_sec, &r, &g, &b);
     led_pulse_start_task();
 
     if (!led_pulse_lock()) return;
+    s_beat_frame_settings = led_beat_settings_snapshot();
+    led_beat_select_trigger_color(t_sec, &r, &g, &b);
     led_beat_anim_t effective_mode = led_beat_effective_mode_locked(now_us);
     if (effective_mode == LED_BEAT_ANIM_PULSE){
         led_comet_clear_locked();

@@ -10,9 +10,11 @@ resulting status.
 
 ## Presence and role assignment
 
-A suit advertises a compact Hello while its Show menu is open or while it owns
-show output. Opening the menu starts a short discovery interval before choosing
-a role. Peers expire after two seconds without presence.
+A suit advertises a compact Hello while its Show menu is open, while it owns
+show output, or while a shared service requests A/B/C role presence. Live Sync
+uses the latter to obtain suit identity without starting Show transport.
+Opening the role network starts a short discovery interval before choosing a
+role. Peers expire after two seconds without presence.
 
 The lowest station MAC among present suits coordinates one three-entry role
 table. Existing A/B/C claims are placed before newcomers, so joining does not
@@ -22,9 +24,15 @@ the coordinator swaps the two entries. Repeated Hellos and periodic role-table
 snapshots make requests converge despite dropped packets. Table revisions and
 boot IDs reject stale assignments from an earlier coordinator instance.
 
-Role coordination is deliberately separate from playback leadership. The
+Role presence participates only in identity coordination. Show ping, transport,
+leadership and LED ownership still require the Show menu or active output.
+Role coordination is separate from playback leadership. The
 coordinator resolves identity conflicts; whichever suit starts a track becomes
 the audio and transport authority.
+
+Initialization allocates only the receive queue and role state. The large Show
+renderer is created lazily when a package is first loaded, so background A/B/C
+presence does not reserve its geometry buffers on suits using only Live Sync.
 
 ## Starting and changing leadership
 
@@ -48,11 +56,10 @@ not create a queued animation delay.
 
 ## Audio clock
 
-The leader derives audible position from submitted PCM frames, sample rate and
-the timestamp of the latest progress update. Bluetooth subtracts the configured
-output delay; local output subtracts its bounded queued-DMA estimate. Elapsed
-time since the update is added only up to that delay. Position is clamped
-monotonic to prevent an update race from moving the show backwards.
+The leader reads the shared Audio audible timeline. Bluetooth uses the
+configured output delay and local output uses its bounded queued-DMA estimate.
+Show additionally clamps position monotonic so an update race cannot move the
+animation backwards.
 
 Paused audio or a progress stall freezes the playhead. A start that produces no
 PCM for five seconds fails the session. Completion releases the show after the

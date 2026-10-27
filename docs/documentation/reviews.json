@@ -1,114 +1,362 @@
 {
-  "components/microphone/include/recording_envelope.h": {
-    "doc": "docs/reference/technical/message-observability.md",
-    "sha256": "49e252f3ce4931390eae4b1b5fce4aa75dd9a640604a6d7c8b182bf08f4d826d"
+  "apps/bluetooth/bluetooth_app.c": {
+    "doc": "apps/bluetooth/README.md",
+    "sha256": "52ecf09f1db6a7ee3d37e82e8d086a55d6368d33595eaa440a9d247f123282b1"
   },
-  "components/mpu6500/CMakeLists.txt": {
-    "doc": "docs/reference/technical/imu-filter-and-driver.md",
-    "sha256": "4836afd67e0e05c9eba44c75ddf42010deccf1b87ce2954a00a1ec01e610cb39"
+  "apps/bluetooth/bluetooth_view.c": {
+    "doc": "apps/bluetooth/README.md",
+    "sha256": "b76d3944610bcacbfb24603d636d0eaf0570d57d4f324e0ce9f24dd89ccd7ab2"
   },
-  "components/mpu6500/include/mpu6500.h": {
-    "doc": "docs/reference/technical/imu-filter-and-driver.md",
-    "sha256": "38211528e11157b476c6f7184bca0d3f9a74a7e9ebd95bd6ebb82188dfee28e3"
+  "apps/fft_view/fft_app.c": {
+    "doc": "apps/fft_view/README.md",
+    "sha256": "ba5177791906fedd99c20bcb3e158621d685edd18a7df9509984c5b1fa61f782"
   },
-  "components/mpu6500/mpu6500.c": {
-    "doc": "docs/reference/technical/imu-filter-and-driver.md",
-    "sha256": "3a1017bb4d80541853185ad93f8d47e249c002371767092b7aaf1ef5a0aa18bc"
+  "apps/flappy/CMakeLists.txt": {
+    "doc": "apps/flappy/README.md",
+    "sha256": "b4bf8d4b0dda63424e2f110a4e49330007baa83e0797160c4bf03e96b3971e8d"
   },
-  "components/orientation/CMakeLists.txt": {
-    "doc": "docs/reference/technical/orientation-and-paint.md",
-    "sha256": "a7aa25952428e842a183c89237ab7af2270c33d279749eed2656e0adffdc1258"
+  "apps/flappy/flappy.c": {
+    "doc": "apps/flappy/README.md",
+    "sha256": "7aa2604e9037cdb8f2e30b5999884aed99410addb8e51f54730db02e0c4724ef"
   },
-  "components/orientation/arm_pose.c": {
-    "doc": "docs/reference/technical/orientation-and-paint.md",
-    "sha256": "aec41683a408d7b528ca4621233fe7f5619768d62fab8d0cc60fd9e591e12547"
+  "apps/led_control/CMakeLists.txt": {
+    "doc": "apps/led_control/README.md",
+    "sha256": "e4751a3120fffe76b43442d3b6a26551dab21d733a6165cb05da251a4fd57fc5"
   },
-  "components/orientation/include/arm_pose.h": {
-    "doc": "docs/reference/technical/orientation-and-paint.md",
-    "sha256": "81dea6d9c363a7b6d2611d765c79396c4ca43fda523f101909d6edc6cc26ba95"
+  "apps/led_control/animations_app.c": {
+    "doc": "apps/led_control/README.md",
+    "sha256": "e99b13207071d203c839ee521f1cf4374276b22c67a7a00fcdabf1f9e8d11a08"
   },
-  "components/orientation/include/orientation.h": {
-    "doc": "docs/reference/technical/imu-filter-and-driver.md",
-    "sha256": "7909b96916f239031482336f7086593cfd3cec9073a64c8071b11ed750b9800e"
+  "apps/led_control/color_app.c": {
+    "doc": "apps/led_control/README.md",
+    "sha256": "faf12f7680330a06d371d0d66f5ece00e97112483bf324f3f0b11c3d02b07bee"
   },
-  "components/orientation/include/orientation_service.h": {
-    "doc": "docs/reference/technical/orientation-and-paint.md",
-    "sha256": "1d3fc554beb822eb1371d090b3731a92985e77becb8b043de977a3d6b7260635"
+  "apps/led_control/fft_sync_app.c": {
+    "doc": "apps/led_control/README.md",
+    "sha256": "240d88bba71ab53f80f3ddadad003fd0e2b64989845cb48c99a1227f446724c0"
   },
-  "components/orientation/orientation.c": {
-    "doc": "docs/reference/technical/imu-filter-and-driver.md",
-    "sha256": "e55e47b5201595530650acfe09ae52dec6d5bd879f3bcf11881777ceb054169a"
+  "apps/led_control/include/led_control_apps.h": {
+    "doc": "apps/led_control/README.md",
+    "sha256": "cadde14c61d1b3257593f4ee79fc33630f7fea5203794a80e915b8c895ae13f2"
   },
-  "components/orientation/orientation_service.c": {
-    "doc": "docs/reference/technical/orientation-and-paint.md",
-    "sha256": "fe8235c9a474c07ad63b7dabf4c5b5de265137d2d0faf0a6bdca562220f3880a"
+  "apps/led_control/led_source_app.c": {
+    "doc": "apps/led_control/README.md",
+    "sha256": "9e789218955ddbafe238343bb1a8eec260367f6244db647d1df2a75b257d6f94"
   },
-  "components/threedee/CMakeLists.txt": {
-    "doc": "docs/reference/technical/pose-displays.md",
-    "sha256": "89c6b2a7074675dd83ad38d1e70130333b1121a2f76f12a6b194b310c8627749"
+  "apps/led_control/tests/test_animation_controls.py": {
+    "doc": "apps/led_control/README.md",
+    "sha256": "cee2c922af034ff140bbde028f789b4b4b62d131e14cdb49faa0958784c1a8ae"
   },
-  "components/threedee/include/threedee.h": {
-    "doc": "docs/reference/technical/pose-displays.md",
-    "sha256": "b282791e105e5d882da0bfa0d5c1b32f4cb626e2dbe60075185920130930b795"
+  "apps/message_app/message_app.c": {
+    "doc": "apps/message_app/README.md",
+    "sha256": "d4942d8843e98e6b0d32b6812bb55676b4bd0451e0c721149d0a6ae5b1b357a2"
   },
-  "components/threedee/threedee.c": {
-    "doc": "docs/reference/technical/pose-displays.md",
-    "sha256": "ca1d848f1519d2cb1f7370a23b9f96063af95685f0c010323168069393d5ee53"
+  "apps/message_app/tests/test_message_ui.py": {
+    "doc": "apps/message_app/README.md",
+    "sha256": "6a9bf894fb26c9ebf3819803c16164f4836effe0dedd683fea7a83f544489dab"
   },
-  "main/app_light_paint.c": {
-    "doc": "docs/reference/technical/orientation-and-paint.md",
-    "sha256": "da062be56413ce38174bb45d71818321ca0a46e3544b2584101b990d5bc9fc61"
+  "apps/music/CMakeLists.txt": {
+    "doc": "apps/music/README.md",
+    "sha256": "360ddf9875de6a4c286ab631b9828f1084c341acadcf6c382a3c062b19b382e3"
   },
-  "main/app_stickman.c": {
-    "doc": "docs/reference/technical/pose-displays.md",
-    "sha256": "f1b97603b1b8b8234cfbc4e76e20d0e7fddaf4f2a365e6fc074ee2c6eaeda1d4"
+  "apps/music/include/music_app.h": {
+    "doc": "apps/music/README.md",
+    "sha256": "c8530e22645100349930bef74057ed086b2f6fb2e2259e62acbaa4ab90116660"
   },
-  "main/app_synth.c": {
-    "doc": "docs/reference/technical/arm-synth.md",
-    "sha256": "ec987a7daefc00aab11abf77f6bee597f659707749352339ea8823507dda97fe"
+  "apps/music/music_app.c": {
+    "doc": "apps/music/README.md",
+    "sha256": "1c74fcec634db0c85f8fe6bc930392183bc8f2e1857a74918c87a207f4a3b705"
   },
-  "main/app_threedee.c": {
-    "doc": "docs/reference/technical/pose-displays.md",
-    "sha256": "ab600ecf3c4a50c2385fff5965172ddd491a0900c88cf843b60b41660206e4f2"
+  "apps/paint_app/app_light_paint.c": {
+    "doc": "apps/paint_app/README.md",
+    "sha256": "546b06a61a425ef63fa42d4c1cd2e5759dc99ebf591b3d99880e652c4dbfff3c"
   },
-  "main/message_notifications.c": {
-    "doc": "docs/reference/technical/message-observability.md",
-    "sha256": "4628745a4f8523ba5f38bdb5d8ab2ff0f7e07964d734506853740bf701094d7a"
+  "apps/pong_app/pong_app.c": {
+    "doc": "apps/pong_app/README.md",
+    "sha256": "f46e72b576a3222b57514f2dc8efacdcdace03381a4f9101786b28348e2e94ec"
   },
-  "main/message_notifications.h": {
-    "doc": "docs/reference/technical/message-observability.md",
-    "sha256": "49566f4204763825726403dd36f4a6103c0c6720ad84358bb7eb93dbcf3317d7"
+  "apps/remote_control_app/CMakeLists.txt": {
+    "doc": "apps/remote_control_app/README.md",
+    "sha256": "66c2ae8b1427cbc9750b448f4f1fdb41fe721fed2f9333292dadeda5866e3ea9"
   },
-  "main/shell_audio.c": {
-    "doc": "docs/reference/technical/arm-synth.md",
-    "sha256": "b9dd9a5d4baeb111d2a144eef44a2cd8d1d0d9d61eccfbfd320cec3db738ac67"
+  "apps/remote_control_app/README.md": {
+    "doc": "apps/remote_control_app/README.md",
+    "sha256": "9bb3b7e1a344cfe9af2d7d0de79fafdfc9809bb5e02efc5c0fac79559f09f088"
   },
-  "main/shell_audio.h": {
-    "doc": "docs/reference/technical/arm-synth.md",
-    "sha256": "a2afbc6fe34bb18cb06e3a78d85e179f9f7bc22e328307dd294e5a86dba836dd"
+  "apps/remote_control_app/include/remote_control_app.h": {
+    "doc": "apps/remote_control_app/README.md",
+    "sha256": "4a6761300dc272979375a070a650c530cf7c544a5fc9ed99c7fb45070e056a5a"
   },
-  "main/synth_voice.h": {
-    "doc": "docs/reference/technical/arm-synth.md",
-    "sha256": "9fbed7d86f684aa629c33f7d0b2a04301909b7b71a63d309c1ccdaa0ed53ee16"
+  "apps/remote_control_app/remote_control_app.c": {
+    "doc": "apps/remote_control_app/README.md",
+    "sha256": "c44da46cf4b42a2170622d89b23849ee6b17434d5814331f5ae6251ea734f1e0"
   },
-  "main/tests/test_light_paint.py": {
-    "doc": "docs/reference/technical/pose-displays.md",
-    "sha256": "3cc6860edc4382c4d90c3d3bb97e0b170eb119659a24f484900e9b3bcc3f74b0"
+  "apps/settings_app/include/settings_apps.h": {
+    "doc": "apps/settings_app/README.md",
+    "sha256": "0b31ddd396b96e2b5db900293da10969319acf1f84b737cf8b6b0b4139e93a1e"
   },
-  "main/tests/test_message_notifications.py": {
-    "doc": "docs/reference/technical/message-observability.md",
-    "sha256": "93c2aed4427ed777d4d836f1aaba6e137abbd07632c7e09b4816bdae4a616a38"
+  "apps/settings_app/preferences_app.c": {
+    "doc": "apps/settings_app/README.md",
+    "sha256": "f92920ea251ff001bcdc959c21134acefefcf497468da1ed7c723d5bd640f045"
   },
-  "main/tests/test_recording_envelope.py": {
-    "doc": "docs/reference/technical/message-observability.md",
-    "sha256": "2afaa3f99837e08fedef73dd1e03eafb5cd9dd9c143f8af1ba3777582d328454"
+  "apps/settings_app/service_management_app.c": {
+    "doc": "apps/settings_app/README.md",
+    "sha256": "6d68f3081ba6058a3d83ccee8b7670a97a984d7957db8a658ccd83a0f3dfe09b"
   },
-  "main/tests/test_synth.py": {
-    "doc": "docs/reference/technical/arm-synth.md",
-    "sha256": "3940988d685df9d6694165f2da2b89bcf0163bc30dd9e10a552fed36b31fa856"
+  "apps/shell/menu.c": {
+    "doc": "apps/shell/README.md",
+    "sha256": "196247a872f5d829e2b383ce4981e8b6ac20b433020325614398a8f5d153f39c"
   },
-  "main/tests/test_synth_bt.py": {
-    "doc": "docs/reference/technical/arm-synth.md",
-    "sha256": "4ed8967dfc70e23c4da8423dca8fc58c57396e29bb4a64c2b0a9bd40a244aeef"
+  "apps/shell/shell.c": {
+    "doc": "apps/shell/README.md",
+    "sha256": "a0f5d918d1d924903de0cda5113b4939cf86f4e5c07c3e6c89cf5dd4df76e42d"
+  },
+  "apps/shell/shell_app_registry.h": {
+    "doc": "apps/shell/README.md",
+    "sha256": "f01304d029521debd83b9070d6de13b6760aa22663111f51803f25d71e674fbe"
+  },
+  "apps/snake/CMakeLists.txt": {
+    "doc": "apps/snake/README.md",
+    "sha256": "fdbad68be581a2811af0a0bf3d5f89346f7d5d75bc4ce718d7623956cd7202fe"
+  },
+  "apps/snake/snake.c": {
+    "doc": "apps/snake/README.md",
+    "sha256": "0500753ca601dd86d855ed21c97f939c9426ea1b33cf893e1b59fdeaab6bc876"
+  },
+  "apps/tetris/CMakeLists.txt": {
+    "doc": "apps/tetris/README.md",
+    "sha256": "848de559e4bbcb3ed59ec1b8d2bc644ed3ef6ea0325433e56cfcb1a4a8a7f59c"
+  },
+  "apps/tetris/tetris.c": {
+    "doc": "apps/tetris/README.md",
+    "sha256": "bf0e97bd689024143b8e49d3886432cbfbfd46076ae09c414ff06fc2b0c3ad53"
+  },
+  "apps/twenty48/CMakeLists.txt": {
+    "doc": "apps/twenty48/README.md",
+    "sha256": "8ba79f7139340f8005e5fe73ec076359d0b3e1fe9fcfde7024ad37c5a015ded6"
+  },
+  "apps/twenty48/twenty48.c": {
+    "doc": "apps/twenty48/README.md",
+    "sha256": "ed5e600925d4e01b99105be6b4e8cb172b18c3ee4b46047e045d80dd811e3c25"
+  },
+  "apps/ui_shell/include/shell_ui.h": {
+    "doc": "apps/ui_shell/README.md",
+    "sha256": "ef04bdf9ca4cb403686f25a4d16429dcdbe902bb52ecb4be94ea4d21a7b529a4"
+  },
+  "apps/ui_shell/shell_ui.c": {
+    "doc": "apps/ui_shell/README.md",
+    "sha256": "e7202c11de6535345f5a6c8a3f9ab562f4e87f0bbc7ad6ba33635f67ce1cafb5"
+  },
+  "drivers/hw/CMakeLists.txt": {
+    "doc": "drivers/hw/README.md",
+    "sha256": "c9a4fe6d769e74ff6983bc164031304e96d3789eafc8edd9f5234e417fae2e49"
+  },
+  "drivers/hw/hw.c": {
+    "doc": "drivers/hw/README.md",
+    "sha256": "d2d7d042ca06be65fe886745abf341126337347ff09c321a8238034e0104354b"
+  },
+  "drivers/hw/include/hw.h": {
+    "doc": "drivers/hw/README.md",
+    "sha256": "0eb5fc3eb059d9ff275437a062c4e56cec790480b15cf5f265f37620f6d781c8"
+  },
+  "drivers/input/include/input.h": {
+    "doc": "drivers/input/README.md",
+    "sha256": "9ad08c9a9b893c42635c3466086c039292288f7533985f0801955b4983a54665"
+  },
+  "drivers/input/input.c": {
+    "doc": "drivers/input/README.md",
+    "sha256": "3d7ff522233fdf2d718e4c9e1d0a365d2354d7cab404bbf29e9e1ec0f5faa391"
+  },
+  "drivers/mpu6500/include/mpu6500.h": {
+    "doc": "drivers/mpu6500/README.md",
+    "sha256": "fd49c64728921e6affbbfddfc8361106978585603197e27574ffedffb361977e"
+  },
+  "drivers/mpu6500/mpu6500.c": {
+    "doc": "drivers/mpu6500/README.md",
+    "sha256": "d3ebffc1744d568ad9a96ae8afa9ec6a0b0d6155ae168150ad9e2a69d8acf888"
+  },
+  "drivers/storage_sd/storage_sd.c": {
+    "doc": "drivers/storage_sd/README.md",
+    "sha256": "4bd49b1edc9aafb4fb955b2d824b98ed656d8072cf7f65187eecb6a80b3786e5"
+  },
+  "services/audio_player/audio_player.c": {
+    "doc": "services/audio_player/README.md",
+    "sha256": "13b5731fb91836af288eace272e282dfc45a430962bb966ba5c3185ded122fe1"
+  },
+  "services/audio_player/include/audio_player.h": {
+    "doc": "services/audio_player/README.md",
+    "sha256": "521e55ca4250655d8b1ffd543839bd8b3a00827200394709820c12c0765ee2a1"
+  },
+  "services/audio_player/tests/test_bt_monitor.py": {
+    "doc": "services/audio_player/README.md",
+    "sha256": "554eab543c47841b4dc3096fe5514916117f1f2be7cbe7b9fef697a0746e92bd"
+  },
+  "services/audio_policy/audio_policy.c": {
+    "doc": "services/audio_policy/README.md",
+    "sha256": "9464c2cba43870d39f81ecd799309a4d9a4060f698791e2e494f7d09bfa81957"
+  },
+  "services/audio_policy/include/audio_policy.h": {
+    "doc": "services/audio_policy/README.md",
+    "sha256": "4b0b0c462fdc6b6c0eb9d7079f383a2e2039132b48c534886cbcaa76a751c568"
+  },
+  "services/bt_audio/CMakeLists.txt": {
+    "doc": "services/bt_audio/README.md",
+    "sha256": "33a2339b6fd498f25685e310ab473bb69e76496ffe01c6fd173fbc439026086d"
+  },
+  "services/bt_audio/bt_audio.c": {
+    "doc": "services/bt_audio/README.md",
+    "sha256": "0803eb882ba8363074bc53f395b6d9a3545f7e5b058d7fe9741b8d14d98328bd"
+  },
+  "services/bt_audio/include/bt_audio.h": {
+    "doc": "services/bt_audio/README.md",
+    "sha256": "d8580417326d4847387f427b7cfaced6c12d868c6174b06de91555fa95a266e7"
+  },
+  "services/bt_audio/include/bt_audio_internal.h": {
+    "doc": "services/bt_audio/README.md",
+    "sha256": "374ddeec918dbd7c212144c4cf65511a24ef9a32c7feaf6775377703d4922af9"
+  },
+  "services/flappy_game/flappy_game.c": {
+    "doc": "services/flappy_game/README.md",
+    "sha256": "bbf674dc1f09f0596ee52dcf36b2138f5b1c65d1c6c4c3ad565c6246b2cae4d5"
+  },
+  "services/flappy_game/include/flappy_game.h": {
+    "doc": "services/flappy_game/README.md",
+    "sha256": "c308466bb1f678fff130eb86bf91fef35ead55ec8abe46237b794f18d7e83937"
+  },
+  "services/fluid_sim/CMakeLists.txt": {
+    "doc": "services/fluid_sim/README.md",
+    "sha256": "18be5a44ac06990b0772aa4e11da5eaf4991032d7add60edd53c1176922dfcb6"
+  },
+  "services/fluid_sim/fluid_service.c": {
+    "doc": "services/fluid_sim/README.md",
+    "sha256": "d697f4fc0bc6cb94402e107349e708b35d9cf8b7ff762580e4de70da991c4410"
+  },
+  "services/led/include/led.h": {
+    "doc": "services/led/README.md",
+    "sha256": "198db3829c51b75ee1e50e5c5335681b145c35782e0c63f9f8f72c00909e032f"
+  },
+  "services/led/led.c": {
+    "doc": "services/led/README.md",
+    "sha256": "f46352ad6b273bb0ea32faef70d9629c3ac979dcf94c8ce424cd01f9cd3a0357"
+  },
+  "services/led_layout/led_layout.c": {
+    "doc": "services/led_layout/README.md",
+    "sha256": "b97f750294ddf7d968a646abb7ff8e56d4102cd6ca0e24bfaf90b5d96c588437"
+  },
+  "services/led_layout/tests/test_legs.py": {
+    "doc": "services/led_layout/README.md",
+    "sha256": "8cd8bcaedc998fa906c67c0e332a8c2e1f331652ab240eb0fb8df1987df88ef5"
+  },
+  "services/led_modes/include/led_modes.h": {
+    "doc": "services/led_modes/README.md",
+    "sha256": "1998575b61c0dcea89d0823b5bbaac110700ed1b7de6e692d675aea36e3485ab"
+  },
+  "services/led_modes/led_modes.c": {
+    "doc": "services/led_modes/README.md",
+    "sha256": "d23b550bfe539d32e61c478fa484b822f452292e616a7011df5a295aa794a1e8"
+  },
+  "services/link/include/link.h": {
+    "doc": "services/link/README.md",
+    "sha256": "352bc663f4565ae44555b11ad4daacc7cb692ebd5e5f3d19a7db2699e35bdde5"
+  },
+  "services/microphone/include/microphone.h": {
+    "doc": "services/microphone/README.md",
+    "sha256": "cfdd3086c3b3f664bd1bfe33ab556f8d1a8834fa90c38c1da1248ca897b7ae85"
+  },
+  "services/microphone/microphone.c": {
+    "doc": "services/microphone/README.md",
+    "sha256": "8ce53799cd377554270351517c5928170a3881470250956967c00c071520a714"
+  },
+  "services/microphone/recording_counter.c": {
+    "doc": "services/microphone/README.md",
+    "sha256": "588d3ac72633b83dd3d8a1930afda2700066707b5e5df213d1503acf0585c8c2"
+  },
+  "services/microphone/recording_counter.h": {
+    "doc": "services/microphone/README.md",
+    "sha256": "ae43b7c0083b593be888cf353bf41d5f3a71b3c1b3d6b081dbd50031ab33e605"
+  },
+  "services/microphone/tests/test_recording_counter.py": {
+    "doc": "services/microphone/README.md",
+    "sha256": "5236320b2a0a97568a9140af7b867ce0c97cdb03ae8f45edc0daa3f11d707db1"
+  },
+  "services/orientation/orientation_service.c": {
+    "doc": "services/orientation/README.md",
+    "sha256": "427934f5adc2dd7c3da0e01a8bdb9b6276c747dc32e12009ee44d6f072f0545d"
+  },
+  "services/pong/include/pong.h": {
+    "doc": "services/pong/README.md",
+    "sha256": "7df5f8026b72aad630eceba5b52ac3cbee86e33dcbcf4fffeb3f4b66c5be4dfc"
+  },
+  "services/pong/pong.c": {
+    "doc": "services/pong/README.md",
+    "sha256": "48ea50944948d337889b0719f9f86dd0ddc4e13dd0bce57e25cea67fcc9bd157"
+  },
+  "services/pong/tests/test_pong.py": {
+    "doc": "services/pong/README.md",
+    "sha256": "a0ff9f56cc0ddf21302f8b22423b1edcd95624458e6ab4dbc6abf0a0e6d586b5"
+  },
+  "services/remote_control/CMakeLists.txt": {
+    "doc": "services/remote_control/README.md",
+    "sha256": "5e29da028c5c0fb20787645c6aea070949b70fb617d5c3b83333ae6a5e0b987b"
+  },
+  "services/remote_control/README.md": {
+    "doc": "services/remote_control/README.md",
+    "sha256": "803c4d4b05fdb313082a654b86739b498c41194fb19be5e1087ace2582e9d0ad"
+  },
+  "services/remote_control/include/remote_control.h": {
+    "doc": "services/remote_control/README.md",
+    "sha256": "844f438f71bf938710050dd324ffdd7eac39dafe2f27efda3b8fcb09bcbba427"
+  },
+  "services/remote_control/remote_control.c": {
+    "doc": "services/remote_control/README.md",
+    "sha256": "7c5a4c79cbb24cbe38fc8ebc047425a103f72aac4e0124c52520267ff8f86d77"
+  },
+  "services/scores/include/scores.h": {
+    "doc": "services/scores/README.md",
+    "sha256": "0439f3bd835eee11447bfab02ad3aa95c2d361d0979c7b124c190fd78690b2ae"
+  },
+  "services/scores/scores.c": {
+    "doc": "services/scores/README.md",
+    "sha256": "11947b7428bf041fcfda6a92df30cb6283820950279c0866fff6c039d221c51b"
+  },
+  "services/scores/tests/test_scores.py": {
+    "doc": "services/scores/README.md",
+    "sha256": "9ac9354850f18675e6e7e9b0e3d3dba51ccd9b0ea4c73a5039e93c49288c35ef"
+  },
+  "services/settings/CMakeLists.txt": {
+    "doc": "services/settings/README.md",
+    "sha256": "1c9f57d9780188d3d9790e0f84311a60ec846f4756f7419507f50122d776dc34"
+  },
+  "services/settings/include/settings.h": {
+    "doc": "services/settings/README.md",
+    "sha256": "a5f2eea9188465892d1b58168546bdfde6205415f1fb9dc9b96177cafd8537d9"
+  },
+  "services/settings/settings.c": {
+    "doc": "services/settings/README.md",
+    "sha256": "e22ae74922fe0504692fb87c020a22ef480b2f5e265f97b9c39c9b43c49e734d"
+  },
+  "services/snake_game/include/snake_game.h": {
+    "doc": "services/snake_game/README.md",
+    "sha256": "9c3cab49bbbed07e7baf775d48d35d01814607351af355211fd68e1f5fd820fb"
+  },
+  "services/snake_game/snake_game.c": {
+    "doc": "services/snake_game/README.md",
+    "sha256": "06c5c41f97b62ea09cfab77057ea803803a799389c7d715b10d79f734393b15d"
+  },
+  "services/tetris_game/include/tetris_game.h": {
+    "doc": "services/tetris_game/README.md",
+    "sha256": "32db3026039a4384b80fbe2a150a958f6b6880fd6f4cc1d0c59ad8c039520e96"
+  },
+  "services/tetris_game/tetris_game.c": {
+    "doc": "services/tetris_game/README.md",
+    "sha256": "c08814c2cfd2ea940a411be2a3c322f5e1589ec22dc679c7eae295f02fe1473e"
+  },
+  "services/twenty48_game/include/twenty48_game.h": {
+    "doc": "services/twenty48_game/README.md",
+    "sha256": "84cdf011c92e5e69b89298f4025acc9da1e10852cfae8682124ba2f32b4c0b5b"
+  },
+  "services/twenty48_game/twenty48_game.c": {
+    "doc": "services/twenty48_game/README.md",
+    "sha256": "fc3d9dc16dc3a6f5069d1a2e415e6da1ae758ac5dcaea148ad85c462f4e4359f"
   }
 }

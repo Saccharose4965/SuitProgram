@@ -1,5 +1,3 @@
-Pending review
-
 # Fluid simulation
 
 This service owns the particle state, gravity sampling, simulation worker and
@@ -27,11 +25,11 @@ proportional to the particle count.
 ## Gravity and scheduling
 
 The board accelerometer axes are converted to screen right/down axes, with both
-configured signs negative. The service first reads the shared orientation
-stream. Its retained recovery path reuses an existing MPU SPI device or starts
-a local sampler if that service cannot start. This recovery bypasses the shared
-orientation calibration and should be removed once orientation startup is
-guaranteed for every app.
+configured signs negative. The service reads raw acceleration exclusively from
+the shared Orientation service, so sensor ownership, calibration and sampling
+are consistent with every other motion feature. When Orientation is unavailable
+or has no sample yet, both gravity components remain zero and the simulation
+continues without tilt input.
 
 The worker targets one step every 33 ms on core 1. A normal step uses two
 substeps. When computation reaches the frame budget it drops to one substep and
@@ -46,6 +44,7 @@ Simulation output is copied into a dedicated published mask inside a short
 critical section. Readers copy that stable mask under the same lock. Particle
 arrays and neighbour structures remain private to the worker.
 
-Stopping waits up to 300 ms for the worker to exit, then force-deletes it. A
-forced deletion can interrupt a simulation update; the subsequent reset makes
-the next start deterministic at the feature level.
+Stopping sets a request flag and waits on a statically allocated completion
+signal. The worker finishes its current bounded simulation step, publishes its
+exit and deletes itself. Only then does the service reset particle and mask
+state, so shutdown cannot interrupt an update or race buffer reset.

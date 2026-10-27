@@ -126,7 +126,10 @@ int main(void)
     assert(nodes[0].state.session==nodes[1].state.session);
     select_node(1);
     float left=s_pong.paddle[0]; s_pong.paddle[1]=CENTER_Y;
-    pong_service_move_paddle(-1); assert(s_pong.paddle[0]==left && s_pong.paddle[1]==CENTER_Y-4);
+    pong_service_set_paddle_input(-1); assert(s_pong.paddle_input==-1);
+    wall+=10000; pong_service_tick();
+    assert(s_pong.paddle[0]==left && s_pong.paddle[1]<CENTER_Y);
+    pong_service_set_paddle_input(0);
     save_node(1);
     for(int i=0;i<6000;++i) {
         step(true);
@@ -190,8 +193,15 @@ int main(void)
     wall+=500000; pong_service_tick(); assert(s_pong.ball.x>CENTER_X);
     pong_service_toggle_pause(); assert(s_pong.paused); float x=s_pong.ball.x;
     wall+=20000; pong_service_tick(); assert(s_pong.ball.x==x);
+    pong_service_toggle_pause();
+    s_pong.paddle[0]=TOP; s_pong.paddle_velocity=0;
+    s_pong.last_tick=esp_timer_get_time(); s_pong.serve_until=s_pong.last_tick+2000000;
+    pong_service_set_paddle_input(1);
+    for(int i=0;i<100;++i){wall+=10000;pong_service_tick();}
+    assert(s_pong.paddle[0]>=BOTTOM-PADDLE_H-.1f);
+    pong_service_set_paddle_input(0);
     pong_service_reset(); assert(s_pong.mode==MENU);
-    puts("Pong: two clocks, handshake, independent simulation, packet loss, collision authority, smoothing, score and exit passed");
+    puts("Pong: handshake, independent simulation, collision authority, smoothing, continuous paddle, score and exit passed");
     return 0;
 }
 '''

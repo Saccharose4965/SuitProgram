@@ -8,9 +8,9 @@ so leaving a screen does not discard a lighting request. There is no new task.
 
 ## Keeping requests while resources are busy
 
-Each requesting screen has a bit in a request mask. Beat-driven lighting and
-audio-driven brightness also request analysis. Clearing one bit preserves the
-other clients.
+Each requesting feature has a bit in a request mask. The FFT viewer,
+beat-driven lighting and audio-driven brightness request analysis independently.
+Clearing one bit preserves the other clients.
 
 Paint, Synth, Call, Show, Arm Pose and 3D sessions block FFT. A show owning the
 LEDs also blocks it. Bluetooth blocks analysis while its app is open or its

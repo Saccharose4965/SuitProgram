@@ -9,29 +9,30 @@ extern "C" {
 #endif
 
 typedef enum {
-    SYS_CONN_DISCONNECTED = 0,
-    SYS_CONN_CONNECTING,
-    SYS_CONN_CONNECTED,
+  SYS_CONN_DISCONNECTED = 0,
+  SYS_CONN_CONNECTING,
+  SYS_CONN_CONNECTED,
 } system_connection_t;
 
 typedef enum {
-    SYS_MASTER_CTRL_OFF = 0,
-    SYS_MASTER_CTRL_SLAVE,
-    SYS_MASTER_CTRL_MASTER,
-} system_master_ctrl_t;
+  SYS_LIVE_SYNC_LOCAL = 0,
+  SYS_LIVE_SYNC_FOLLOW_A,
+  SYS_LIVE_SYNC_FOLLOW_B,
+  SYS_LIVE_SYNC_FOLLOW_C,
+} system_live_sync_t;
 
 typedef struct {
-    int  current_led_mode;      // opaque mode id, set by LED service
-    char led_mode_name[16];     // short human-friendly label for HUD
-    bool fft_running;           // FFT service active
-    uint16_t fft_bpm_centi;     // effective FFT BPM x100 when available
-    system_master_ctrl_t master_ctrl;
-    bool sync_link_active;      // master/slave sync link currently alive
-    uint8_t battery_pct[3];     // 0–100 for costume batteries
-    system_connection_t connection;
-    bool time_valid;
-    uint8_t hours;
-    uint8_t minutes;
+  int current_led_mode;   // opaque mode id, set by LED service
+  char led_mode_name[16]; // short human-friendly label for HUD
+  bool fft_running;       // FFT service active
+  uint16_t fft_bpm_centi; // effective FFT BPM x100 when available
+  system_live_sync_t live_sync;
+  bool sync_link_active;
+  uint8_t battery_pct[3]; // 0–100 for costume batteries
+  system_connection_t connection;
+  bool time_valid;
+  uint8_t hours;
+  uint8_t minutes;
 } system_state_t;
 
 // Initialize SystemState storage (idempotent).
@@ -52,8 +53,8 @@ void system_state_set_connection(system_connection_t state);
 // FFT HUD status is owned by the shell/service layer.
 void system_state_set_fft_status(bool running, uint16_t bpm_centi);
 
-// Master-control HUD status is owned by the shell/service layer.
-void system_state_set_master_control(system_master_ctrl_t state, bool link_active);
+// Live-sync HUD status is owned by the shell/service layer.
+void system_state_set_live_sync(system_live_sync_t state, bool link_active);
 
 // Time validity is supplied by the shell/link status publisher.
 void system_state_set_time(bool valid, uint8_t hours, uint8_t minutes);

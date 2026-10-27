@@ -1,9 +1,10 @@
 #include "orientation_service.h"
 
-#include "esp_check.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "driver/spi_master.h"
@@ -16,6 +17,9 @@
 static const char *TAG = "ori_svc";
 
 static bool s_started = false;
+static StaticSemaphore_t s_start_mutex_buffer;
+static SemaphoreHandle_t s_start_mutex = NULL;
+static portMUX_TYPE s_start_mutex_init_lock = portMUX_INITIALIZER_UNLOCKED;
 static TaskHandle_t s_orient_task = NULL;
 static mpu6500_t s_imu = { .mux = portMUX_INITIALIZER_UNLOCKED };
 static imu_orientation_t s_ori = {0};
@@ -23,6 +27,33 @@ static portMUX_TYPE s_snapshot_mux = portMUX_INITIALIZER_UNLOCKED;
 static imu_quat_t s_snapshot;
 static uint64_t s_snapshot_time;
 static float s_bias[3]={-1.9f,.5f,0};
+
+static SemaphoreHandle_t orientation_start_mutex(void)
+{
+    if (s_start_mutex) return s_start_mutex;
+    taskENTER_CRITICAL(&s_start_mutex_init_lock);
+    if (!s_start_mutex) {
+        s_start_mutex = xSemaphoreCreateMutexStatic(&s_start_mutex_buffer);
+    }
+    taskEXIT_CRITICAL(&s_start_mutex_init_lock);
+    return s_start_mutex;
+}
+
+static bool orientation_started(void)
+{
+    bool started;
+    portENTER_CRITICAL(&s_snapshot_mux);
+    started = s_started;
+    portEXIT_CRITICAL(&s_snapshot_mux);
+    return started;
+}
+
+static void orientation_publish_started(void)
+{
+    portENTER_CRITICAL(&s_snapshot_mux);
+    s_started = true;
+    portEXIT_CRITICAL(&s_snapshot_mux);
+}
 
 void orientation_service_get_bias(float out[3])
 {
@@ -68,11 +99,15 @@ static void orientation_task(void *arg)
     }
 }
 
-esp_err_t orientation_service_start(void)
+static esp_err_t orientation_start_locked(void)
 {
-    if (s_started) return ESP_OK;
+    if (orientation_started()) return ESP_OK;
 
-    ESP_RETURN_ON_ERROR(hw_spi2_init_once(), TAG, "spi2 init");
+    esp_err_t err = hw_spi2_init_once();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "spi2 init: %s", esp_err_to_name(err));
+        return err;
+    }
     hw_spi2_idle_all_cs_high();
 
     const gpio_num_t cs = (gpio_num_t)PIN_CS_IMU1;
@@ -89,6 +124,7 @@ esp_err_t orientation_service_start(void)
 
         if (mpu6500_init(&s_imu, &cfg) != ESP_OK) {
             (void)spi_bus_remove_device(dev);
+            s_imu.dev = NULL;
             continue;
         }
 
@@ -101,12 +137,13 @@ esp_err_t orientation_service_start(void)
             if (ok != pdPASS) {
                 s_orient_task = NULL;
                 (void)spi_bus_remove_device(dev);
+                s_imu.dev = NULL;
                 return ESP_ERR_NO_MEM;
             }
         }
 
         if (mpu6500_start_sampler(&s_imu, 200, 2, 1, 0) == ESP_OK) {
-            s_started = true;
+            orientation_publish_started();
             ESP_LOGI(TAG, "orientation service started @CS%u (%u Hz)", (unsigned)cs, (unsigned)freqs[f]);
             return ESP_OK;
         }
@@ -116,40 +153,57 @@ esp_err_t orientation_service_start(void)
             s_orient_task = NULL;
         }
         (void)spi_bus_remove_device(dev);
+        s_imu.dev = NULL;
     }
 
     return ESP_ERR_NOT_FOUND;
 }
 
+esp_err_t orientation_service_start(void)
+{
+    SemaphoreHandle_t mutex = orientation_start_mutex();
+    if (!mutex) return ESP_ERR_NO_MEM;
+    if (xSemaphoreTake(mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
+    esp_err_t err = orientation_start_locked();
+    xSemaphoreGive(mutex);
+    return err;
+}
+
 bool orientation_service_ready(void)
 {
-    return s_started && imu_orientation_ready(&s_ori);
+    bool ready;
+    portENTER_CRITICAL(&s_snapshot_mux);
+    ready = s_started && s_snapshot_time != 0;
+    portEXIT_CRITICAL(&s_snapshot_mux);
+    return ready;
 }
 
-bool orientation_service_snapshot(imu_quat_t *q, uint64_t *sample_us)
+bool orientation_service_absolute_snapshot(imu_quat_t *q, uint64_t *sample_us)
 {
     if (!q || !sample_us) return false;
+    bool available;
     portENTER_CRITICAL(&s_snapshot_mux);
-    *q=s_snapshot; *sample_us=s_snapshot_time;
+    *q = s_snapshot;
+    *sample_us = s_snapshot_time;
+    available = s_started && s_snapshot_time != 0;
     portEXIT_CRITICAL(&s_snapshot_mux);
-    return *sample_us != 0;
+    return available;
 }
 
-imu_orientation_t *orientation_service_ctx(void)
+bool orientation_service_fresh_snapshot(imu_quat_t *q, uint64_t max_age_us)
 {
-    return &s_ori;
+    uint64_t sample_us;
+    if (!orientation_service_absolute_snapshot(q, &sample_us)) return false;
+    int64_t now_us = esp_timer_get_time();
+    return now_us >= 0 && sample_us <= (uint64_t)now_us &&
+           (uint64_t)now_us - sample_us <= max_age_us;
 }
 
 bool orientation_service_read_sample(mpu6500_sample_t *out_sample)
 {
-    if (!out_sample || !s_started) return false;
+    if (!out_sample || !orientation_started()) return false;
     mpu6500_sample_t sample = mpu6500_latest(&s_imu);
     if (sample.t_us == 0) return false;
     *out_sample = sample;
     return true;
-}
-
-void orientation_service_recenter(void)
-{
-    imu_orientation_recenter(&s_ori);
 }

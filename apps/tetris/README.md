@@ -2,29 +2,24 @@ Pending review
 
 # Tetris screen
 
-The app owns the worker, input timing and drawing. Board state and collision
-rules come from the [game service](../../services/tetris_game/README.md).
+The app presents the [Tetris rules service](../../services/tetris_game/README.md)
+through ready, playing and results states. Any game button dismisses the ready
+overlay and is consumed. During play A/D move left/right and B/C rotate left/
+right.
 
-The worker uses core 1 on dual-core builds, core 0 otherwise, priority 5 and a
-4096-byte stack. It samples input directly each iteration: A/D move left/right,
-B/C rotate left/right. A changed button is accepted only after 140 ms since
-the previous accepted action. Holding a button does not repeat; an edge inside
-the cooldown is discarded. The shell legend remains blank.
+The shell supplies button events and elapsed time. Accepted actions start a
+140 ms cooldown. The falling piece advances every 450 ms; long display frames
+are capped before entering the accumulator. When a drop reports game over, the
+app preserves the final state and enters results.
 
-Every 450 ms it requests one downward step. Delays do not generate multiple
-catch-up drops. After input, falling and drawing, the worker waits 30 ms.
-These polling and timing rules preserve the original game.
+Results immediately displays the final score. Control icons disappear for two
+seconds, then a refresh icon appears in the D position. D initializes a new run
+and enters play directly.
 
-Drawing centres four-pixel cells below an eight-pixel top band. Settled and
-falling blocks use different fill sizes. A preview and scores occupy the top.
-Shape cells come from the service; screen placement and clipping stay here.
-The renderer uses panel coordinates and ignores the shell content rectangle.
+Drawing targets the shell framebuffer. The 10-by-12 board uses four-pixel cells
+below the score row. Settled blocks and the falling piece use distinct fill
+sizes. The next-piece preview begins at y=10 on the right, below the record.
 
-The shell copies the worker's framebuffer without synchronization, so a copy
-can catch a partial frame. Exit requests stop and waits up to 500 ms; the worker
-saves the best score before exiting. The app still clears its task handle after
-the timeout even if the worker remains busy. Task creation errors are not
-reported to the UI. These existing lifecycle limits need a focused follow-up.
-
-Lifecycle, polling and rendering are grouped in tetris.c, with no forwarding
-adapter or separate drawing task.
+Entering creates a preview run and loads the saved record. Leaving finishes the
+active service state so a new record is persisted. The shell callback path
+serializes controls, falling, rules state and presentation.

@@ -34,7 +34,6 @@ static void vTaskDelay(int ms) { now += ms * 1000; assert(now < 10000000); }
 static bool bt_audio_can_stream(void) { return true; }
 static bool bt_audio_media_cmd_pending(void) { return false; }
 static void bt_audio_log_stream_health(void) { ++diagnostics; }
-static void playback_diagnostics_sample(bool stalled) { (void)stalled; }
 static int bt_audio_stop_stream(void) { ++stops; drained = true; return 0; }
 static void bt_audio_get_status(bt_audio_status_t *st) {
     *st = (bt_audio_status_t){BT_AUDIO_STATE_STREAMING, true, 1000};
@@ -69,6 +68,38 @@ int main(void) {
             subprocess.run(["gcc", "-std=c11", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", str(path / "test.c"),
                             "-o", str(path / "test")], check=True)
+            subprocess.run([str(path / "test")], check=True)
+
+    def test_disconnect_notification_only_aborts_bt_session(self):
+        source = (Path(__file__).resolve().parents[1] / "audio_player.c").read_text()
+        start = source.index("void audio_player_notify_bt_disconnected(void)")
+        handler = source[start:]
+        harness = r'''
+#include <assert.h>
+#include <stdbool.h>
+typedef enum {
+    AUDIO_PLAYER_MODE_NONE = 0,
+    AUDIO_PLAYER_MODE_BT,
+    AUDIO_PLAYER_MODE_LOCAL,
+} audio_player_mode_t;
+static volatile bool s_abort;
+static volatile bool s_paused;
+static volatile audio_player_mode_t s_play_mode;
+HANDLER
+int main(void) {
+    s_play_mode = AUDIO_PLAYER_MODE_LOCAL; s_abort = false; s_paused = true;
+    audio_player_notify_bt_disconnected();
+    assert(!s_abort && s_paused);
+    s_play_mode = AUDIO_PLAYER_MODE_BT; s_abort = false; s_paused = true;
+    audio_player_notify_bt_disconnected();
+    assert(s_abort && !s_paused);
+}
+'''.replace("HANDLER", handler)
+        with tempfile.TemporaryDirectory(prefix="suit-bt-disconnect-") as tmp:
+            path = Path(tmp)
+            (path / "test.c").write_text(harness)
+            subprocess.run(["gcc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                            str(path / "test.c"), "-o", str(path / "test")], check=True)
             subprocess.run([str(path / "test")], check=True)
 
 

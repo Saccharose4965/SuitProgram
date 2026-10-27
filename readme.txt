@@ -5,14 +5,15 @@ Bluetooth, motion tools, messaging and games.
 
 Start here
 ----------
-docs/architecture-proposal.md — apps / services / drivers.
+docs/architecture.md — apps / services / drivers.
 services/paint/README.md — example design explanation.
 docs/README.md — feedback and design validation.
 TODO.md — work queue and preserved wishlist.
 PROGRESS.md — completed batches and remaining checks.
 
-The migration is in progress. Source still mostly lives in main/ and components/.
-Services include background work AND shared logic.
+Firmware source is grouped under apps/, services/ and drivers/. main/ contains
+only the ESP entry point and ESP-IDF project configuration. Services include
+background work and shared logic.
 
 Build and flash (from this folder)
 ---------------------------------
@@ -31,6 +32,5 @@ It is not compiled into firmware. Consult its instructions to export SD packages
 Documentation
 -------------
 One main design explanation per app, service and driver, reviewed with the user.
-Earlier technical notes: docs/reference/technical/
-Previous long README, preserved intact: docs/reference/previous-readme.txt
-That archive is historical reference, not verified current state.
+Project-wide design and the complete module index: docs/README.md
+Exact source-review coverage: docs/documentation/file-checklist.md

@@ -9,6 +9,9 @@
 #include <string.h>
 #include <inttypes.h>
 #include <stdint.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -33,6 +36,7 @@ static FILE  *s_wav = NULL;
 static volatile bool s_rec = false;
 static size_t s_bytes_data = 0;
 static char   s_last_path[128] = {0};
+static char   s_partial_path[136] = {0};
 static int    s_rate = MIC_REC_RATE_HZ;
 static TaskHandle_t s_rec_task = NULL;
 static portMUX_TYPE s_envelope_mux=portMUX_INITIALIZER_UNLOCKED;
@@ -53,7 +57,8 @@ static void publish_envelope(const recording_envelope_t *e)
 }
 
 /* WAV helpers */
-static void write_wav_header(FILE *f, int fs, int bits, int ch, uint32_t data_bytes){
+static esp_err_t write_wav_header(FILE *f, int fs, int bits, int ch, uint32_t data_bytes){
+    if (!f) return ESP_ERR_INVALID_ARG;
     uint8_t hdr[44] = {0};
     uint32_t byte_rate = fs * ch * (bits/8);
     uint16_t block_align = ch * (bits/8);
@@ -63,31 +68,74 @@ static void write_wav_header(FILE *f, int fs, int bits, int ch, uint32_t data_by
     memcpy(hdr+12,"fmt ", 4);
     uint32_t sc1sz = 16;   memcpy(hdr+16, &sc1sz, 4);
     uint16_t pcm=1;        memcpy(hdr+20, &pcm, 2);
-    uint16_t nch=1;        memcpy(hdr+22, &nch, 2);
+    uint16_t nch=(uint16_t)ch; memcpy(hdr+22, &nch, 2);
     memcpy(hdr+24, &fs, 4);
     memcpy(hdr+28, &byte_rate, 4);
     memcpy(hdr+32, &block_align, 2);
     uint16_t bps = bits;   memcpy(hdr+34, &bps, 2);
     memcpy(hdr+36,"data",4);
     memcpy(hdr+40,&data_bytes,4);
-    fseek(f, 0, SEEK_SET);
-    fwrite(hdr, 1, sizeof(hdr), f);
-    fflush(f);
+    if (fseek(f, 0, SEEK_SET) != 0) return ESP_FAIL;
+    if (fwrite(hdr, 1, sizeof(hdr), f) != sizeof(hdr)) return ESP_FAIL;
+    if (fflush(f) != 0) return ESP_FAIL;
+    int fd = fileno(f);
+    return fd >= 0 && fsync(fd) == 0 ? ESP_OK : ESP_FAIL;
 }
 
-static void finalize_wav(FILE *f, int fs, size_t data_bytes){
-    write_wav_header(f, fs, 16, 1, (uint32_t)data_bytes);
+static esp_err_t finalize_wav(FILE *f, int fs, size_t data_bytes){
+    if (data_bytes > UINT32_MAX) return ESP_ERR_INVALID_SIZE;
+    return write_wav_header(f, fs, 16, 1, (uint32_t)data_bytes);
 }
 
-/* Counter-based auto path */
-static esp_err_t make_autopath(char out[128]){
-    uint32_t n = 0;
-    esp_err_t se = recording_counter_next(&n);
-    if (se != ESP_OK) {
-        n = (uint32_t)(xTaskGetTickCount() & 0xFFFF);
+static void discard_partial(void)
+{
+    if (s_wav) {
+        (void)fclose(s_wav);
+        s_wav = NULL;
     }
-    snprintf(out, 128, HW_SD_MOUNT_POINT "/rec_%05" PRIu32 ".wav", n);
-    return ESP_OK;
+    if (s_partial_path[0]) (void)unlink(s_partial_path);
+    s_partial_path[0] = '\0';
+}
+
+static esp_err_t open_exclusive_recording(const char *requested_path)
+{
+    for (unsigned attempt = 0; attempt < 1024; ++attempt) {
+        char final_path[sizeof(s_last_path)];
+        if (requested_path) {
+            int n = snprintf(final_path, sizeof(final_path), "%s", requested_path);
+            if (n <= 0 || (size_t)n >= sizeof(final_path)) return ESP_ERR_INVALID_SIZE;
+        } else {
+            uint32_t number = 0;
+            ESP_RETURN_ON_ERROR(recording_counter_next(&number), TAG, "recording counter");
+            int n = snprintf(final_path, sizeof(final_path),
+                             HW_SD_MOUNT_POINT "/rec_%05" PRIu32 ".wav", number);
+            if (n <= 0 || (size_t)n >= sizeof(final_path)) return ESP_ERR_INVALID_SIZE;
+        }
+
+        char partial_path[sizeof(s_partial_path)];
+        int n = snprintf(partial_path, sizeof(partial_path), "%s.part", final_path);
+        if (n <= 0 || (size_t)n >= sizeof(partial_path)) return ESP_ERR_INVALID_SIZE;
+        if (access(final_path, F_OK) == 0) {
+            if (requested_path) return ESP_ERR_INVALID_STATE;
+            continue;
+        }
+
+        int fd = open(partial_path, O_CREAT | O_EXCL | O_RDWR, 0664);
+        if (fd < 0) {
+            if (errno == EEXIST && !requested_path) continue;
+            return errno == EEXIST ? ESP_ERR_INVALID_STATE : ESP_FAIL;
+        }
+        s_wav = fdopen(fd, "wb+");
+        if (s_wav) {
+            memcpy(s_last_path, final_path, sizeof(s_last_path));
+            memcpy(s_partial_path, partial_path, sizeof(s_partial_path));
+            return ESP_OK;
+        }
+        close(fd);
+        (void)unlink(partial_path);
+        return ESP_FAIL;
+    }
+    return ESP_ERR_NOT_FOUND;
 }
 
 /* Task: pull 32-bit samples from RX, scale to s16, write to SD */
@@ -106,17 +154,16 @@ static void recorder_task(void *arg){
         s_rec = false;
         free(rx32);
         free(pcm16);
-        if (s_wav) {
-            fclose(s_wav);
-            s_wav = NULL;
-        }
+        discard_partial();
         audio_i2s_disable_all();
         s_rec_task = NULL;
         vTaskDelete(NULL);
+        return;
     }
 
     const int slot_index = 0; // 0=LEFT
     bool warned_z = false; // printed “zeros” warning once
+    unsigned flush_ctr = 0;
 
     ESP_LOGI(TAG, "Mic slot fixed: LEFT");
 
@@ -158,17 +205,21 @@ static void recorder_task(void *arg){
             s_rec=false;
         }
 
-        static int flush_ctr = 0;
         if ((++flush_ctr & 0x1F) == 0) fflush(s_wav); // periodic flush
     }
 
     if(envelope.frames)recording_envelope_push(&envelope);
     publish_envelope(&envelope);
     if (s_wav) {
-        finalize_wav(s_wav, s_rate, s_bytes_data);
-        fclose(s_wav);
+        bool saved = finalize_wav(s_wav, s_rate, s_bytes_data) == ESP_OK;
+        if (fclose(s_wav) != 0) saved = false;
         s_wav = NULL;
-        ESP_LOGI(TAG, "Saved %s (%u bytes payload)", s_last_path, (unsigned)s_bytes_data);
+        if (saved && rename(s_partial_path, s_last_path) == 0) {
+            ESP_LOGI(TAG, "Saved %s (%u bytes payload)", s_last_path, (unsigned)s_bytes_data);
+            s_partial_path[0] = '\0';
+        } else {
+            ESP_LOGE(TAG, "Recording finalization failed; partial kept at %s", s_partial_path);
+        }
     }
 
     free(rx32);
@@ -183,6 +234,11 @@ esp_err_t mic_rec_init(const mic_rec_cfg_t *cfg){
     if (cfg && cfg->sample_rate_hz > 0) s_rate = cfg->sample_rate_hz;
 
     s_rx = audio_i2s_rx_handle();
+    if (!s_rx) {
+        discard_partial();
+        audio_i2s_disable_all();
+        return ESP_ERR_INVALID_STATE;
+    }
     // Idle Bluetooth may have released I2S; mic_rec_start restores it via
     // audio_i2s_set_rate and refreshes this handle before creating the worker.
 
@@ -194,29 +250,26 @@ esp_err_t mic_rec_start(const char *path){
     if (s_rec) return ESP_OK;
     if (s_rec_task) return ESP_ERR_INVALID_STATE; // previous WAV still finalizing
 
-    if (!path) {
-        make_autopath(s_last_path);
-        path = s_last_path;
-    } else {
-        strncpy(s_last_path, path, sizeof(s_last_path)-1);
-        s_last_path[sizeof(s_last_path)-1] = 0;
-    }
-
     ESP_RETURN_ON_ERROR(storage_mount_sd(), TAG, "sd mount");
-
-    s_wav = fopen(path, "wb+");
-    if (!s_wav) { ESP_LOGE(TAG, "open %s failed", path); return ESP_FAIL; }
-
-    write_wav_header(s_wav, s_rate, 16, 1, 0);
+    esp_err_t e = open_exclusive_recording(path);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "create recording failed: %s", esp_err_to_name(e));
+        return e;
+    }
+    e = write_wav_header(s_wav, s_rate, 16, 1, 0);
+    if (e != ESP_OK) {
+        discard_partial();
+        return e;
+    }
     s_bytes_data = 0;
 
     /* make sure I²S is at mic rate and RX is active (TX disabled) */
-    esp_err_t e = audio_i2s_set_rate(s_rate);
+    e = audio_i2s_set_rate(s_rate);
     if (e == ESP_OK) e = audio_i2s_enable_rx();
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "enable rx failed: %s", esp_err_to_name(e));
-        fclose(s_wav);
-        s_wav = NULL;
+        discard_partial();
+        audio_i2s_disable_all();
         return e;
     }
     // Bluetooth may have released/recreated the I2S bus since mic_rec_init.
@@ -228,12 +281,12 @@ esp_err_t mic_rec_start(const char *path){
     BaseType_t ok = xTaskCreatePinnedToCore(recorder_task, "mic_rec", 4096, NULL, 5, &s_rec_task, BG_TASK_CORE);
     if (ok != pdPASS) {
         s_rec = false;
-        fclose(s_wav);
-        s_wav = NULL;
+        discard_partial();
+        audio_i2s_disable_all();
         s_rec_task = NULL;
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "Recording -> %s", path);
+    ESP_LOGI(TAG, "Recording -> %s", s_last_path);
     return ESP_OK;
 }
 

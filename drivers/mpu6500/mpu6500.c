@@ -188,17 +188,20 @@ static void sampler_task(void *arg){
     }
 }
 
-esp_err_t mpu6500_start_sampler(mpu6500_t *imu, int hz, UBaseType_t prio, int core_id, uint32_t stack_words){
+esp_err_t mpu6500_start_sampler(mpu6500_t *imu, int hz, UBaseType_t prio,
+                                int core_id, uint32_t stack_size_bytes){
     if (!imu || !imu->dev) return ESP_ERR_INVALID_STATE;
     if (imu->task) return ESP_OK; // already running
     if (hz <= 0) hz = 100;
     imu->hz = hz;
     if (prio == 0) prio = 2;
-    if (stack_words == 0) stack_words = 4096 / sizeof(StackType_t);
+    if (stack_size_bytes == 0) {
+        stack_size_bytes = MPU6500_DEFAULT_SAMPLER_STACK_BYTES;
+    }
     if (core_id < 0) core_id = 1;
 
     BaseType_t ok = xTaskCreatePinnedToCore(
-        sampler_task, imu->tag, stack_words,
+        sampler_task, imu->tag, stack_size_bytes,
         imu, prio, &imu->task, core_id
     );
     return ok == pdPASS ? ESP_OK : ESP_FAIL;

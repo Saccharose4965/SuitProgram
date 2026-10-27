@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "esp_err.h"
@@ -14,8 +15,6 @@
 #include "esp_random.h"
 #include "esp_attr.h"
 
-#include "hw.h"
-#include "mpu6500.h"
 #include "orientation_service.h"
 
 #define SIM_W FLUID_SIM_WIDTH
@@ -78,13 +77,10 @@ static uint8_t *s_mask_tmp = s_mask_b;
 static EXT_RAM_BSS_ATTR uint8_t s_mask_render[SIM_PIXELS];
 static portMUX_TYPE s_mask_mux = portMUX_INITIALIZER_UNLOCKED;
 
-// IMU
-static bool s_mpu_ready = false;
-static bool s_mpu_shared = false;
-static bool s_use_orientation_service = false;
-static mpu6500_t s_mpu = { .mux = portMUX_INITIALIZER_UNLOCKED };
 static TaskHandle_t s_fluid_task = NULL;
 static volatile bool s_fluid_task_stop = false;
+static StaticSemaphore_t s_fluid_stopped_buffer;
+static SemaphoreHandle_t s_fluid_stopped = NULL;
 
 // ------------------------------------------------------------------------
 // Utilities
@@ -346,69 +342,27 @@ void fluid_service_copy_mask(uint8_t out[FLUID_SIM_PIXELS])
 }
 
 // ------------------------------------------------------------------------
-// IMU / gravity
+// Orientation / gravity
 // ------------------------------------------------------------------------
-static void ensure_mpu(void)
+static void ensure_orientation(void)
 {
-    if (s_mpu_ready) return;
-
-    if (orientation_service_start() == ESP_OK) {
-        s_use_orientation_service = true;
-        s_mpu_ready = true;
-        ESP_LOGI(TAG, "Using orientation service MPU stream");
-        return;
+    esp_err_t err = orientation_service_start();
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Using shared orientation stream");
+    } else {
+        ESP_LOGW(TAG, "orientation unavailable; using neutral gravity: %s",
+                 esp_err_to_name(err));
     }
-
-    if (hw_spi2_init_once() != ESP_OK) {
-        ESP_LOGW(TAG, "spi2 init failed");
-        return;
-    }
-    hw_spi2_idle_all_cs_high();
-
-    spi_device_handle_t shared_dev = NULL;
-    if (hw_spi2_find_device((gpio_num_t)PIN_CS_IMU1, &shared_dev) == ESP_OK && shared_dev) {
-        s_mpu.dev = shared_dev;
-        s_mpu.tag = "mpu_fluid_shared";
-        s_mpu_ready = true;
-        s_mpu_shared = true;
-        ESP_LOGI(TAG, "Reusing shared MPU on CS%d", (int)PIN_CS_IMU1);
-        return;
-    }
-
-    const uint32_t freqs[] = { 8000000, 1000000 };
-    for (size_t i = 0; i < sizeof(freqs) / sizeof(freqs[0]); ++i) {
-        spi_device_handle_t dev = NULL;
-        esp_err_t add = hw_spi2_add_device((gpio_num_t)PIN_CS_IMU1, freqs[i], 0, 4, &dev);
-        if (add != ESP_OK || !dev) continue;
-        mpu6500_config_t cfg = { .spi = dev, .tag = "mpu_fluid" };
-        if (mpu6500_init(&s_mpu, &cfg) == ESP_OK) {
-            s_mpu_ready = true;
-            break;
-        }
-    }
-    if (!s_mpu_ready) {
-        ESP_LOGW(TAG, "MPU init failed");
-        return;
-    }
-    s_mpu_shared = false;
-    (void)mpu6500_start_sampler(&s_mpu, 160, 2, 1, 0);
-    ESP_LOGI(TAG, "MPU online for fluid sim");
 }
 
 static void sample_gravity_xy(float *out_gx, float *out_gy)
 {
     if (out_gx) *out_gx = 0.0f;
     if (out_gy) *out_gy = 0.0f;
-    if (!out_gx || !out_gy || !s_mpu_ready) return;
+    if (!out_gx || !out_gy) return;
 
     mpu6500_sample_t s = {0};
-    if (s_use_orientation_service) {
-        if (!orientation_service_read_sample(&s)) return;
-    } else if (s_mpu_shared) {
-        if (mpu6500_read_once(&s_mpu, &s) != ESP_OK) return;
-    } else {
-        s = mpu6500_latest(&s_mpu);
-    }
+    if (!orientation_service_read_sample(&s)) return;
     // Map board axes (x=down, y=right) to screen axes (x=right, y=down).
     float gx = s.ay_g * GRAVITY_SIGN_Y; // screen-right acceleration
     float gy = s.ax_g * GRAVITY_SIGN_X; // screen-down acceleration
@@ -473,12 +427,22 @@ static void fluid_task_fn(void *arg)
     }
 
     s_fluid_task = NULL;
+    xSemaphoreGive(s_fluid_stopped);
     vTaskDelete(NULL);
 }
 
 static void fluid_start_task(void)
 {
     if (s_fluid_task) return;
+
+    if (!s_fluid_stopped) {
+        s_fluid_stopped = xSemaphoreCreateBinaryStatic(&s_fluid_stopped_buffer);
+        if (!s_fluid_stopped) {
+            ESP_LOGW(TAG, "fluid stop signal creation failed");
+            return;
+        }
+    }
+    (void)xSemaphoreTake(s_fluid_stopped, 0);
 
     s_fluid_task_stop = false;
     BaseType_t ok = xTaskCreatePinnedToCore(
@@ -500,20 +464,10 @@ static void fluid_start_task(void)
 
 static void fluid_stop_task(void)
 {
-    TaskHandle_t task = s_fluid_task;
-    if (!task) return;
+    if (!s_fluid_task) return;
 
     s_fluid_task_stop = true;
-    TickType_t start = xTaskGetTickCount();
-    while (s_fluid_task) {
-        if ((xTaskGetTickCount() - start) > pdMS_TO_TICKS(300)) {
-            ESP_LOGW(TAG, "fluid task stop timeout; force delete");
-            vTaskDelete(task);
-            s_fluid_task = NULL;
-            break;
-        }
-        vTaskDelay(pdMS_TO_TICKS(2));
-    }
+    xSemaphoreTake(s_fluid_stopped, portMAX_DELAY);
     s_fluid_task_stop = false;
 }
 
@@ -523,7 +477,7 @@ static void fluid_stop_task(void)
 void fluid_service_start(void)
 {
     reset_sim();
-    ensure_mpu();
+    ensure_orientation();
     fluid_step_once();
     fluid_start_task();
 }

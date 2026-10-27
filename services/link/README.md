@@ -25,8 +25,9 @@ when ESP-NOW fails.
 A link frame begins with four bytes: one message type, one flag byte and a
 native-endian 16-bit sequence. The remaining payload is at most 200 bytes.
 Message types separate information, Messages, games, master/show control and
-Call audio. A single callback registered by the shell dispatches these domains
-to their services.
+Call audio. Remote Control has its own type so its lease and semantic-view
+protocol cannot be confused with LED/show control. A single callback registered
+by the shell dispatches these domains to their services.
 
 ESP-NOW receive metadata supplies the six-byte sender MAC. UDP constructs a
 six-byte source identity from the IPv4 address and port. That UDP identity is a

@@ -37,6 +37,24 @@ Serving pauses for 400 ms. The heartbeat runs every 100 ms and a peer timeout
 returns the remaining suit to waiting after three seconds. Shell stalls advance
 at most 100 ms per tick, with at most four crossings per tick.
 
+## AI opponent
+
+The AI controls the right paddle. When the ball begins travelling towards it,
+the AI chooses one aim error and keeps that target for the incoming leg. Its
+error drifts towards the new target at 12 pixels per second, it waits 180 ms
+before reacting and its paddle is limited to 26 pixels per second. The target
+may miss the ball by up to 10 pixels. This produces smooth, fallible movement
+without changing aim every frame.
+
+## Player paddle
+
+The app supplies a held direction each shell frame. The service approaches a
+38-pixel-per-second target velocity at 160 pixels per second squared and eases
+back to rest when released. Given the 31-pixel paddle travel, a sustained press
+crosses the court in approximately one second. Boundary contact clears outward
+velocity. Human matches distribute the resulting paddle position through their
+existing state heartbeat.
+
 ## App boundary
 
 The service exposes initialization, reset, mode start, paddle, pause, tick and
@@ -49,4 +67,4 @@ tick mutates match state. The app owns selection, buttons, navigation and OLED.
 with sanitizers. It runs two independent clocks through matchmaking, packet
 loss, authoritative hits and misses, scoring, smoothing, malformed traffic,
 disconnect recovery and AI pause. Hardware review still needs two suits with
-real ESP-NOW latency and button input.
+real ESP-NOW latency and button input, plus an AI difficulty check.

@@ -11,4 +11,5 @@ void t48_game_init(void);
 void t48_game_deinit(void);
 bool t48_game_move(int direction);
 void t48_game_commit(void);
+bool t48_game_is_over(void);
 const t48_state_t *t48_game_state(void);

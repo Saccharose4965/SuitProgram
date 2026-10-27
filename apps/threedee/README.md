@@ -6,10 +6,10 @@ This app draws a small animated wireframe scene. Sensor movement rotates the
 camera; each object also has its own visual spin. The inverse camera rotation
 makes the scene move as the viewer turns.
 
-Opening resets scene time and the local heading reference. The first suitable
+Opening resets scene time and its caller-owned heading reference. The first suitable
 fresh sample establishes that reference; D requests another. Calibration uses
 the shared [orientation policy](../../services/orientation/README.md).
-Each sample must be at most 250 ms old. Stale input keeps the previous camera
+Orientation applies a 250 ms freshness limit. Stale input keeps the previous camera
 orientation while scene animation continues.
 
 The mounting correction aligns the sensor with the screen. The renderer combines

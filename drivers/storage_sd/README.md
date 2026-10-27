@@ -9,11 +9,10 @@ after sustained reads produced CRC errors at 20 MHz.
 
 Before mounting, board setup deselects the peripherals and sets SD-related
 pull-ups and drive strength. FAT allows eight open files. A successful mount is
-cached; unmount releases it. Callers must finish file activity before unmounting.
-
-The mounting flag lets another caller wait up to about one second, then retry.
-It is a volatile flag rather than a mutex, so simultaneous mounting is not
-fully serialized. That limitation needs a focused lifecycle fix.
+cached; unmount releases it. A statically allocated lifecycle mutex serializes
+the complete mount retry sequence and unmount, so a second caller waits for the
+active lifecycle operation and then observes the resulting mounted state.
+Callers must still finish file activity before requesting unmount.
 
 Path construction joins the mount point and caller-provided relative path,
 reporting insufficient buffer space. It does not mount the card or sanitize

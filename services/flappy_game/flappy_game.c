@@ -106,6 +106,7 @@ void flappy_game_step(bool flap) {
                 }
                 s.pipe_x[i]     = furthest + PIPE_SPACING;
                 s.pipe_gap_y[i] = rand_range(18, FLAPPY_HEIGHT - 18);
+                s.pipe_scored[i] = false;
             }
         }
 
@@ -114,9 +115,11 @@ void flappy_game_step(bool flap) {
             if (s.bird_vy > MAX_VY) s.bird_vy = MAX_VY;
             s.bird_y += s.bird_vy * DT;
 
-            // scoring edge (bird passes trailing edge)
+            // Each physical pipe scores once when its trailing edge reaches the bird.
             for (int i = 0; i < 3; i++) {
-                if (s.pipe_x[i] + PIPE_W == BIRD_START_X - BIRD_W/2) {
+                if (!s.pipe_scored[i] &&
+                    s.pipe_x[i] + PIPE_W <= BIRD_START_X - BIRD_W/2) {
+                    s.pipe_scored[i] = true;
                     s.score++;
                     if (s.score > s.best) {
                         s.best = s.score;
@@ -188,6 +191,7 @@ void flappy_game_finish(void) {
         uint32_t best_out = 0;
         if (scores_update_high(kScoreKey, (uint32_t)s.best, &best_out) == ESP_OK) {
             s.best = (int)best_out;
+            s.best_dirty = false;
         } else {
             ESP_LOGW(TAG, "Failed to save high s.score");
         }

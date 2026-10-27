@@ -66,19 +66,16 @@ static bool s_sync_enabled = true;
 static bool s_sync_clock_active = false;
 static float s_sync_time_sec = 0.0f;
 static portMUX_TYPE s_sync_clock_mux = portMUX_INITIALIZER_UNLOCKED;
-static uint8_t s_brightness = 96;
-static volatile uint8_t s_speed_percent = 100;
-static uint8_t s_primary_r = 0;
-static uint8_t s_primary_g = 180;
-static uint8_t s_primary_b = 255;
-static uint8_t s_secondary_r = 255;
-static uint8_t s_secondary_g = 64;
-static uint8_t s_secondary_b = 0;
-static volatile bool s_plane_background_enabled = false;
-static volatile bool s_ring_background_enabled = false;
-static volatile led_color_cycle_t s_color_cycle = LED_COLOR_CYCLE_STATIC;
-static volatile led_color_style_t s_color_style = LED_COLOR_STYLE_MONO;
-static volatile led_highlight_mode_t s_highlight_mode = LED_HIGHLIGHT_OFF;
+static portMUX_TYPE s_settings_mux = portMUX_INITIALIZER_UNLOCKED;
+static led_modes_settings_t s_settings = {
+    .brightness = 96, .speed_percent = 100,
+    .primary_r = 0, .primary_g = 180, .primary_b = 255,
+    .secondary_r = 255, .secondary_g = 64, .secondary_b = 0,
+    .color_cycle = LED_COLOR_CYCLE_STATIC,
+    .color_style = LED_COLOR_STYLE_MONO,
+    .highlight_mode = LED_HIGHLIGHT_OFF,
+};
+static led_modes_settings_t s_frame_settings;
 static EXT_RAM_BSS_ATTR led_layout_config_t s_render_layout = {0};
 
 #if configNUMBER_OF_CORES > 1
@@ -190,59 +187,96 @@ bool led_modes_get_sync_clock(float *time_sec)
     if (time_sec) *time_sec = value;
     return active;
 }
-void led_modes_set_brightness(uint8_t level) { s_brightness = level; }
-uint8_t led_modes_get_brightness(void) { return s_brightness; }
+static led_modes_settings_t settings_snapshot(void) {
+    led_modes_settings_t value;
+    portENTER_CRITICAL(&s_settings_mux);
+    value = s_settings;
+    portEXIT_CRITICAL(&s_settings_mux);
+    return value;
+}
+static led_modes_settings_t settings_sanitize(led_modes_settings_t value) {
+    if (value.speed_percent < 10u) value.speed_percent = 10u;
+    if (value.speed_percent > 250u) value.speed_percent = 250u;
+    if (value.color_cycle < LED_COLOR_CYCLE_STATIC || value.color_cycle > LED_COLOR_CYCLE_BIOHAZARD) {
+        value.color_cycle = LED_COLOR_CYCLE_STATIC;
+    }
+    if (value.color_style < LED_COLOR_STYLE_MONO || value.color_style > LED_COLOR_STYLE_PALETTE) {
+        value.color_style = LED_COLOR_STYLE_MONO;
+    }
+    if (value.highlight_mode < LED_HIGHLIGHT_OFF || value.highlight_mode > LED_HIGHLIGHT_PEAKS) {
+        value.highlight_mode = LED_HIGHLIGHT_OFF;
+    }
+    return value;
+}
+void led_modes_settings_get(led_modes_settings_t *settings) {
+    if (settings) *settings = settings_snapshot();
+}
+void led_modes_settings_apply(const led_modes_settings_t *settings) {
+    if (!settings) return;
+    led_modes_settings_t value = settings_sanitize(*settings);
+    portENTER_CRITICAL(&s_settings_mux); s_settings = value; portEXIT_CRITICAL(&s_settings_mux);
+}
+void led_modes_set_brightness(uint8_t level) {
+    portENTER_CRITICAL(&s_settings_mux); s_settings.brightness = level; portEXIT_CRITICAL(&s_settings_mux);
+}
+uint8_t led_modes_get_brightness(void) { return settings_snapshot().brightness; }
 void led_modes_set_speed_percent(uint8_t percent) {
     if (percent < 10u) percent = 10u;
     if (percent > 250u) percent = 250u;
-    s_speed_percent = percent;
+    portENTER_CRITICAL(&s_settings_mux); s_settings.speed_percent = percent; portEXIT_CRITICAL(&s_settings_mux);
 }
-uint8_t led_modes_get_speed_percent(void) { return s_speed_percent; }
+uint8_t led_modes_get_speed_percent(void) { return settings_snapshot().speed_percent; }
 void led_modes_set_primary_color(uint8_t r, uint8_t g, uint8_t b) {
-    s_primary_r = r;
-    s_primary_g = g;
-    s_primary_b = b;
+    portENTER_CRITICAL(&s_settings_mux);
+    s_settings.primary_r = r; s_settings.primary_g = g; s_settings.primary_b = b;
+    portEXIT_CRITICAL(&s_settings_mux);
 }
 void led_modes_get_primary_color(uint8_t *r, uint8_t *g, uint8_t *b) {
-    if (r) *r = s_primary_r;
-    if (g) *g = s_primary_g;
-    if (b) *b = s_primary_b;
+    led_modes_settings_t value = settings_snapshot();
+    if (r) *r = value.primary_r;
+    if (g) *g = value.primary_g;
+    if (b) *b = value.primary_b;
 }
 void led_modes_set_secondary_color(uint8_t r, uint8_t g, uint8_t b) {
-    s_secondary_r = r;
-    s_secondary_g = g;
-    s_secondary_b = b;
+    portENTER_CRITICAL(&s_settings_mux);
+    s_settings.secondary_r = r; s_settings.secondary_g = g; s_settings.secondary_b = b;
+    portEXIT_CRITICAL(&s_settings_mux);
 }
 void led_modes_get_secondary_color(uint8_t *r, uint8_t *g, uint8_t *b) {
-    if (r) *r = s_secondary_r;
-    if (g) *g = s_secondary_g;
-    if (b) *b = s_secondary_b;
+    led_modes_settings_t value = settings_snapshot();
+    if (r) *r = value.secondary_r;
+    if (g) *g = value.secondary_g;
+    if (b) *b = value.secondary_b;
 }
-void led_modes_plane_background_enable(bool enabled) { s_plane_background_enabled = enabled; }
-bool led_modes_plane_background_enabled(void) { return s_plane_background_enabled; }
-void led_modes_ring_background_enable(bool enabled) { s_ring_background_enabled = enabled; }
-bool led_modes_ring_background_enabled(void) { return s_ring_background_enabled; }
+void led_modes_plane_background_enable(bool enabled) {
+    portENTER_CRITICAL(&s_settings_mux); s_settings.plane_background_enabled = enabled; portEXIT_CRITICAL(&s_settings_mux);
+}
+bool led_modes_plane_background_enabled(void) { return settings_snapshot().plane_background_enabled; }
+void led_modes_ring_background_enable(bool enabled) {
+    portENTER_CRITICAL(&s_settings_mux); s_settings.ring_background_enabled = enabled; portEXIT_CRITICAL(&s_settings_mux);
+}
+bool led_modes_ring_background_enabled(void) { return settings_snapshot().ring_background_enabled; }
 void led_modes_color_cycle_set(led_color_cycle_t mode) {
     if (mode < LED_COLOR_CYCLE_STATIC || mode > LED_COLOR_CYCLE_BIOHAZARD) {
         mode = LED_COLOR_CYCLE_STATIC;
     }
-    s_color_cycle = mode;
+    portENTER_CRITICAL(&s_settings_mux); s_settings.color_cycle = mode; portEXIT_CRITICAL(&s_settings_mux);
 }
-led_color_cycle_t led_modes_color_cycle_get(void) { return s_color_cycle; }
+led_color_cycle_t led_modes_color_cycle_get(void) { return settings_snapshot().color_cycle; }
 void led_modes_color_style_set(led_color_style_t style) {
     if (style < LED_COLOR_STYLE_MONO || style > LED_COLOR_STYLE_PALETTE) {
         style = LED_COLOR_STYLE_MONO;
     }
-    s_color_style = style;
+    portENTER_CRITICAL(&s_settings_mux); s_settings.color_style = style; portEXIT_CRITICAL(&s_settings_mux);
 }
-led_color_style_t led_modes_color_style_get(void) { return s_color_style; }
+led_color_style_t led_modes_color_style_get(void) { return settings_snapshot().color_style; }
 void led_modes_highlight_mode_set(led_highlight_mode_t mode) {
     if (mode < LED_HIGHLIGHT_OFF || mode > LED_HIGHLIGHT_PEAKS) {
         mode = LED_HIGHLIGHT_OFF;
     }
-    s_highlight_mode = mode;
+    portENTER_CRITICAL(&s_settings_mux); s_settings.highlight_mode = mode; portEXIT_CRITICAL(&s_settings_mux);
 }
-led_highlight_mode_t led_modes_highlight_mode_get(void) { return s_highlight_mode; }
+led_highlight_mode_t led_modes_highlight_mode_get(void) { return settings_snapshot().highlight_mode; }
 
 static size_t custom_render_pixels(void)
 {
@@ -357,7 +391,7 @@ static void add_mixed_color(uint8_t *buf, size_t idx,
                             uint8_t sr, uint8_t sg, uint8_t sb,
                             float primary_w, float secondary_w, float white_w)
 {
-    float white_scale = (s_highlight_mode == LED_HIGHLIGHT_PEAKS) ? 0.55f : 0.0f;
+    float white_scale = (s_frame_settings.highlight_mode == LED_HIGHLIGHT_PEAKS) ? 0.55f : 0.0f;
     add_rgb(buf, idx,
             primary_w * (float)pr + secondary_w * (float)sr + white_scale * white_w * 255.0f,
             primary_w * (float)pg + secondary_w * (float)sg + white_scale * white_w * 255.0f,
@@ -464,7 +498,7 @@ static void sample_siren_phase(float phase, uint8_t *r, uint8_t *g, uint8_t *b)
 static void led_modes_sample_palette_color(float t_sec, float phase_offset,
                                            uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    switch (s_color_cycle) {
+    switch (s_frame_settings.color_cycle) {
         case LED_COLOR_CYCLE_RAINBOW:
             sample_rainbow_phase(0.10f * t_sec + phase_offset, r, g, b);
             break;
@@ -491,41 +525,41 @@ static void led_modes_sample_palette_color(float t_sec, float phase_offset,
             break;
         case LED_COLOR_CYCLE_STATIC:
         default:
-            if (r) *r = s_primary_r;
-            if (g) *g = s_primary_g;
-            if (b) *b = s_primary_b;
+            if (r) *r = s_frame_settings.primary_r;
+            if (g) *g = s_frame_settings.primary_g;
+            if (b) *b = s_frame_settings.primary_b;
             break;
     }
 }
 
 static void led_modes_sample_color(float t_sec, uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    if (s_color_style == LED_COLOR_STYLE_PALETTE &&
-        s_color_cycle != LED_COLOR_CYCLE_STATIC) {
+    if (s_frame_settings.color_style == LED_COLOR_STYLE_PALETTE &&
+        s_frame_settings.color_cycle != LED_COLOR_CYCLE_STATIC) {
         led_modes_sample_palette_color(t_sec, 0.0f, r, g, b);
         return;
     }
-    if (r) *r = s_primary_r;
-    if (g) *g = s_primary_g;
-    if (b) *b = s_primary_b;
+    if (r) *r = s_frame_settings.primary_r;
+    if (g) *g = s_frame_settings.primary_g;
+    if (b) *b = s_frame_settings.primary_b;
 }
 
 static void led_modes_sample_secondary_color(float t_sec, uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    if (s_color_style == LED_COLOR_STYLE_PALETTE &&
-        s_color_cycle != LED_COLOR_CYCLE_STATIC) {
+    if (s_frame_settings.color_style == LED_COLOR_STYLE_PALETTE &&
+        s_frame_settings.color_cycle != LED_COLOR_CYCLE_STATIC) {
         led_modes_sample_palette_color(t_sec, 0.33f, r, g, b);
         return;
     }
-    if (s_color_style == LED_COLOR_STYLE_DUO) {
-        if (r) *r = s_secondary_r;
-        if (g) *g = s_secondary_g;
-        if (b) *b = s_secondary_b;
+    if (s_frame_settings.color_style == LED_COLOR_STYLE_DUO) {
+        if (r) *r = s_frame_settings.secondary_r;
+        if (g) *g = s_frame_settings.secondary_g;
+        if (b) *b = s_frame_settings.secondary_b;
         return;
     }
-    if (r) *r = s_primary_r;
-    if (g) *g = s_primary_g;
-    if (b) *b = s_primary_b;
+    if (r) *r = s_frame_settings.primary_r;
+    if (g) *g = s_frame_settings.primary_g;
+    if (b) *b = s_frame_settings.primary_b;
 }
 
 static void layout_stats_collect(const led_layout_config_t *cfg, size_t count, layout_stats_t *stats)
@@ -658,7 +692,7 @@ static void render_plane(uint8_t *buf, size_t count,
     (void)cfg;
     uint8_t sr = 0, sg = 0, sb = 0;
     led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
-    bool background_enabled = s_plane_background_enabled;
+    bool background_enabled = s_frame_settings.plane_background_enabled;
     if (background_enabled) {
         uint8_t bg_r = (uint8_t)(r * 0.18f);
         uint8_t bg_g = (uint8_t)(g * 0.18f);
@@ -720,7 +754,7 @@ static void render_sweep(uint8_t *buf, size_t count,
     (void)cfg;
     uint8_t sr = 0, sg = 0, sb = 0;
     led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
-    bool background_enabled = s_plane_background_enabled;
+    bool background_enabled = s_frame_settings.plane_background_enabled;
     if (background_enabled) {
         uint8_t bg_r = (uint8_t)(r * 0.18f);
         uint8_t bg_g = (uint8_t)(g * 0.18f);
@@ -806,7 +840,7 @@ static void render_ring(uint8_t *buf, size_t count,
     (void)cfg;
     uint8_t sr = 0, sg = 0, sb = 0;
     led_modes_sample_secondary_color(t_sec, &sr, &sg, &sb);
-    bool background_enabled = s_ring_background_enabled;
+    bool background_enabled = s_frame_settings.ring_background_enabled;
     if (background_enabled) {
         uint8_t bg_r = (uint8_t)(r * 0.18f);
         uint8_t bg_g = (uint8_t)(g * 0.18f);
@@ -847,7 +881,7 @@ static void render_contour(uint8_t *buf, size_t count,
                            float t_sec, uint8_t r, uint8_t g, uint8_t b)
 {
     (void)cfg;
-    bool background_enabled = s_ring_background_enabled;
+    bool background_enabled = s_frame_settings.ring_background_enabled;
     if (background_enabled) {
         uint8_t bg_r = (uint8_t)(r * 0.16f);
         uint8_t bg_g = (uint8_t)(g * 0.16f);
@@ -1297,7 +1331,7 @@ static void render_chase_config(uint8_t *buf, size_t count, float t_sec,
             float level = pulse * (0.82f * trail_soft + head_core * head_glow);
             if (level < 0.01f) continue;
 
-            float white = (s_highlight_mode == LED_HIGHLIGHT_PEAKS) ? (0.08f * head_glow) : 0.0f;
+            float white = (s_frame_settings.highlight_mode == LED_HIGHLIGHT_PEAKS) ? (0.08f * head_glow) : 0.0f;
             add_rgb(buf, i,
                     level * (float)r + white * 255.0f,
                     level * (float)g + white * 255.0f,
@@ -1347,7 +1381,7 @@ static void render_glitch(uint8_t *buf, size_t count, float t_sec,
         }
 
         if (w < 0.01f) continue;
-        float white = (s_highlight_mode == LED_HIGHLIGHT_PEAKS &&
+        float white = (s_frame_settings.highlight_mode == LED_HIGHLIGHT_PEAKS &&
                        (n0 > 0.985f || n1 > 0.992f)) ? 1.0f : 0.0f;
         float rr = (float)r * w + 160.0f * white;
         float gg = (float)g * w + 160.0f * white;
@@ -1412,7 +1446,8 @@ static void led_modes_task(void *arg)
             shuffle_t_sec = 0.0f;
             last_wake = xTaskGetTickCount();
         }
-        float speed_scale = (float)s_speed_percent / 100.0f;
+        s_frame_settings = settings_snapshot();
+        float speed_scale = (float)s_frame_settings.speed_percent / 100.0f;
         if (speed_scale < 0.10f) speed_scale = 0.10f;
         if (speed_scale > 2.50f) speed_scale = 2.50f;
         t_sec += dt_sec * speed_scale;
@@ -1504,7 +1539,7 @@ static void led_modes_task(void *arg)
             default: render_fill(frame, count, 0, 0, 0); break;
         }
 
-        float output_scale = (float)s_brightness / 255.0f;
+        float output_scale = (float)s_frame_settings.brightness / 255.0f;
         if (output_scale < 0.0f) output_scale = 0.0f;
         if (output_scale > 1.0f) output_scale = 1.0f;
         if (output_scale < 0.999f) {
@@ -1534,6 +1569,7 @@ esp_err_t led_modes_start(void)
     if (ok != pdPASS) return ESP_ERR_NO_MEM;
 
     ESP_LOGI(TAG, "custom renderer ready: pixels=%u period=%ums default_brightness=%u",
-             (unsigned)custom_render_pixels(), (unsigned)period_ms, (unsigned)s_brightness);
+             (unsigned)custom_render_pixels(), (unsigned)period_ms,
+             (unsigned)led_modes_get_brightness());
     return ESP_OK;
 }

@@ -22,9 +22,8 @@ top/bottom boundaries.
 ## Score and death
 
 Passing a pipe's trailing edge increments score and updates the best. The
-existing equality-based check runs each step; if a pipe stays at the scoring
-coordinate for multiple steps, it can count more than once. This rule remains
-unchanged pending a gameplay fix.
+pipe carries a scored flag, so reaching or crossing the bird's scoring line can
+increment only once. Recycling that pipe clears its flag for the next pass.
 
 After collision the bird flips, falls to the ground, then slides right until
 clear of the pipes with an extra collision margin. It settles for roughly half
@@ -33,5 +32,6 @@ phases. The app uses the death-frame counter for blinking.
 
 Initialization loads the saved best through the
 [scores service](../scores/README.md). Finish saves only a new record and logs
-failure. The service starts no tasks and accepts no button/display types.
-The app reads a const state view on the same game worker.
+failure. The service is a synchronous rules module; the app supplies steps and
+reads a const state view from the shell thread. A successful record save clears
+the dirty flag, preventing a second write when the app later closes.

@@ -1,5 +1,4 @@
 #include "audio_player.h"
-#include "playback_diagnostics.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -129,7 +128,6 @@ static void audio_play_task(void *arg)
             ESP_LOGW(TAG, "bt_audio_play_wav skipped (media ctrl pending)");
             skip_local = !s_allow_speaker_fallback;
         } else {
-            playback_diagnostics_begin();
             err = bt_audio_play_wav(f,
                                     info.data_offset,
                                     info.data_size,
@@ -150,7 +148,6 @@ static void audio_play_task(void *arg)
                     bt_audio_status_t st = {0};
                     bt_audio_get_status(&st);
                     int64_t now_us = esp_timer_get_time();
-                    playback_diagnostics_sample(false);
                     if (st.state != BT_AUDIO_STATE_CONNECTED && st.state != BT_AUDIO_STATE_STREAMING) {
                         ESP_LOGW(TAG, "BT disconnected; ending playback");
                         disconnected = true;
@@ -187,7 +184,6 @@ static void audio_play_task(void *arg)
                         ESP_LOGW(TAG, "BT audio stalled (queued=%u, streaming=%d); no automatic restart",
                                  (unsigned)st.queued_frames, st.streaming);
                         bt_audio_log_stream_health();
-                        playback_diagnostics_sample(true);
                         stalled_reported = true;
                     }
                     if (!st.streaming && st.queued_frames == 0) {
@@ -230,7 +226,6 @@ static void audio_play_task(void *arg)
     }
 
 finished:
-    playback_diagnostics_end();
     // Worker stack is still allocated here; compare like-for-like across runs.
     log_internal_heap("after playback cleanup (worker still alive)");
     s_player_task = NULL;
@@ -423,4 +418,12 @@ bool audio_player_is_active(void)
 bool audio_player_is_paused(void)
 {
     return s_paused;
+}
+
+void audio_player_notify_bt_disconnected(void)
+{
+    if (s_play_mode == AUDIO_PLAYER_MODE_BT) {
+        s_abort = true;
+        s_paused = false;
+    }
 }

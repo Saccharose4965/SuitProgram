@@ -1,10 +1,10 @@
 #include "bt_audio.h"
 #include "bt_audio_internal.h"
-#include "audio_player.h"
 
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/timers.h"
 
 #include "esp_log.h"
@@ -44,13 +44,8 @@ static const char *TAG = "bt_audio";
 #define BT_CONNECT_MIN_INTERNAL_FREE    (12U * 1024U)
 #define BT_CONNECT_MIN_INTERNAL_LARGEST (4U * 1024U)
 
-// ===== AVRCP hooks (weak, overridden by higher-level code like audio_player) =====
-void __attribute__((weak)) bt_audio_on_play(void)   {}
-void __attribute__((weak)) bt_audio_on_pause(void)  {}
-void __attribute__((weak)) bt_audio_on_next(void)   {}
-void __attribute__((weak)) bt_audio_on_prev(void)   {}
-
 // ============================ State ============================
+#define BT_AUDIO_EVENT_QUEUE_DEPTH 8
 static bt_audio_state_t s_state         = BT_AUDIO_STATE_IDLE;
 static bool             s_stack_ready   = false;
 static bool             s_streaming     = false;
@@ -65,7 +60,9 @@ static int               s_device_count = 0;
 static bool              s_name_req_active = false;
 static esp_bd_addr_t     s_name_req_bda = {0};
 static bool              s_scanning = false;
-static bt_audio_disconnect_cb_t s_disconnect_cb = NULL;
+static StaticQueue_t     s_event_queue_storage;
+static uint8_t           s_event_queue_bytes[BT_AUDIO_EVENT_QUEUE_DEPTH * sizeof(bt_audio_event_t)];
+static QueueHandle_t     s_event_queue = NULL;
 static bool              s_pending_connect = false;
 static esp_bd_addr_t     s_pending_bda = {0};
 static int               s_pending_attempts = 0;
@@ -137,16 +134,16 @@ static void set_connection(system_connection_t conn){
     system_state_set_connection(conn);
 }
 
-void bt_audio_set_disconnect_cb(bt_audio_disconnect_cb_t cb)
+static void publish_event(bt_audio_event_t event)
 {
-    s_disconnect_cb = cb;
+    if (!s_event_queue || xQueueSend(s_event_queue, &event, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "event queue full; dropped %d", (int)event);
+    }
 }
 
-void bt_audio_invoke_disconnect_cb(void)
+bool bt_audio_poll_event(bt_audio_event_t *event)
 {
-    if (s_disconnect_cb) {
-        s_disconnect_cb();
-    }
+    return event && s_event_queue && xQueueReceive(s_event_queue, event, 0) == pdTRUE;
 }
 
 static void set_pending_connect(const esp_bd_addr_t bda)
@@ -244,6 +241,10 @@ static void a2dp_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param){
                 set_connection(SYS_CONN_CONNECTING);
             } else if (st == ESP_A2D_CONNECTION_STATE_DISCONNECTED ||
                        st == ESP_A2D_CONNECTION_STATE_DISCONNECTING){
+                bool connection_was_active =
+                    s_state == BT_AUDIO_STATE_CONNECTED ||
+                    s_state == BT_AUDIO_STATE_STREAMING ||
+                    !bda_is_zero(s_peer_bda);
                 s_user_streaming = false;
                 s_streaming = false;
                 s_media_cmd_pending = false;
@@ -252,6 +253,9 @@ static void a2dp_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param){
                 set_connection(SYS_CONN_DISCONNECTED);
                 memset(s_peer_bda, 0, sizeof(s_peer_bda));
                 s_peer_name[0] = '\0';
+                if (connection_was_active) {
+                    publish_event(BT_AUDIO_EVENT_DISCONNECTED);
+                }
                 if (st == ESP_A2D_CONNECTION_STATE_DISCONNECTING) {
                     break; // wait for DISCONNECTED to handle pending/restart
                 }
@@ -458,6 +462,13 @@ static esp_err_t start_discovery(void){
 
 // ============================ Public API ============================
 esp_err_t bt_audio_start(bool force_rescan){
+    if (!s_event_queue) {
+        s_event_queue = xQueueCreateStatic(BT_AUDIO_EVENT_QUEUE_DEPTH,
+                                           sizeof(bt_audio_event_t),
+                                           s_event_queue_bytes,
+                                           &s_event_queue_storage);
+        if (!s_event_queue) return ESP_ERR_NO_MEM;
+    }
     ESP_RETURN_ON_ERROR(ensure_nvs(), TAG, "nvs");
 
     if (!s_stack_ready){
@@ -591,7 +602,7 @@ static void avrc_tg_cb(esp_avrc_tg_cb_event_t event,
         case ESP_AVRC_PT_CMD_PLAY:
         case ESP_AVRC_PT_CMD_PAUSE:
             ESP_LOGI(TAG, "AVRCP: toggle play/pause");
-            (void)audio_player_toggle_play_pause();
+            publish_event(BT_AUDIO_EVENT_PLAY_PAUSE);
             break;
 
         case ESP_AVRC_PT_CMD_FORWARD:

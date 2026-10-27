@@ -2,18 +2,24 @@ Pending review
 
 # Snake screen
 
-The app translates button presses into directions and draws the state supplied
-by the [game service](../../services/snake_game/README.md).
-A/B/C/D mean left/up/right/down. Other press events carry no direction but
-still restart a dead game, preserving the existing press-any behaviour.
+The app presents the [Snake rules service](../../services/snake_game/README.md)
+through ready, playing and results states. Any direction dismisses the ready
+overlay and is consumed. During play A/B/C/D request left/up/right/down turns.
 
-Initialization starts a game. Shell ticks advance it; drawing only reads it.
-The app and service run on the shell thread without a new task.
+The shell supplies button events and elapsed time. The rules service advances
+at six cells per second and buffers up to two legal turns. Collision enters
+results immediately. Control icons then disappear for two seconds before a
+refresh icon appears in the D position; D starts a new run.
 
-Cells are four pixels square, below an eight-pixel score band. Body and food
-use solid squares. The top line shows current length and best length; death
-adds a restart prompt. Rendering currently uses the full panel and ignores
-the supplied content rectangle. That existing layout is preserved.
+The playfield contains 29 by 11 four-pixel cells. A two-pixel border surrounds
+it between the eight-pixel score row and bottom control legend. The score and
+record count apples eaten, derived from the service's current and best lengths
+after subtracting the four starting cells.
 
-Shell callbacks, button mapping and drawing live together in snake.c. No
-navigation callback is stored because the game never used it.
+Snake cells remain solid squares. Food uses a small four-by-four apple silhouette
+with a raised stem, rounded body and narrow base. Ready and results use the
+shared modal overlay inside the playfield.
+
+The app draws directly into the shell framebuffer. The shell callback path
+serializes input, simulation and presentation, while reset and turn validation
+remain in the rules service.

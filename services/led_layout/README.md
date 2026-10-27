@@ -60,10 +60,13 @@ the former left/right handedness, old arm measurements and ring sweep
 direction. These upgrades are selected from recognizable stored values so
 custom measured geometry is retained.
 
-Saving writes a temporary file, flushes and syncs it, then renames it. FAT may
-reject replacement of an existing name, in which case the service removes the
-old entry and retries the rename. A power loss in that fallback interval can
-leave only the temporary file; recovery of that case remains future work.
+New saves use format version 3 and end with a completion marker. The service
+writes, flushes and syncs a temporary file, parses that file back, moves a valid
+primary to backup and promotes the candidate. Startup prefers a complete
+temporary candidate, then the primary, then the backup; it restores the chosen
+recovery copy when FAT permits. A truncated version-3 file lacks its completion
+marker and cannot replace a valid copy. Older layouts remain readable and gain
+the marker on their next save.
 
 ## Runtime ownership
 

@@ -12,7 +12,7 @@
 #define BAD_APPLE_DEFAULT_FPS 30
 #define BAD_APPLE_MIN_FPS 1
 #define BAD_APPLE_MAX_FPS 60
-#define BAD_APPLE_MAX_CATCHUP_FRAMES 2
+#define BAD_APPLE_MAX_CATCHUP_FRAMES 4
 
 #define HS_IN_BUF_SIZE  2048
 #define HS_OUT_BUF_SIZE 4096
@@ -34,8 +34,6 @@ typedef struct {
     bool frame_valid;
 
     uint8_t target_fps;
-    float frame_period_sec;
-    float frame_accum_sec;
 
     uint32_t frame_index;
     size_t file_size_bytes;
@@ -64,7 +62,6 @@ typedef struct {
 static const char *TAG = "bad_apple";
 static bad_apple_ctx_t s_ba = {
     .target_fps = BAD_APPLE_DEFAULT_FPS,
-    .frame_period_sec = 1.0f / (float)BAD_APPLE_DEFAULT_FPS,
     .rle_marker = -1,
     .rle_runlength = -1,
     .last_err = ESP_OK,
@@ -164,7 +161,6 @@ static esp_err_t open_path(const char *path, bad_apple_source_type_t type)
     s_ba.eof = false;
     s_ba.frame_valid = false;
     s_ba.frame_index = 0;
-    s_ba.frame_accum_sec = 0.0f;
     s_ba.last_err = ESP_OK;
 
     ESP_LOGI(TAG, "opened %s (%s, %u bytes)",
@@ -419,7 +415,6 @@ esp_err_t bad_apple_start(const bad_apple_config_t *cfg)
     }
 
     s_ba.target_fps = clamp_fps(cfg->target_fps);
-    s_ba.frame_period_sec = 1.0f / (float)s_ba.target_fps;
     s_ba.loop = cfg->loop;
     s_ba.playing = true;
     s_ba.paused = false;
@@ -451,7 +446,6 @@ void bad_apple_stop(void)
     s_ba.paused = false;
     s_ba.eof = false;
     s_ba.frame_valid = false;
-    s_ba.frame_accum_sec = 0.0f;
 }
 
 esp_err_t bad_apple_restart(void)
@@ -466,7 +460,6 @@ esp_err_t bad_apple_restart(void)
     s_ba.paused = false;
     s_ba.eof = false;
     s_ba.frame_valid = false;
-    s_ba.frame_accum_sec = 0.0f;
 
     step_result_t step = decode_next_frame();
     if (step == STEP_FRAME_READY) {
@@ -486,17 +479,12 @@ esp_err_t bad_apple_restart(void)
     return s_ba.last_err;
 }
 
-void bad_apple_tick(float dt_sec)
+esp_err_t bad_apple_sync_playhead(uint32_t playhead_ms)
 {
-    if (!s_ba.playing || s_ba.paused || !s_ba.file) return;
-    if (dt_sec <= 0.0f) return;
-
-    s_ba.frame_accum_sec += dt_sec;
-
+    if (!s_ba.playing || s_ba.paused || !s_ba.file) return ESP_OK;
+    uint64_t target = ((uint64_t)playhead_ms * s_ba.target_fps) / 1000u + 1u;
     int stepped = 0;
-    while (s_ba.frame_accum_sec >= s_ba.frame_period_sec && stepped < BAD_APPLE_MAX_CATCHUP_FRAMES) {
-        s_ba.frame_accum_sec -= s_ba.frame_period_sec;
-
+    while (s_ba.frame_index < target && stepped < BAD_APPLE_MAX_CATCHUP_FRAMES) {
         step_result_t step = decode_next_frame();
         if (step == STEP_FRAME_READY) {
             stepped++;
@@ -513,10 +501,7 @@ void bad_apple_tick(float dt_sec)
         }
         break;
     }
-
-    if (stepped == BAD_APPLE_MAX_CATCHUP_FRAMES && s_ba.frame_accum_sec > (s_ba.frame_period_sec * 2.0f)) {
-        s_ba.frame_accum_sec = s_ba.frame_period_sec;
-    }
+    return s_ba.last_err;
 }
 
 esp_err_t bad_apple_copy_frame(uint8_t *dst, size_t dst_size)
@@ -549,7 +534,6 @@ bool bad_apple_is_paused(void)
 void bad_apple_set_target_fps(uint8_t fps)
 {
     s_ba.target_fps = clamp_fps(fps);
-    s_ba.frame_period_sec = 1.0f / (float)s_ba.target_fps;
 }
 
 uint8_t bad_apple_get_target_fps(void)

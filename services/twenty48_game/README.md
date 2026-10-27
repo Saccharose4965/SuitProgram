@@ -19,12 +19,16 @@ A move computes the proposed board and per-origin displacement. If it changes
 the board, a new random tile is added and the app animates the old tiles.
 Commit replaces the old board after that animation. A no-op creates no tile.
 Directions are right/down/left/up numbered 0–3; invalid requests are rejected.
-The app serializes moves and commits on its worker.
+The app serializes moves and commits through the shell callback path.
 
-On exit, a dirty best score is saved through the
-[scores service](../scores/README.md). Failure is logged; the service starts no
-retry task. There is no win/game-over detection or board persistence.
-The const state view is intended for the same worker, not concurrent mutation.
+Game-over detection examines the committed board. Play can continue when an
+empty cell exists or a horizontal or vertical neighbour has the same value.
+A full board without either condition is finished.
+
+Deinitialization saves a dirty best score through the
+[scores service](../scores/README.md). Failure is logged. The service exposes a
+const state view to the shell-owned app lifecycle. Board persistence remains
+outside the current game design.
 
 The existing exponent/score arithmetic is retained, including its finite
 integer limits. Display sprites impose their own maximum visible tile.

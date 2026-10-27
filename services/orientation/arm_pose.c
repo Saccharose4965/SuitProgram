@@ -1,5 +1,4 @@
 #include "arm_pose.h"
-#include "orientation_reference.h"
 #include <math.h>
 
 static imu_quat_t mul(imu_quat_t a, imu_quat_t b)
@@ -10,18 +9,9 @@ static imu_quat_t mul(imu_quat_t a, imu_quat_t b)
         a.w*b.z+a.x*b.y-a.y*b.x+a.z*b.w};
 }
 static imu_quat_t conjq(imu_quat_t q) { return (imu_quat_t){q.w,-q.x,-q.y,-q.z}; }
-static bool normalize(imu_quat_t *q)
-{
-    float n=sqrtf(q->w*q->w+q->x*q->x+q->y*q->y+q->z*q->z);
-    if (!isfinite(n) || n<1e-6f) return false;
-    q->w/=n; q->x/=n; q->y/=n; q->z/=n;
-    return true;
-}
 bool arm_pose_calibrate(arm_pose_t *p, imu_quat_t q)
 {
-    if (!p || !orientation_reference_calibrate(&p->zero,q)) return false;
-    p->calibrated=true;
-    return true;
+    return orientation_reference_calibrate(p,q);
 }
 bool arm_pose_calibrate_heading(arm_pose_t *p, imu_quat_t q)
 {
@@ -30,9 +20,9 @@ bool arm_pose_calibrate_heading(arm_pose_t *p, imu_quat_t q)
 bool arm_pose_vector(const arm_pose_t *p, imu_quat_t sensor, bool left,
                      arm_vec3_t local, arm_vec3_t *d)
 {
-    if (!p || !p->calibrated || !d || !normalize(&sensor)) return false;
-    // Sensor-to-reference rotation, not the inverse used to move a 3D scene.
-    imu_quat_t q=mul(conjq(p->zero),sensor);
+    if (!p || !d) return false;
+    imu_quat_t q;
+    if (!orientation_reference_relative(p,sensor,&q)) return false;
     imu_quat_t v=mul(mul(q,(imu_quat_t){0,local.x,local.y,local.z}),conjq(q));
     // Folded reference: target -MPU X, up +MPU Z, lateral +MPU Y.
     // Right-arm selection mirrors lateral placement, not rotation direction.

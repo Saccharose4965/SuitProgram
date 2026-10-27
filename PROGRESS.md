@@ -1,5 +1,149 @@
 # Progress
 
+## Remote suit control
+
+- Added a dedicated Remote Control app and service. The controller selects a
+  recently heard suit, both navigation contexts begin at the main menu, and
+  A/B/C/D presses execute only in the target shell.
+- Standard menus and grids publish bounded semantic snapshots which the
+  controller redraws with shared widgets. Custom applications continue running
+  only on the target and appear as a controller-side placeholder.
+- Target physical input is leased for the session. Either wearer ends the lease
+  only by holding A+B for three seconds; peer timeout also returns both local
+  states safely to the main menu. Corner marks identify both roles.
+- Start, input and end commands use acknowledged ESP-NOW delivery. Views and
+  heartbeats stay best-effort. The full firmware build passes with 12% of the
+  application partition free; two-suit hardware acceptance remains required.
+
+## Shared choice navigation and continuous Pong controls
+
+- Choice screens now own their scrolling state and reuse the main-menu sprite
+  plus framed-name block. Lists show three vertically scrolling choices.
+- The LED animation catalogue remains two-dimensional: three entries per
+  column, A/C across columns, B down within a column and D to select. Column
+  changes animate horizontally.
+- Pong reads the cached debounced held button and moves its paddle continuously
+  with acceleration and deceleration. A full traversal takes approximately one
+  second.
+- Paint and Pong pickers use the shared list renderer. LED source, FFT control,
+  Preferences and Service Management now reserve D for selection/action.
+
+## Pong controls, AI and collision authority
+
+- The mode menu and paddle now use A/B for up/down. D confirms a mode and only
+  pauses AI matches; C and the app-specific back action are unused. The legend
+  changes with the active screen.
+- The AI picks a stable error for each incoming ball, eases towards it, reacts
+  after 180 ms and moves at a capped speed. It remains smooth while allowing
+  misses.
+- The real Pong service regression confirms that only the suit owning the
+  approached paddle resolves its collision. The peer accepts that trajectory
+  and visually interpolates onto it by midfield. Packet loss, scoring,
+  malformed traffic and disconnect recovery continue to pass.
+
+## Snake playfield, turns and lifecycle
+
+- Added ready, playing and results states with a consumed start press and a
+  two-second delay before the D/retry icon appears.
+- Added a two-turn service queue validated against the last queued direction.
+  Each movement step consumes one turn, preserving rapid legal corner input.
+- Resized the grid to 29 by 11 four-pixel cells and framed it with a two-pixel
+  border between the score row and button legend. Removed the shell HUD from
+  this game so its own score row remains visible.
+- Scores display apples eaten, derived from the stored length record. Food now
+  uses a compact apple silhouette while the snake retains solid cells.
+
+## Tetris lifecycle and game over
+
+- Replaced direct input sampling and the private worker with shell callbacks.
+  Any game button dismisses the ready overlay and is consumed.
+- Changed the rules service to preserve the board and score when a new piece is
+  blocked above the playfield. Finished runs ignore further rule commands.
+- Added an immediate result overlay and a two-second lockout before the D/retry
+  icon appears. D initializes the next run directly.
+- Preserved the 450 ms drop cadence, 140 ms action cooldown and controls. The
+  next-piece preview now sits below the score, and drawing targets the shell
+  framebuffer directly.
+
+## 2048 lifecycle and game over
+
+- Replaced direct button polling and the private worker with shell input, tick
+  and draw callbacks. Rendering now targets the shell framebuffer directly.
+- Added ready, playing and results states. Any direction dismisses the ready
+  overlay and is consumed; the following press performs the first move.
+- Added committed-board game-over detection. The result overlay appears at once,
+  then the D/retry legend icon appears after a two-second input lockout.
+- Preserved direction mapping, cosine movement and score persistence while
+  expressing animation speed in elapsed time.
+
+## Flappy lifecycle, overlays and scoring
+
+- Replaced the private Flappy worker and polling splash with shell-owned ready,
+  playing and results states. D starts/retries and every button flaps in play.
+- Kept 30 Hz game physics through a bounded fixed-step accumulator while drawing
+  at the shell rate. App exit is now immediate and cannot leave an overlapping
+  worker behind.
+- Added a shared modal card renderer and used it for start/result information;
+  Flappy no longer reserves or displays a button legend.
+- Made scoring one-shot per physical pipe and reset that state on recycling.
+  Successful record saves now clear their dirty flag.
+
+## Master control and shell ownership
+
+- Split master-control synchronization into `services/master_control` and its
+  four-row OLED screen into `apps/master_control_app`. Protocol, peer clocks,
+  role transitions and LED enforcement remain in the service.
+- Moved foreground registry, menus, status composition, lifecycle and frame loop
+  into `apps/shell`.
+- Extracted runtime/task load logging into `services/performance_monitor` and
+  renamed its API around monitoring rather than the old source filename.
+- `main` now contains only `app_main.c`, ESP-IDF component configuration and
+  project Kconfig files.
+- Firmware build passes after both splits. Multi-suit master-control hardware
+  acceptance remains required.
+
+## LED controls and timing source
+
+- Split the live LED configuration screens into `apps/led_control` and the
+  FFT/manual clock generator into `services/led_source`.
+- Source timing state and APIs no longer live in the shell's app registry
+  header. Master control reads the source service directly; the source service
+  reads the shared system snapshot instead of depending on a UI module.
+- The animation navigation regression moved beside its owning app and passes.
+- Hardware acceptance remains: animation/colour edits, manual BPM, FFT reset and
+  force controls, isolated offset presses and the double-press 2x shortcut.
+
+## Documentation cleanup, Messages and Arm Synth
+
+- Replaced the old documentation archive, migration proposal and implementation
+  diaries with a current architecture overview, show-system map and complete
+  module index. Removed duplicated technical reviews after preserving the useful
+  design decisions in each module's README.
+- Moved the Message UI into `apps/message_app` and the direct transfer protocol
+  plus arrival tracking into `services/messages`. Moved their focused host tests
+  beside the new owners.
+- Split Arm Synth into a thin `apps/synth` screen and `services/synth_service`,
+  which now owns calibration, gesture mapping, oscillator, route fallback,
+  worker lifecycle and FFT/audio ownership.
+- Message and Synth host regressions pass. A complete ESP-IDF reconfigure/build
+  passes. Hardware behavior is intentionally unchanged and remains to be checked
+  when the next firmware is flashed.
+
+## Settings, Music and playback diagnostics
+
+- Settings persistence now lives in `services/settings`; its Settings-facing
+  screens are grouped in `apps/settings_app`.
+- Music browsing now lives in `apps/music`. Its SD catalogue is loaded on app
+  entry, keeping filesystem work out of draw and scroll callbacks.
+- End-of-playback heap tracing used during the Bluetooth investigation was
+  removed. Actual stream-stall health logging and lightweight heap totals remain.
+- Orientation, suit-geometry and input/audio-policy regressions now live beside
+  their owning services. The remaining animation-control regression stays with
+  its still-unmigrated LED app.
+- Firmware reconfigure/build and the focused host regressions pass. Hardware
+  checks remain: Settings persistence/recovery, Music entry/scroll/playback and
+  a complete Show ending without the former allocation-backtrace dump.
+
 ## Call app and voice service
 
 - Extracted the half-duplex ESP-NOW voice protocol, queue, I2S worker and audio
@@ -162,6 +306,18 @@
 - Removed the main-layer app file and old mixed component folder. Detailed
   Pending review explanations record format, catch-up and synchronization
   choices without changing the media protocol or one-second start offset.
+
+## Bad Apple shared-clock synchronization
+
+- Replaced the fixed one-second video delay with Audio's submitted-frame
+  audible timeline, shared with Show Runtime. Local DMA depth and the adjustable
+  Bluetooth delay are now applied by one clock implementation.
+- Bad Apple starts video on the first audio progress sample, follows absolute
+  playhead time, freezes on pause/stall and restarts audio when changing video
+  encoding. Sequential decoding catches up in bounded four-frame batches.
+- Missing WAV and video files are reported separately. The firmware build and
+  Show clock regressions pass; local and Bluetooth timing still need hardware
+  validation.
 
 ## Removed hardware-demo remnants
 
@@ -357,10 +513,12 @@
   apps, services and drivers. The documentation index links to them.
 - Removing the first `Pending review` line records user approval. Source-file
   inspection receipts remain separate from that approval.
-- Earlier technical notes and the old review workflow are archived under
-  `docs/reference/`; the superseded `docs/design/` directory is removed.
-- Links and inspection receipts now use the new paths. Documentation coverage
-  is still incomplete.
+- Superseded technical reviews, migration diaries and the old review workflow
+  were removed after current module READMEs became the canonical explanations.
+  Cross-system design now lives directly under `docs/`; module explanations
+  live beside their app, service or driver.
+- Stale source-inspection receipts were cleared during that cleanup. Documentation
+  coverage remains visible in the regenerated checklist.
 
 ## OLED responsibility boundary
 
@@ -463,3 +621,185 @@ until visual code has moved into apps. Hardware calibration verification pending
 - Geometry lookup, Paint, show runtime/roles and uniform render host tests pass.
 - Firmware reconfigure/build passes. No firmware flashed or new commits pushed.
 - Physical effect comparison and old-show acceptance remain pending.
+
+## Animation catalogue boundary
+
+- Split the former mixed animation grid into Beat and Ambient apps. Beat lists
+  the trigger-driven renderer; Ambient lists the continuously rendered clock
+  renderer and its speed control.
+- Opening either catalogue no longer changes the active animation. A mode only
+  changes when D selects it; selection still disables the other renderer.
+- Preserved all effect implementations and numeric mode indices. Similar-looking
+  modes remain pending hardware/user review rather than being guessed duplicate.
+- Classified Audio Energy as Ambient because its render path consumes live band
+  levels and its beat-trigger branch intentionally performs no state change.
+
+## Recoverable game scores
+
+- Score files now require one valid unsigned 32-bit decimal value; malformed,
+  signed, overflowing and trailing data is reported instead of becoming zero.
+- Updates sync a temporary copy, move a valid primary to backup and then install
+  the new primary without relying on FAT replacement rename behavior.
+- Loading considers primary, backup and interrupted temporary copies, keeps the
+  highest valid value and repairs the primary. Host recovery tests and the full
+  firmware build pass; physical interrupted-write testing remains documented.
+
+## Recording persistence and startup cleanup
+
+- Automatic recording numbers now use recoverable primary, backup and temporary
+  counter files. Existing WAV and partial names are skipped with exclusive
+  creation instead of being overwritten or replaced by a tick-count fallback.
+- PCM is written to `.part`; the checked and synced final WAV header is installed
+  under the requested name only after the recording closes successfully.
+- Startup failures remove their empty partial file and release I2S RX, including
+  allocation, handle and task-creation failures.
+
+## Coherent LED renderer settings
+
+- Beat and standalone renderers now keep related colour, style, background,
+  brightness and mode-specific settings in protected configurations.
+- Each worker takes one immutable settings copy before constructing a frame.
+  Colour-app presets and synchronized master-control updates publish complete
+  configurations, preventing a frame from mixing old and new values.
+- Existing narrow setters remain for isolated changes. Effect equations,
+  catalogue indices and defaults are unchanged.
+- The full firmware build passes with 13% of the application partition free.
+  Hardware review of every beat/standalone effect and synchronized shuffle is
+  still required before changing effect visuals.
+
+## Bluetooth event boundary
+
+- Removed the Music-specific disconnect callback and the Bluetooth screen's
+  draw-time connection transition handling.
+- Bluedroid callbacks now enqueue disconnect and AVRCP play/pause events in a
+  fixed static queue; the shell applies them in normal task context.
+- Removed Bluetooth's build dependency on Audio Player and Music's dependency
+  on Bluetooth. Audio Player still independently polls streaming status, so a
+  delayed event cannot hide a disconnect.
+- PCM buffering, feeder cadence, A2DP command sequencing, discovery/reconnect,
+  task placement and the no-sniff policy are unchanged. Host playback tests and
+  the full firmware build pass; extended hardware playback remains pending.
+
+## Grid carousel cue
+
+- The shared three-row grid now centres a narrower active column and leaves
+  cropped portions of the available left and right columns visible.
+- Navigation, selection order and animation timing are unchanged; only the
+  horizontal card geometry changed.
+
+## Board-support ownership cleanup
+
+- Removed unused fixed-rate I2S constructors and their private channel handles
+  from `drivers/hw`. The shared audio I2S driver is now the only channel owner.
+- Removed the unused voltage-to-button decoder from board support. The input
+  driver remains the only decoder/debounce owner.
+- Physical I2S pins, ADC channels and shared calibrated ADC reads remain in
+  board support.
+
+## Serialized SD lifecycle
+
+- Replaced the volatile mount-in-progress flag and one-second competing retry
+  path with one statically allocated lifecycle mutex.
+- Mount retries and unmount now execute exclusively. Concurrent mount callers
+  wait, then reuse the mounted card produced by the first operation.
+- Frequency fallback, SPI wiring setup, FAT options and caller-owned file
+  lifetime rules are unchanged.
+
+## Explicit MPU sampler stack size
+
+- Renamed the MPU sampler stack argument to state that ESP-IDF measures it in
+  bytes.
+- Corrected the zero-value default from an accidental 1024 bytes to the intended
+  4096 bytes. Both current callers select this default.
+- Sampling rate, priority, core placement and sensor configuration are unchanged.
+
+## Serialized Orientation startup
+
+- Added one static lifecycle mutex around MPU device, filter-task and sampler
+  creation. Concurrent callers now wait instead of creating duplicate state.
+- Readiness becomes visible only after both tasks exist. Failed attempts remove
+  their filter task and SPI device before a later retry.
+- Snapshot readiness and raw-sample availability now read the synchronized
+  published startup state.
+
+## Single-owner Fluid orientation
+
+- Removed Fluid's private MPU device lookup, initialization and sampler fallback.
+- Fluid now obtains acceleration only through the shared Orientation service.
+  Missing or stale sensor data produces neutral gravity while simulation and
+  rendering continue.
+- Removed the resulting board-support and MPU-driver component dependencies.
+  Fluid worker scheduling and stop behavior are unchanged.
+
+## Cooperative Fluid shutdown
+
+- Replaced Fluid's timed polling and forced task deletion with a static worker
+  completion signal.
+- Shutdown now lets the worker finish its current bounded step and delete itself
+  before particle and mask buffers are reset.
+- Simulation timing, adaptive substeps and task placement are unchanged.
+
+## Recoverable LED layout saves
+
+- Version-3 layout files carry an end marker so truncated writes are rejected.
+- Saves sync and parse the temporary candidate before retaining the prior valid
+  primary as backup and promoting the new file.
+- Startup recovers in newest-safe order from a complete temporary file, primary
+  or backup. Legacy layouts remain readable and upgrade on their next save.
+
+## Reboot-resistant LED choices
+
+- Added the selected Beat/Ambient renderer, animation, ambient speed,
+  backgrounds and complete colour profile to the SD-backed Settings model.
+- Boot applies the colour and animation snapshots after suit geometry is ready,
+  then seeds the HUD from the renderer that was restored.
+- Mode, background and colour edits save immediately. Ambient speed previews
+  without SD traffic on every step and saves when editing ends or the app exits.
+
+## FFT and Bluetooth screen boundaries
+
+- The FFT viewer now requests analysis through Audio Policy and releases only
+  its own request on exit. It no longer initializes the audio bus or starts the
+  detector directly.
+- Pending viewer demand survives Bluetooth or other temporary audio ownership;
+  the screen reports the blocking state and resumes through normal policy ticks.
+- The Bluetooth audit confirmed that its app contains selection and drawing,
+  while discovery, connection, deferred reconnect and streaming remain owned by
+  the Bluetooth service.
+
+## Live Sync LED source
+
+- Replaced the standalone Master Control screen and its role/ratio/colour
+  policies with FFT, Manual and Follow A/B/C choices in LED Source.
+- Reused Show's convergent A/B/C identity coordinator while keeping its playback
+  leadership, transport and LED ownership inactive outside Show.
+- Live Sync copies the complete active renderer configuration and distributes
+  future beat anchors using measured peer clock offsets. Followers continue
+  locally through packet loss and expose a lost state after 2.5 seconds.
+- A follower's previous local renderer state is restored when it leaves Follow.
+  Full firmware build passes with 13% of the app partition free; multi-suit
+  hardware acceptance remains.
+
+## Orientation calibration ownership
+
+- Removed the unused global recenter state from the orientation filter. The
+  service now publishes calibrated absolute sensor pose.
+- Added a shared heading-reference object that captures horizontal heading,
+  preserves gravity-derived tilt and computes relative pose. Arm Pose, Paint,
+  Synth and 3D each own one instance, so feature calibration is isolated.
+- Centralized the 250 ms freshness check in Orientation and migrated every
+  quaternion consumer. Gyro bias remains the persistent per-sensor correction;
+  Fluid continues to consume raw acceleration deliberately.
+- Orientation, gyro calibration, Paint and Synth host tests pass. The complete
+  firmware builds with 13% of the app partition free.
+
+## Shared information-screen layout
+
+- Added a width- and height-clipped title/status-page primitive alongside the
+  existing shared list, grid, scroll, overlay, HUD and legend renderers.
+- Migrated File RX, direct Call, shell Status and Gyro Calibration without
+  changing their controls or service work. Removed their direct OLED component
+  dependencies where the shared UI is now the presentation boundary.
+- Kept live transport lists, graphs, games, media frames and geometry custom.
+  Text-page bounds, shared drawing, Paint UI and Show UI tests pass; the full
+  firmware builds with 13% of the app partition free.

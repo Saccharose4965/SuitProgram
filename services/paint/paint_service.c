@@ -112,7 +112,7 @@ static bool prepare_canvas(void)
 void paint_service_open(void)
 {
     if(!s_queue) s_queue=xQueueCreateStatic(8,sizeof(paint_rx_t),s_queue_bytes,&s_queue_storage);
-    s_mode=PAINT_MENU; s_error=PAINT_OK; s_pose.calibrated=false;
+    s_mode=PAINT_MENU; s_error=PAINT_OK; orientation_reference_reset(&s_pose);
     s_painting=false; s_on_canvas=false; s_color=0;
     s_session=esp_random(); if(!s_session) s_session=1;
     s_sequence=s_stroke=0; s_last_send=0;
@@ -130,7 +130,7 @@ void paint_service_command(paint_command_t command)
     case PAINT_LEAVE: paint_service_leave(); break;
     case PAINT_SELECT_PAINTER:
         if(s_mode!=PAINT_MENU) break;
-        s_mode=PAINT_PAINTER;s_pose.calibrated=false;s_painting=false;
+        s_mode=PAINT_PAINTER;orientation_reference_reset(&s_pose);s_painting=false;
         break;
     case PAINT_SELECT_CANVAS:
         if(s_mode==PAINT_MENU && s_queue && prepare_canvas()) s_mode=PAINT_CANVAS;
@@ -138,13 +138,13 @@ void paint_service_command(paint_command_t command)
     case PAINT_TOGGLE_ARM:
         if(s_mode!=PAINT_MENU) break;
         s_left_arm=!s_left_arm;
-        s_pose.calibrated=false;s_painting=false;s_on_canvas=false;++s_stroke;
+        orientation_reference_reset(&s_pose);s_painting=false;s_on_canvas=false;++s_stroke;
         break;
     case PAINT_CALIBRATE: {
         if(s_mode!=PAINT_PAINTER) break;
-        imu_quat_t q; uint64_t t;
+        imu_quat_t q;
         s_painting=false;++s_stroke;
-        if(orientation_service_snapshot(&q,&t) && esp_timer_get_time()-(int64_t)t<250000) {
+        if(orientation_service_fresh_snapshot(&q,250000)) {
             if(!arm_pose_calibrate_heading(&s_pose,q)) s_error=PAINT_NEED_HORIZONTAL;
         } else s_error=PAINT_IMU_UNAVAILABLE;
         break;
@@ -172,8 +172,8 @@ void paint_service_tick(float dt)
 {
     int64_t now=esp_timer_get_time();
     if(s_mode==PAINT_PAINTER) {
-        imu_quat_t q; uint64_t t; arm_vec3_t d;
-        s_on_canvas=orientation_service_snapshot(&q,&t) && now-(int64_t)t<250000 &&
+        imu_quat_t q; arm_vec3_t d;
+        s_on_canvas=orientation_service_fresh_snapshot(&q,250000) &&
             arm_pose_direction(&s_pose,q,s_left_arm,&d) && arm_pose_canvas(d,&s_x,&s_y);
         if(now-s_last_send<50000) return; // at most 20 Hz, no per-LED network data
         s_last_send=now;

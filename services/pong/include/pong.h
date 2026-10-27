@@ -33,7 +33,7 @@ void pong_service_deinit(void);
 void pong_service_reset(void);
 void pong_service_start_ai(void);
 void pong_service_start_human(void);
-void pong_service_move_paddle(int direction);
+void pong_service_set_paddle_input(int direction);
 void pong_service_toggle_pause(void);
 void pong_service_tick(void);
 void pong_service_snapshot(pong_view_t *out);

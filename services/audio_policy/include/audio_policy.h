@@ -7,6 +7,7 @@ enum {
     AUDIO_POLICY_FFT_REQ_LED_APPS = 1u << 0,
     AUDIO_POLICY_FFT_REQ_COLOR_APP = 1u << 1,
     AUDIO_POLICY_FFT_REQ_LED_SOURCE = 1u << 2,
+    AUDIO_POLICY_FFT_REQ_VIEW = 1u << 3,
 };
 
 void audio_policy_fft_request(uint32_t client_mask, bool needed);

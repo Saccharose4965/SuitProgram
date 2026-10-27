@@ -32,10 +32,12 @@ typedef int link_msg_type_t;
 #define LINK_MSG_CONTROL 1
 typedef void *QueueHandle_t;
 typedef struct { uint64_t frames; uint32_t rate; int64_t updated_us; bool bluetooth; } audio_progress_t;
+typedef struct { bool valid; bool bluetooth; bool stalled; uint32_t position_ms; } audio_timeline_t;
 static int64_t now = 10000000;
 static bool playing, paused;
 static unsigned stops, sends;
 static audio_progress_t progress;
+static uint16_t bluetooth_delay_ms = 100;
 static uint8_t device_mac[6] = {2,0,0,0,0,2};
 static int64_t esp_timer_get_time(void) { return now; }
 static unsigned esp_random(void) { return 42; }
@@ -65,6 +67,24 @@ static bool audio_player_is_active(void) { return playing; }
 static bool audio_player_is_paused(void) { return paused; }
 static int audio_player_toggle_play_pause(void) { paused = !paused; return 0; }
 static audio_progress_t audio_progress_get(void) { return progress; }
+static void audio_bluetooth_delay_set_ms(uint16_t ms) { bluetooth_delay_ms = ms; }
+static uint16_t audio_bluetooth_delay_get_ms(void) { return bluetooth_delay_ms; }
+static audio_timeline_t audio_timeline_get(int64_t at) {
+    audio_timeline_t t = {.bluetooth = progress.bluetooth};
+    if (!progress.frames || !progress.rate || !progress.updated_us) return t;
+    int64_t submitted = (int64_t)(progress.frames * 1000000ULL / progress.rate);
+    int64_t delay = progress.bluetooth ? (int64_t)bluetooth_delay_ms * 1000
+                                       : 8LL * 256 * 1000000 / progress.rate;
+    int64_t elapsed = at - progress.updated_us;
+    if (elapsed < 0) elapsed = 0;
+    if (elapsed > delay) elapsed = delay;
+    int64_t audible = submitted - delay + elapsed;
+    if (audible < 0) audible = 0;
+    t.valid = true;
+    t.stalled = at - progress.updated_us > delay + 100000;
+    t.position_ms = (uint32_t)(audible / 1000);
+    return t;
+}
 '''
 
 TEST = r'''

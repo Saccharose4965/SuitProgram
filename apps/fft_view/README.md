@@ -3,9 +3,10 @@ Pending review
 # FFT viewer
 
 This app presents the background FFT service on the 128 by 64 OLED. Opening it
-ensures the shared audio bus and detector are available, then displays the
-service's accumulated history. Leaving the app only removes the screen; audio
-analysis continues when another feature still requests it.
+registers one demand with Audio Policy, then displays the service's accumulated
+history. Leaving clears only that demand, so analysis continues when lighting
+or another client still requires it. Bus and detector lifecycle remain owned by
+Audio Policy and the FFT service.
 
 ## Snapshot drawing
 
@@ -28,8 +29,9 @@ The monochrome renderer uses solid one-pixel lines and bars. Timeline views
 share the same ring index, keeping confidence and spectrogram events aligned.
 Drawing is pure: it cannot advance history or alter detector state.
 
-C and D reset the detector from this screen. Startup failures display the
-audio error, including the Bluetooth resource gate, in place of a graph.
+C and D reset the detector from this screen. While analysis is unavailable, the
+screen distinguishes Bluetooth suspension from waiting for another audio owner.
+Its request remains pending and resumes through the regular policy evaluation.
 
 The host display regression checks the full frequency range, two-frame grouping,
 timeline rollover/alignment, phase-coordinate mapping, framebuffer bounds and

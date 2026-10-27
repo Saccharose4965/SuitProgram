@@ -11,8 +11,9 @@ and 1.5 m tall. This gives a usable aiming model from forearm orientation alone.
 The actual distance and relative position of the people must approximately fit
 that model.
 
-Calibration and direction conversion follow the
-[orientation service](../orientation/README.md). Arm selection chooses the lateral mapping;
+Calibration, freshness and direction conversion follow the
+[orientation service](../orientation/README.md). Paint owns its heading reference.
+Arm selection chooses the lateral mapping;
 changing it invalidates calibration and ends the current stroke.
 
 The ray intersects the rectangle to produce brush coordinates. Backward,

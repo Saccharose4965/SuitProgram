@@ -1,6 +1,4 @@
 #include "app_shell.h"
-#include "ui_draw.h"
-
 #include <stdio.h>
 
 #include "esp_err.h"
@@ -84,8 +82,6 @@ void file_rx_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 void file_rx_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)
 {
     (void)ctx;
-    (void)w;
-    (void)h;
     if (!fb) return;
 
     bool running = audio_rx_is_running();
@@ -95,19 +91,14 @@ void file_rx_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w
         s_file_rx.sd_mounted = storage_sd_is_mounted();
     }
 
-    char line[48];
-    oled_draw_text3x5(fb, x + 2, y + 2, "FILE RX");
-
-    snprintf(line, sizeof(line), "State: %s", running ? "ON" : "OFF");
-    oled_draw_text3x5(fb, x + 2, y + 10, line);
-
-    snprintf(line, sizeof(line), "SD: %s", s_file_rx.sd_mounted ? "mounted" : "not mounted");
-    oled_draw_text3x5(fb, x + 2, y + 18, line);
-
-    snprintf(line, sizeof(line), "Port: %d", AUDIO_RX_DEFAULT_PORT);
-    oled_draw_text3x5(fb, x + 2, y + 26, line);
-
-    snprintf(line, sizeof(line), "Last: %s", esp_err_to_name(s_file_rx.last_err));
-    oled_draw_text3x5(fb, x + 2, y + 34, line);
-
+    char state[24], sd[32], port[24], last[48];
+    snprintf(state, sizeof(state), "State: %s", running ? "ON" : "OFF");
+    snprintf(sd, sizeof(sd), "SD: %s", s_file_rx.sd_mounted ? "mounted" : "not mounted");
+    snprintf(port, sizeof(port), "Port: %d", AUDIO_RX_DEFAULT_PORT);
+    snprintf(last, sizeof(last), "Last: %s", esp_err_to_name(s_file_rx.last_err));
+    const char *lines[] = { state, sd, port, last };
+    const shell_text_page_t page = {
+        .title = "FILE RX", .lines = lines, .line_count = 4,
+    };
+    shell_ui_draw_text_page(fb, x, y, w, h, &page);
 }

@@ -33,5 +33,5 @@ idf_component_register(
         "${BT_BASE_PRIV_DIR}"
         "${BT_STACK_PRIV_DIR}"
         "${BT_DM_PRIV_DIR}"
-    REQUIRES bt nvs_flash state freertos audio audio_player
+    REQUIRES bt nvs_flash state freertos audio
 )

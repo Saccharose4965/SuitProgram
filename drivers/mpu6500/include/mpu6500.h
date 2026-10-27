@@ -10,6 +10,8 @@
 extern "C" {
 #endif
 
+#define MPU6500_DEFAULT_SAMPLER_STACK_BYTES 4096U
+
 typedef struct {
     float ax_g, ay_g, az_g;
     float gx_dps, gy_dps, gz_dps;
@@ -34,7 +36,9 @@ typedef struct mpu6500_t {
 
 esp_err_t mpu6500_init(mpu6500_t *imu, const mpu6500_config_t *cfg);
 esp_err_t mpu6500_read_once(mpu6500_t *imu, mpu6500_sample_t *out);
-esp_err_t mpu6500_start_sampler(mpu6500_t *imu, int hz, UBaseType_t prio, int core_id, uint32_t stack_words);
+// A zero stack size selects MPU6500_DEFAULT_SAMPLER_STACK_BYTES.
+esp_err_t mpu6500_start_sampler(mpu6500_t *imu, int hz, UBaseType_t prio,
+                                int core_id, uint32_t stack_size_bytes);
 mpu6500_sample_t mpu6500_latest(mpu6500_t *imu);
 
 #ifdef __cplusplus

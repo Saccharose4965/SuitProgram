@@ -24,7 +24,7 @@ static void snake_spawn_food(void){
     s_snake.food_x = 0; s_snake.food_y = 0;
 }
 
-static void snake_reset(void){
+void snake_game_reset(void){
     s_snake.len = 4;
     int cx = SNAKE_GRID_W / 2;
     int cy = SNAKE_GRID_H / 2;
@@ -33,6 +33,7 @@ static void snake_reset(void){
         s_snake.body[i].y = cy;
     }
     s_snake.dir = 0;
+    s_snake.queued_count = 0;
     s_snake.alive = true;
     s_snake.acc = 0.0f;
     snake_spawn_food();
@@ -47,19 +48,27 @@ void snake_game_init(void){
         ESP_LOGW(TAG, "Failed to load high score");
     }
     if (s_best_len < 4) s_best_len = 4;
-    snake_reset();
+    snake_game_reset();
 }
 
 
-void snake_game_press(int direction)
+void snake_game_queue_direction(int direction)
 {
-    if (!s_snake.alive) { snake_reset(); return; }
-    if (direction >= 0 && direction < 4 && direction != (s_snake.dir + 2) % 4)
-        s_snake.dir = direction;
+    if (!s_snake.alive || direction < 0 || direction >= 4 || s_snake.queued_count >= 2) return;
+    int reference = s_snake.queued_count > 0
+        ? s_snake.queued_dir[s_snake.queued_count - 1]
+        : s_snake.dir;
+    if (direction == reference || direction == (reference + 2) % 4) return;
+    s_snake.queued_dir[s_snake.queued_count++] = direction;
 }
 
 static void snake_step(void){
     if (!s_snake.alive) return;
+    if (s_snake.queued_count > 0) {
+        s_snake.dir = s_snake.queued_dir[0];
+        if (s_snake.queued_count > 1) s_snake.queued_dir[0] = s_snake.queued_dir[1];
+        s_snake.queued_count--;
+    }
     snake_cell_t head = s_snake.body[0];
     switch (s_snake.dir){
         case 0: head.x++; break;

@@ -48,7 +48,7 @@ esp_err_t bad_apple_start(const bad_apple_config_t *cfg);
 void bad_apple_stop(void);
 esp_err_t bad_apple_restart(void);
 
-void bad_apple_tick(float dt_sec);
+esp_err_t bad_apple_sync_playhead(uint32_t playhead_ms);
 esp_err_t bad_apple_copy_frame(uint8_t *dst, size_t dst_size);
 
 void bad_apple_set_paused(bool paused);

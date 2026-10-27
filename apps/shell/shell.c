@@ -1,0 +1,1271 @@
+#include "app_shell.h"
+#include "audio.h"
+#include "audio_bus.h"
+#include "audio_i2s.h"
+#include "audio_player.h"
+#include "audio_rx.h"
+#include "call_app.h"
+#include "call_service.h"
+#include "fft.h"
+#include "led_control_apps.h"
+#include "led_source.h"
+#include "live_sync.h"
+#include "message_app.h"
+#include "message_direct.h"
+#include "music_app.h"
+#include "performance_monitor.h"
+#include "remote_control.h"
+#include "settings.h"
+#include "settings_apps.h"
+#include "shell_app_registry.h"
+#include "synth_app.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+
+#include "esp_log.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+
+#include "bt_audio.h"
+#include "gyro_calibration.h"
+#include "hw.h"
+#include "input_audio_policy.h"
+#include "led_layout.h"
+#include "led_modes.h"
+#include "link.h"
+#include "logo.h"
+#include "oled.h"
+#include "orientation_service.h"
+#include "paint_service.h"
+#include "pong.h"
+#include "power.h"
+#include "show_runtime.h"
+
+static const char *TAG = "shell";
+enum { OLED_FB_BYTES = PANEL_W * PANEL_H / 8 };
+
+#if configNUMBER_OF_CORES > 1
+#define APP_TASK_CORE 1
+#define OLED_TASK_CORE 0
+#else
+#define APP_TASK_CORE 0
+#define OLED_TASK_CORE 0
+#endif
+
+static DRAM_ATTR uint8_t s_fb_oled_a[OLED_FB_BYTES];
+static DRAM_ATTR uint8_t s_fb_oled_b[OLED_FB_BYTES];
+static uint8_t *s_render_fb = s_fb_oled_a;
+static uint8_t *s_oled_fb = s_fb_oled_b;
+static TaskHandle_t s_oled_task = NULL;
+static QueueHandle_t s_oled_q = NULL;
+static uint64_t s_last_submitted_hash = UINT64_MAX;
+static TaskHandle_t s_logo_task = NULL;
+static volatile bool s_logo_active = false;
+static TaskHandle_t s_startup_tone_task = NULL;
+static TaskHandle_t s_shell_task = NULL;
+static esp_timer_handle_t s_shell_frame_timer = NULL;
+
+typedef struct {
+  input_button_t last_button;
+  int press_count;
+  int64_t last_press_us;
+} startup_logo_skip_state_t;
+
+static startup_logo_skip_state_t s_logo_skip = {
+    .last_button = INPUT_BTN_NONE,
+    .press_count = 0,
+    .last_press_us = 0,
+};
+
+static size_t s_current_app = 0;
+static size_t s_prev_app = 0;
+static size_t s_queued_app_index = 0;
+static bool s_app_switch_queued = false;
+static TickType_t s_remote_exit_started;
+static bool s_remote_exit_tracking;
+
+static shell_app_context_t s_ctx = {0};
+
+static const uint32_t SHELL_FRAME_BUDGET_US = 16667u;
+
+static void link_frame_handler(link_msg_type_t type, const uint8_t *src_mac,
+                               const uint8_t *payload, size_t len,
+                               void *user_ctx);
+static uint8_t s_peer_mac_cfg[6] = {0};
+
+static int hex_nib(char c) {
+  if (c >= '0' && c <= '9')
+    return c - '0';
+  if (c >= 'a' && c <= 'f')
+    return 10 + c - 'a';
+  if (c >= 'A' && c <= 'F')
+    return 10 + c - 'A';
+  return -1;
+}
+
+static bool parse_mac_string(const char *s, uint8_t out[6]) {
+  if (!s || !out)
+    return false;
+  uint8_t tmp[6] = {0};
+  int nibbles = 0;
+  for (const char *p = s; *p; ++p) {
+    if (*p == ':' || *p == '-' || *p == ' ')
+      continue;
+    int v = hex_nib(*p);
+    if (v < 0)
+      return false;
+    int byte_idx = nibbles / 2;
+    if (byte_idx >= 6)
+      return false;
+    if (nibbles % 2 == 0)
+      tmp[byte_idx] = (uint8_t)(v << 4);
+    else
+      tmp[byte_idx] |= (uint8_t)v;
+    nibbles++;
+  }
+  if (nibbles != 12)
+    return false;
+  memcpy(out, tmp, 6);
+  return true;
+}
+
+// ======================================================================
+// Framebuffer helpers
+// ======================================================================
+
+static inline void fb_clear(uint8_t *fb) {
+  if (!fb)
+    return;
+  memset(fb, 0, OLED_FB_BYTES);
+}
+
+static inline uint64_t fb_hash(const uint8_t *fb) {
+  if (!fb)
+    return 0;
+  uint64_t h = 1469598103934665603ULL; // FNV-1a 64-bit
+  for (size_t i = 0; i < OLED_FB_BYTES; ++i) {
+    h ^= (uint64_t)fb[i];
+    h *= 1099511628211ULL;
+  }
+  return h;
+}
+
+static void oled_task(void *arg) {
+  (void)arg;
+  uint8_t *buf = NULL;
+  for (;;) {
+    if (!s_oled_q) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+    if (xQueueReceive(s_oled_q, &buf, portMAX_DELAY) == pdTRUE && buf) {
+      oled_blit_full(buf);
+    }
+  }
+}
+
+static void startup_tone_task(void *arg) {
+  (void)arg;
+  // Let shell init continue; play tone asynchronously.
+  vTaskDelay(pdMS_TO_TICKS(50));
+  esp_err_t tone_err = audio_play_tone(440, 1000);
+  if (tone_err != ESP_OK) {
+    ESP_LOGW(TAG, "startup tone failed: %s", esp_err_to_name(tone_err));
+  } else {
+    ESP_LOGI(TAG, "startup tone played");
+  }
+  s_startup_tone_task = NULL;
+  vTaskDelete(NULL);
+}
+
+static void shell_frame_timer_cb(void *arg) {
+  TaskHandle_t task = (TaskHandle_t)arg;
+  if (task) {
+    xTaskNotifyGive(task);
+  }
+}
+
+static bool shell_frame_clock_start(void) {
+  if (s_shell_frame_timer)
+    return true;
+
+  s_shell_task = xTaskGetCurrentTaskHandle();
+  if (!s_shell_task)
+    return false;
+
+  const esp_timer_create_args_t args = {
+      .callback = shell_frame_timer_cb,
+      .arg = s_shell_task,
+      .dispatch_method = ESP_TIMER_TASK,
+      .name = "shell_frame",
+  };
+
+  esp_err_t err = esp_timer_create(&args, &s_shell_frame_timer);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "shell frame timer create failed: %s", esp_err_to_name(err));
+    s_shell_frame_timer = NULL;
+    return false;
+  }
+
+  err = esp_timer_start_periodic(s_shell_frame_timer, SHELL_FRAME_BUDGET_US);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "shell frame timer start failed: %s", esp_err_to_name(err));
+    (void)esp_timer_delete(s_shell_frame_timer);
+    s_shell_frame_timer = NULL;
+    return false;
+  }
+
+  while (ulTaskNotifyTake(pdTRUE, 0) > 0) {
+  }
+  return true;
+}
+
+static inline void shell_wait_next_frame(void) {
+  if (s_shell_frame_timer) {
+    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    return;
+  }
+
+  vTaskDelay(2);
+}
+
+static void startup_logo_task(void *arg) {
+  (void)arg;
+  anim_logo();
+  logo_set_skip_check(NULL, NULL);
+  s_logo_active = false;
+  s_logo_task = NULL;
+  vTaskDelete(NULL);
+}
+
+static bool shell_logo_skip_check(void *arg) {
+  (void)arg;
+
+  input_button_t button = INPUT_BTN_NONE;
+  int mv = 0;
+  if (!input_sample(&button, &mv)) {
+    return false;
+  }
+
+  int64_t now_us = esp_timer_get_time();
+  if (button != s_logo_skip.last_button) {
+    if (button != INPUT_BTN_NONE && s_logo_skip.last_button == INPUT_BTN_NONE &&
+        (now_us - s_logo_skip.last_press_us) >= 50000LL) {
+      s_logo_skip.press_count++;
+      s_logo_skip.last_press_us = now_us;
+    }
+    s_logo_skip.last_button = button;
+  }
+
+  return s_logo_skip.press_count >= 3;
+}
+
+static void shell_start_logo_async(void) {
+  if (s_logo_active || s_logo_task)
+    return;
+  s_logo_skip.press_count = 0;
+  s_logo_skip.last_press_us = 0;
+  s_logo_skip.last_button = INPUT_BTN_NONE;
+  {
+    input_button_t button = INPUT_BTN_NONE;
+    int mv = 0;
+    if (input_sample(&button, &mv)) {
+      s_logo_skip.last_button = button;
+    }
+  }
+  logo_set_skip_check(shell_logo_skip_check, NULL);
+  s_logo_active = true;
+  BaseType_t ok =
+      xTaskCreatePinnedToCore(startup_logo_task, "logo_boot", 3072, NULL, 1,
+                              &s_logo_task, OLED_TASK_CORE);
+  if (ok != pdPASS) {
+    s_logo_active = false;
+    s_logo_task = NULL;
+    ESP_LOGW(TAG, "logo task create failed; falling back to blocking logo");
+    anim_logo();
+    logo_set_skip_check(NULL, NULL);
+  }
+}
+
+static void shell_wait_for_logo(void) {
+  while (s_logo_active) {
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+}
+
+static inline void oled_submit_frame(void) {
+  uint8_t *just_drawn = s_render_fb;
+  s_render_fb = (s_render_fb == s_fb_oled_a) ? s_fb_oled_b : s_fb_oled_a;
+
+  uint64_t hash = fb_hash(just_drawn);
+  if (hash == s_last_submitted_hash) {
+    return;
+  }
+  s_last_submitted_hash = hash;
+  s_oled_fb = just_drawn;
+
+  if (!s_oled_task || !s_oled_q) {
+    oled_blit_full(s_oled_fb);
+    return;
+  }
+
+  uint8_t *p = s_oled_fb;
+  xQueueOverwrite(s_oled_q, &p);
+}
+
+// ======================================================================
+// App helpers
+// ======================================================================
+
+static const shell_app_desc_t *current_app(void) {
+  if (!s_ctx.registry || s_ctx.registry_count == 0 ||
+      s_current_app >= s_ctx.registry_count)
+    return NULL;
+  return &s_ctx.registry[s_current_app];
+}
+
+static const shell_app_desc_t *find_app_by_id(const char *id,
+                                              size_t *out_index) {
+  if (!s_ctx.registry || !id)
+    return NULL;
+  for (size_t i = 0; i < s_ctx.registry_count; ++i) {
+    if (s_ctx.registry[i].id && strcmp(s_ctx.registry[i].id, id) == 0) {
+      if (out_index)
+        *out_index = i;
+      return &s_ctx.registry[i];
+    }
+  }
+  return NULL;
+}
+
+static void switch_to_index(size_t idx) {
+  if (!s_ctx.registry || idx >= s_ctx.registry_count)
+    return;
+
+  const shell_app_desc_t *old = current_app();
+  if (old && old->deinit) {
+    old->deinit(&s_ctx);
+  }
+
+  s_prev_app = s_current_app;
+  s_current_app = idx;
+  s_ctx.current_index = idx;
+
+  const shell_app_desc_t *app = current_app();
+  if (app && app->init) {
+    app->init(&s_ctx);
+  }
+  ESP_LOGI(TAG, "switched to app [%s]", app ? app->id : "none");
+}
+
+static void queue_app_switch_request(const char *id, void *user_data) {
+  (void)user_data;
+  size_t idx = 0;
+  if (find_app_by_id(id, &idx)) {
+    s_queued_app_index = idx;
+    s_app_switch_queued = true;
+  } else {
+    ESP_LOGW(TAG, "request to unknown app '%s'", id ? id : "(null)");
+  }
+}
+
+static void apply_queued_app_switch(void) {
+  if (!s_app_switch_queued)
+    return;
+  s_app_switch_queued = false;
+  if (s_queued_app_index == s_current_app)
+    return;
+  switch_to_index(s_queued_app_index);
+}
+
+static void shell_graceful_restart(void) {
+  ESP_LOGI(TAG, "graceful restart: begin");
+
+  s_app_switch_queued = false;
+
+  const shell_app_desc_t *app = current_app();
+  if (app && app->deinit) {
+    ESP_LOGI(TAG, "graceful restart: deinit app [%s]", app->id ? app->id : "?");
+    app->deinit(&s_ctx);
+  }
+
+  show_runtime_stop(true);
+  led_modes_enable(false);
+  led_beat_enable(false);
+
+  fft_visualizer_stop();
+
+  audio_player_stop();
+
+  if (audio_rx_is_running()) {
+    esp_err_t rx_err = audio_rx_stop();
+    if (rx_err != ESP_OK) {
+      ESP_LOGW(TAG, "graceful restart: audio_rx_stop failed: %s",
+               esp_err_to_name(rx_err));
+    }
+  }
+
+  esp_err_t bt_stop_err = bt_audio_stop_stream();
+  if (bt_stop_err != ESP_OK && bt_stop_err != ESP_ERR_INVALID_STATE) {
+    ESP_LOGW(TAG, "graceful restart: bt stop stream failed: %s",
+             esp_err_to_name(bt_stop_err));
+  }
+  esp_err_t bt_disc_err = bt_audio_disconnect();
+  if (bt_disc_err != ESP_OK && bt_disc_err != ESP_ERR_INVALID_STATE) {
+    ESP_LOGW(TAG, "graceful restart: bt disconnect failed: %s",
+             esp_err_to_name(bt_disc_err));
+  }
+
+  esp_err_t link_frame_err = link_set_frame_rx(NULL, NULL);
+  if (link_frame_err != ESP_OK) {
+    ESP_LOGW(TAG, "graceful restart: link frame rx detach failed: %s",
+             esp_err_to_name(link_frame_err));
+  }
+  esp_err_t link_rx_err = link_set_rx(NULL, NULL);
+  if (link_rx_err != ESP_OK) {
+    ESP_LOGW(TAG, "graceful restart: link rx detach failed: %s",
+             esp_err_to_name(link_rx_err));
+  }
+
+  esp_err_t audio_err = audio_i2s_disable_all();
+  if (audio_err != ESP_OK) {
+    ESP_LOGW(TAG, "graceful restart: audio disable failed: %s",
+             esp_err_to_name(audio_err));
+  }
+
+  vTaskDelay(pdMS_TO_TICKS(120));
+  ESP_LOGI(TAG, "graceful restart: restarting now");
+  esp_restart();
+}
+
+// Link frame dispatch (shared across apps)
+// we may want to split this out into a separate component
+static void link_frame_handler(link_msg_type_t type, const uint8_t *src_mac,
+                               const uint8_t *payload, size_t len,
+                               void *user_ctx) {
+  (void)user_ctx;
+  remote_control_receive(type, src_mac, payload, len);
+  call_service_receive(type, src_mac, payload, len);
+  paint_service_receive(type, src_mac, payload, len);
+  message_direct_receive(type, src_mac, payload, len);
+  if (type == LINK_MSG_CONTROL && payload && len >= 2) {
+    show_runtime_handle_link_frame(type, src_mac, payload, len);
+    live_sync_handle_link_frame(type, src_mac, payload, len);
+  } else if (type == LINK_MSG_GAME && payload && len >= 2) {
+    pong_handle_link_frame(type, src_mac, payload, len);
+  } else if (type == LINK_MSG_INFO && payload && len >= 9) {
+    // Versioned system_state snapshot
+    uint8_t ver = payload[0];
+    if (ver == 1 && len >= 9) {
+      uint8_t led_mode = payload[1];
+      uint8_t b0 = payload[2], b1 = payload[3], b2 = payload[4];
+      system_connection_t conn = (system_connection_t)payload[5];
+      bool t_valid = payload[6] ? true : false;
+      uint8_t h = payload[7], m = payload[8];
+      system_state_set_led_mode((int)led_mode, NULL);
+      system_state_set_battery(0, b0);
+      system_state_set_battery(1, b1);
+      system_state_set_battery(2, b2);
+      system_state_set_connection(conn);
+      system_state_set_time(t_valid, h, m);
+    }
+  }
+}
+
+// ======================================================================
+// Built-in apps
+// ======================================================================
+
+static const shell_app_desc_t s_builtin_apps[] = {
+    {
+        .id = "title",
+        .name = "Title",
+        .flags = 0,
+        .legend = &MENU_LEGEND,
+        .init = NULL,
+        .deinit = NULL,
+        .tick = NULL,
+        .handle_input = NULL,
+        .draw = NULL, // blank title screen for now
+    },
+    {
+        .id = "menu",
+        .name = "Menu",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &MENU_LEGEND,
+        .init = menu_init,
+        .deinit = NULL,
+        .tick = menu_tick,
+        .handle_input = menu_handle_input,
+        .draw = menu_draw,
+    },
+    {
+        .id = "status",
+        .name = "Status",
+        .flags = SHELL_APP_FLAG_SHOW_HUD,
+        .legend = NULL,
+        .init = NULL,
+        .deinit = NULL,
+        .tick = NULL,
+        .handle_input = status_handle_input,
+        .draw = status_draw,
+    },
+    {
+        .id = "volume",
+        .name = "Volume",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &VOLUME_LEGEND,
+        .init = volume_init,
+        .deinit = NULL,
+        .tick = NULL,
+        .handle_input = volume_handle_input,
+        .draw = volume_draw,
+    },
+    {
+        .id = "gyro_calibration",
+        .name = "Gyro calibration",
+        .flags = 0,
+        .init = gyro_app_init,
+        .deinit = gyro_app_deinit,
+        .tick = gyro_app_tick,
+        .handle_input = gyro_app_input,
+        .draw = gyro_app_draw,
+    },
+    {
+        .id = "preferences",
+        .name = "Preferences",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &PREFERENCES_LEGEND,
+        .init = preferences_app_init,
+        .deinit = NULL,
+        .tick = preferences_app_tick,
+        .handle_input = preferences_app_handle_input,
+        .draw = preferences_app_draw,
+    },
+    {
+        .id = "service_restart",
+        .name = "Service Restart",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &SERVICE_RESTART_LEGEND,
+        .init = service_restart_app_init,
+        .deinit = NULL,
+        .tick = NULL,
+        .handle_input = service_restart_app_handle_input,
+        .draw = service_restart_app_draw,
+    },
+    {
+        .id = "adc_debug",
+        .name = "ADC Debug",
+        .flags = SHELL_APP_FLAG_SHOW_HUD,
+        .legend = NULL,
+        .init = adc_debug_app_init,
+        .deinit = NULL,
+        .tick = adc_debug_app_tick,
+        .handle_input = adc_debug_app_handle_input,
+        .draw = adc_debug_app_draw,
+    },
+    {
+        .id = "calculator",
+        .name = "Calculator",
+        .flags = SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &CALCULATOR_LEGEND,
+        .init = calculator_app_init,
+        .deinit = NULL,
+        .tick = NULL,
+        .handle_input = calculator_app_handle_input,
+        .draw = calculator_app_draw,
+    },
+    {
+        .id = "leds_animations",
+        .name = "Beat Animations",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &LEDS_LEGEND,
+        .init = leds_animations_app_init,
+        .deinit = leds_app_deinit,
+        .tick = leds_app_tick,
+        .handle_input = leds_app_handle_input,
+        .draw = leds_app_draw,
+    },
+    {
+        .id = "leds_ambient",
+        .name = "Ambient Animations",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &LEDS_LEGEND,
+        .init = leds_ambient_app_init,
+        .deinit = leds_app_deinit,
+        .tick = leds_app_tick,
+        .handle_input = leds_app_handle_input,
+        .draw = leds_app_draw,
+    },
+    {
+        .id = "leds_source",
+        .name = "LED Source",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &LED_SOURCE_LEGEND,
+        .init = led_source_app_init,
+        .deinit = NULL,
+        .tick = led_source_app_tick,
+        .handle_input = led_source_app_handle_input,
+        .draw = led_source_app_draw,
+    },
+    {
+        .id = "leds_color",
+        .name = "LED Color",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &LED_COLOR_LEGEND,
+        .init = led_color_app_init,
+        .deinit = led_color_app_deinit,
+        .tick = led_color_app_tick,
+        .handle_input = led_color_app_handle_input,
+        .draw = led_color_app_draw,
+    },
+    {
+        .id = "leds_layout",
+        .name = "LED Layout",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &LED_LAYOUT_LEGEND,
+        .init = led_layout_app_init,
+        .deinit = led_layout_app_deinit,
+        .tick = led_layout_app_tick,
+        .handle_input = led_layout_app_handle_input,
+        .draw = led_layout_app_draw,
+    },
+    {
+        .id = "manual_bpm",
+        .name = "Manual BPM",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &MANUAL_BPM_LEGEND,
+        .init = manual_bpm_app_init,
+        .deinit = manual_bpm_app_deinit,
+        .tick = manual_bpm_app_tick,
+        .handle_input = manual_bpm_app_handle_input,
+        .draw = manual_bpm_app_draw,
+    },
+    {
+        .id = "led_controller",
+        .name = "LED Controller",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &FFT_SYNC_LEGEND,
+        .init = fft_sync_app_init,
+        .deinit = fft_sync_app_deinit,
+        .tick = fft_sync_app_tick,
+        .handle_input = fft_sync_app_handle_input,
+        .draw = fft_sync_app_draw,
+    },
+    {
+        .id = "music",
+        .name = "Music",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &MUSIC_LEGEND,
+        .init = music_app_init,
+        .deinit = NULL,
+        .tick = NULL,
+        .handle_input = music_app_handle_input,
+        .draw = music_app_draw,
+    },
+    {
+        .id = "show_player",
+        .name = "Shows",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &SHOW_PLAYER_LEGEND,
+        .init = show_player_app_init,
+        .deinit = show_player_app_deinit,
+        .tick = NULL,
+        .handle_input = show_player_app_handle_input,
+        .draw = show_player_app_draw,
+    },
+    {
+        .id = "bt",
+        .name = "Bluetooth",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &BT_AUDIO_LEGEND,
+        .init = bt_app_init_wrapper,
+        .deinit = bt_app_deinit_wrapper,
+        .tick = NULL,
+        .handle_input = bt_handle_input_wrapper,
+        .draw = bt_draw_wrapper,
+    },
+    {
+        .id = "call",
+        .name = "Call",
+        .flags = SHELL_APP_FLAG_SHOW_HUD,
+        .init = call_app_init,
+        .deinit = call_app_deinit,
+        .handle_input = call_app_handle_input,
+        .draw = call_app_draw,
+    },
+    {
+        .id = "message",
+        .name = "Message",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &MESSAGE_LEGEND,
+        .init = message_app_init,
+        .deinit = message_app_deinit,
+        .tick = NULL,
+        .handle_input = message_app_handle_input,
+        .draw = message_app_draw,
+    },
+    {
+        .id = "remote_control",
+        .name = "Remote Control",
+        .flags = SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &REMOTE_CONTROL_LEGEND,
+        .init = remote_control_app_init,
+        .deinit = remote_control_app_deinit,
+        .tick = remote_control_app_tick,
+        .handle_input = remote_control_app_handle_input,
+        .draw = remote_control_app_draw,
+    },
+    {
+        .id = "file_rx",
+        .name = "File RX",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &FILE_RX_LEGEND,
+        .init = file_rx_app_init,
+        .deinit = NULL,
+        .tick = NULL,
+        .handle_input = file_rx_app_handle_input,
+        .draw = file_rx_app_draw,
+    },
+    {
+        .id = "keyboard",
+        .name = "Keyboard",
+        .flags = 0,
+        .legend = &KEYBOARD_LEGEND,
+        .init = keyboard_app_init,
+        .deinit = NULL,
+        .tick = keyboard_app_tick,
+        .handle_input = keyboard_app_handle_input,
+        .draw = keyboard_app_draw,
+    },
+    {
+        .id = "fft",
+        .name = "FFT viewer",
+        .flags = 0,
+        .legend = NULL,
+        .init = fft_app_init,
+        .deinit = fft_app_deinit,
+        .tick = NULL,
+        .handle_input = fft_stub_handle_input,
+        .draw = fft_app_draw,
+    },
+    {
+        .id = "fluid",
+        .name = "Fluid",
+        .flags = 0,
+        .legend = NULL,
+        .init = fluid_app_init_wrapper,
+        .deinit = fluid_app_deinit_wrapper,
+        .tick = fluid_app_tick_wrapper,
+        .handle_input = fluid_app_handle_input_wrapper,
+        .draw = fluid_app_draw_wrapper,
+    },
+    {
+        .id = "synth",
+        .name = "Arm Synth",
+        .init = synth_init,
+        .deinit = synth_deinit,
+        .handle_input = synth_input,
+        .tick = synth_tick,
+        .draw = synth_draw,
+    },
+    {
+        .id = "light_paint",
+        .name = "Light Paint",
+        .flags = 0,
+        .legend = NULL,
+        .init = light_paint_init,
+        .deinit = light_paint_deinit,
+        .handle_input = light_paint_input,
+        .tick = light_paint_tick,
+        .draw = light_paint_draw,
+    },
+    {
+        .id = "stickman",
+        .name = "Arm Pose",
+        .flags = SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &STICKMAN_LEGEND,
+        .init = stickman_app_init,
+        .deinit = stickman_app_deinit,
+        .tick = NULL,
+        .handle_input = stickman_app_handle_input,
+        .draw = stickman_app_draw,
+    },
+    {
+        .id = "threedee",
+        .name = "3D Render",
+        .flags = 0,
+        .legend = NULL,
+        .init = threedee_app_init,
+        .deinit = threedee_app_deinit,
+        .tick = threedee_app_tick,
+        .handle_input = threedee_app_handle_input,
+        .draw = threedee_app_draw,
+    },
+    {
+        .id = "bad_apple",
+        .name = "Bad Apple",
+        .flags = 0,
+        .legend = NULL,
+        .init = bad_apple_app_init,
+        .deinit = bad_apple_app_deinit,
+        .tick = bad_apple_app_tick,
+        .handle_input = bad_apple_app_handle_input,
+        .draw = bad_apple_app_draw,
+    },
+    {
+        .id = "pong",
+        .name = "Pong",
+        .flags = SHELL_APP_FLAG_SHOW_HUD | SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &PONG_LEGEND,
+        .init = pong_app_init_wrapper,
+        .deinit = pong_app_deinit_wrapper,
+        .tick = pong_tick_wrapper,
+        .handle_input = pong_handle_input_wrapper,
+        .draw = pong_draw_wrapper,
+    },
+    {
+        .id = "snake",
+        .name = "Snake",
+        .flags = SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &SNAKE_LEGEND,
+        .init = snake_app_init,
+        .deinit = NULL,
+        .tick = snake_app_tick,
+        .handle_input = snake_app_handle_input,
+        .draw = snake_app_draw,
+    },
+    {
+        .id = "flappy",
+        .name = "Flappy",
+        .flags = 0,
+        .legend = NULL,
+        .init = flappy_app_init,
+        .deinit = flappy_app_deinit,
+        .tick = flappy_app_tick,
+        .handle_input = flappy_app_handle_input,
+        .draw = flappy_draw_wrapper,
+    },
+    {
+        .id = "t2048",
+        .name = "2048",
+        .flags = SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &T2048_LEGEND,
+        .init = t2048_app_init,
+        .deinit = t2048_app_deinit,
+        .tick = t2048_app_tick,
+        .handle_input = t2048_app_handle_input,
+        .draw = t2048_draw_wrapper,
+    },
+    {
+        .id = "tetris",
+        .name = "Tetris",
+        .flags = SHELL_APP_FLAG_SHOW_LEGEND,
+        .legend = &TETRIS_LEGEND,
+        .init = tetris_app_init,
+        .deinit = tetris_app_deinit,
+        .tick = tetris_app_tick,
+        .handle_input = tetris_app_handle_input,
+        .draw = tetris_draw_wrapper,
+    },
+};
+
+// ======================================================================
+// Shell loop
+// ======================================================================
+
+static void process_input_events(const shell_app_desc_t *app,
+                                 TickType_t now_ticks) {
+  input_event_t ev;
+  while (input_poll(&ev, now_ticks)) {
+    remote_control_role_t remote_role = remote_control_role();
+    if (remote_role != REMOTE_CONTROL_OFF) {
+      // The target's physical controls are fully leased. The controller
+      // forwards only A-D through its host app. Combo events stay local
+      // and the frame loop handles the shared extra-long A+B escape.
+      if (remote_role == REMOTE_CONTROL_TARGET ||
+          ev.button == INPUT_BTN_AB_COMBO || ev.button == INPUT_BTN_BC_COMBO) {
+        continue;
+      }
+      if (app && app->id && strcmp(app->id, "remote_control") == 0 &&
+          app->handle_input) {
+        app->handle_input(&s_ctx, &ev);
+      }
+      continue;
+    }
+    // Any press on the title screen jumps to menu
+    if (ev.type == INPUT_EVENT_PRESS &&
+        (!app || (app->id && strcmp(app->id, "title") == 0))) {
+      queue_app_switch_request("menu", NULL);
+      continue;
+    }
+    // Global escape to menu
+    if (ev.type == INPUT_EVENT_LONG_PRESS) {
+      if (ev.button == INPUT_BTN_AB_COMBO) {
+        queue_app_switch_request("menu", NULL);
+        continue;
+      } else if (ev.button == INPUT_BTN_BC_COMBO) {
+        shell_graceful_restart();
+        return;
+      }
+    }
+    if (app && app->handle_input) {
+      app->handle_input(&s_ctx, &ev);
+    }
+    apply_queued_app_switch();
+    app = current_app();
+    if (!app)
+      break;
+  }
+}
+
+static void service_remote_exit_gesture(TickType_t now_ticks) {
+  if (!remote_control_active()) {
+    s_remote_exit_tracking = false;
+    return;
+  }
+  if (input_current_button() != INPUT_BTN_AB_COMBO) {
+    s_remote_exit_tracking = false;
+    return;
+  }
+  if (!s_remote_exit_tracking) {
+    s_remote_exit_tracking = true;
+    s_remote_exit_started = now_ticks;
+    return;
+  }
+  if (now_ticks - s_remote_exit_started < pdMS_TO_TICKS(3000))
+    return;
+  s_remote_exit_tracking = false;
+  remote_control_end();
+  queue_app_switch_request("menu", NULL);
+}
+
+static void process_remote_commands(void) {
+  remote_control_command_t command;
+  while (remote_control_poll_command(&command)) {
+    if (command.kind == REMOTE_CONTROL_COMMAND_HOME ||
+        command.kind == REMOTE_CONTROL_COMMAND_END) {
+      queue_app_switch_request("menu", NULL);
+      apply_queued_app_switch();
+      continue;
+    }
+    if (command.kind != REMOTE_CONTROL_COMMAND_INPUT ||
+        remote_control_role() != REMOTE_CONTROL_TARGET)
+      continue;
+    const shell_app_desc_t *app = current_app();
+    if (app && app->handle_input)
+      app->handle_input(&s_ctx, &command.input);
+    apply_queued_app_switch();
+  }
+}
+
+static bool shell_init_hw_and_display(void) {
+  ESP_LOGI(TAG, "stage: start");
+  esp_err_t spi2 = hw_spi2_init_once();
+  if (spi2 != ESP_OK) {
+    ESP_LOGE(TAG, "spi2 init failed: %s", esp_err_to_name(spi2));
+    return false;
+  }
+  hw_gpio_init();
+  oled_init();
+  oled_clear();
+  s_render_fb = s_fb_oled_a;
+  s_oled_fb = s_fb_oled_b;
+  fb_clear(s_fb_oled_a);
+  fb_clear(s_fb_oled_b);
+  s_last_submitted_hash = UINT64_MAX;
+  if (!s_oled_q) {
+    s_oled_q = xQueueCreate(1, sizeof(uint8_t *));
+    if (!s_oled_q) {
+      ESP_LOGE(TAG, "oled queue create failed");
+      return false;
+    }
+  }
+  if (!s_oled_task) {
+    BaseType_t ok = xTaskCreatePinnedToCore(oled_task, "oled", 2048, NULL, 2,
+                                            &s_oled_task, OLED_TASK_CORE);
+    if (ok != pdPASS) {
+      ESP_LOGE(TAG, "oled task create failed");
+      s_oled_task = NULL;
+      return false;
+    }
+  }
+
+  shell_start_logo_async();
+
+  // Audio bus for FFT (shared RX/TX)
+  if (!audio_bus_init_if_needed()) {
+    ESP_LOGE(TAG, "audio_init failed; FFT won't run");
+  } else {
+    // Startup speaker sanity check (async so shell task does not trip WDT).
+    if (!s_startup_tone_task) {
+      BaseType_t ok =
+          xTaskCreatePinnedToCore(startup_tone_task, "tone_boot", 3072, NULL, 1,
+                                  &s_startup_tone_task, APP_TASK_CORE);
+      if (ok != pdPASS) {
+        s_startup_tone_task = NULL;
+        ESP_LOGW(TAG, "startup tone task create failed");
+      }
+    }
+  }
+
+  esp_err_t ori = orientation_service_start();
+  if (ori != ESP_OK) {
+    ESP_LOGW(TAG, "orientation service not started: %s", esp_err_to_name(ori));
+  }
+
+  return true;
+}
+
+static void shell_setup_link(void) {
+  const char *mac_str = CONFIG_LINK_ESPNOW_PEER_MAC;
+  const uint8_t *peer_mac = NULL;
+  if (mac_str && mac_str[0] && parse_mac_string(mac_str, s_peer_mac_cfg)) {
+    peer_mac = s_peer_mac_cfg;
+  }
+  // Keep shell boot on ESP-NOW only. Wi-Fi telemetry and file transfer
+  // are still available from apps that start them on demand.
+  link_config_t link_cfg = {
+      .ssid = NULL,
+      .pass = NULL,
+      .pc_ip = NULL,
+      .pc_port = 0,
+      .espnow_peer_mac = peer_mac,
+  };
+  bool link_ok = false;
+  esp_err_t link_err = link_init(&link_cfg);
+  if (link_err != ESP_OK) {
+    ESP_LOGW(TAG, "link init failed: %s", esp_err_to_name(link_err));
+  } else {
+    link_ok = true;
+  }
+  if (link_ok) {
+    (void)link_set_frame_rx(link_frame_handler, NULL);
+    (void)link_start_info_broadcast(1000);
+  }
+}
+
+static void shell_seed_initial_system_state(void) {
+  {
+    if (led_beat_enabled()) {
+      int led_mode = (int)led_beat_anim_get();
+      const char *label = led_beat_anim_name(led_mode);
+      system_state_set_led_mode(100 + led_mode, label ? label : "beat");
+    } else {
+      int led_mode = led_modes_current();
+      const char *label = led_modes_name(led_mode);
+      system_state_set_led_mode(led_mode, label ? label : "ambient");
+    }
+  }
+  system_state_set_battery(0, 80);
+  system_state_set_battery(1, 65);
+  system_state_set_battery(2, 50);
+  system_state_set_connection(SYS_CONN_CONNECTING);
+}
+
+static void shell_init_input_and_apps(void) {
+  input_init();
+  input_set_activity_callback(input_audio_policy_activity);
+
+  s_ctx.registry = s_builtin_apps;
+  s_ctx.registry_count = sizeof(s_builtin_apps) / sizeof(s_builtin_apps[0]);
+  s_ctx.request_switch = queue_app_switch_request;
+  s_ctx.request_user_data = NULL;
+
+  // Boot straight into the menu (skip blank title screen)
+  size_t menu_idx = 0;
+  if (!find_app_by_id("menu", &menu_idx)) {
+    menu_idx = 0;
+  }
+  s_current_app = menu_idx;
+  s_prev_app = menu_idx;
+  switch_to_index(menu_idx);
+}
+
+static void shell_run_loop(void) {
+  int64_t last_tick_us = esp_timer_get_time();
+  (void)shell_frame_clock_start();
+  ESP_LOGI(TAG, "stage: enter loop");
+
+  while (1) {
+    int64_t frame_work_start_us = esp_timer_get_time();
+    uint32_t tick_us = 0;
+    uint32_t draw_us = 0;
+
+    int64_t now_us = frame_work_start_us;
+    float dt_sec = (float)(now_us - last_tick_us) * 1e-6f;
+    if (dt_sec < 0.0f)
+      dt_sec = 0.0f;
+    last_tick_us = now_us;
+
+    TickType_t now = xTaskGetTickCount();
+
+    bt_audio_event_t bt_event;
+    while (bt_audio_poll_event(&bt_event)) {
+      if (bt_event == BT_AUDIO_EVENT_DISCONNECTED) {
+        audio_player_notify_bt_disconnected();
+      } else if (bt_event == BT_AUDIO_EVENT_PLAY_PAUSE) {
+        (void)audio_player_toggle_play_pause();
+      }
+    }
+
+    const shell_app_desc_t *app = current_app();
+    process_input_events(app, now);
+    service_remote_exit_gesture(now);
+    remote_control_service_tick();
+    process_remote_commands();
+    apply_queued_app_switch();
+    app = current_app();
+    if (!app) {
+      uint32_t work_us = (uint32_t)(esp_timer_get_time() - frame_work_start_us);
+      performance_monitor_on_frame("none", false, SHELL_FRAME_BUDGET_US, 0, 0,
+                                   work_us);
+      shell_wait_next_frame();
+      continue;
+    }
+
+    show_runtime_service_tick(dt_sec);
+    if (!show_runtime_owns_leds()) {
+      led_source_service_tick(dt_sec);
+      live_sync_service_tick(dt_sec);
+    }
+
+    if (app->tick && !live_sync_blocks_app_tick(app->id)) {
+      int64_t t0 = esp_timer_get_time();
+      app->tick(&s_ctx, dt_sec);
+      tick_us = (uint32_t)(esp_timer_get_time() - t0);
+    }
+
+    fft_sync_state_t fft_state = {0};
+    fft_get_sync_state(&fft_state);
+    uint16_t fft_bpm_centi = (fft_state.running && fft_state.bpm > 0.5f)
+                                 ? (uint16_t)(fft_state.bpm * 100.0f + 0.5f)
+                                 : 0u;
+    system_state_set_fft_status(fft_state.running, fft_bpm_centi);
+    live_sync_status_t sync = {0};
+    live_sync_get_status(&sync);
+    system_live_sync_t sync_state = SYS_LIVE_SYNC_LOCAL;
+    if (sync.following && sync.source_role < 3) {
+      sync_state =
+          (system_live_sync_t)(SYS_LIVE_SYNC_FOLLOW_A + sync.source_role);
+    }
+    system_state_set_live_sync(sync_state, sync.linked);
+
+    system_state_t state_snapshot = system_state_get();
+    s_ctx.state = &state_snapshot;
+
+    if (!(app->flags & SHELL_APP_FLAG_EXTERNAL)) {
+      fb_clear(s_render_fb);
+      shell_ui_capture_begin();
+
+      int content_y =
+          (app->flags & SHELL_APP_FLAG_SHOW_HUD) ? SHELL_UI_HUD_HEIGHT : 0;
+      int content_h =
+          PANEL_H - content_y -
+          ((app->flags & SHELL_APP_FLAG_SHOW_LEGEND) ? SHELL_UI_LEGEND_HEIGHT
+                                                     : 0);
+      if (content_h < 0)
+        content_h = 0;
+
+      if (app->draw) {
+        int64_t t0 = esp_timer_get_time();
+        app->draw(&s_ctx, s_render_fb, 0, content_y, PANEL_W, content_h);
+        draw_us = (uint32_t)(esp_timer_get_time() - t0);
+      }
+
+      if (app->flags & SHELL_APP_FLAG_SHOW_HUD) {
+        const char *hud_label = state_snapshot.led_mode_name;
+        if (app->id && strcmp(app->id, "menu") == 0) {
+          hud_label = menu_hud_label();
+        }
+        shell_ui_draw_hud(s_render_fb, &state_snapshot, hud_label);
+      }
+
+      if (app->flags & SHELL_APP_FLAG_SHOW_LEGEND) {
+        if (app->legend) {
+          shell_ui_draw_legend(s_render_fb, app->legend);
+        }
+      }
+
+      remote_control_role_t remote_role = remote_control_role();
+      if (remote_role != REMOTE_CONTROL_OFF) {
+        shell_ui_draw_remote_corners(s_render_fb,
+                                     remote_role == REMOTE_CONTROL_CONTROLLER);
+      }
+      if (remote_role == REMOTE_CONTROL_TARGET) {
+        shell_ui_capture_t capture;
+        remote_control_view_t remote_view = {0};
+        shell_ui_capture_get(&capture);
+        remote_view.kind = capture.kind == SHELL_UI_CAPTURE_MENU
+                               ? REMOTE_CONTROL_VIEW_MENU
+                               : (capture.kind == SHELL_UI_CAPTURE_GRID
+                                      ? REMOTE_CONTROL_VIEW_GRID
+                                      : REMOTE_CONTROL_VIEW_NONE);
+        remote_view.total_count = capture.total_count;
+        remote_view.selected = capture.selected;
+        remote_view.first = capture.first;
+        remote_view.entry_count = capture.entry_count;
+        for (unsigned i = 0; i < 4; ++i)
+          remote_view.legend[i] = (uint8_t)capture.legend.slots[i];
+        snprintf(remote_view.title, sizeof(remote_view.title), "%s",
+                 capture.title);
+        memcpy(remote_view.labels, capture.labels, sizeof(remote_view.labels));
+        remote_control_publish_view(app->id, &remote_view);
+      }
+
+      oled_submit_frame();
+    }
+
+    uint32_t work_us = (uint32_t)(esp_timer_get_time() - frame_work_start_us);
+    performance_monitor_on_frame(
+        app->id ? app->id : "none", (app->flags & SHELL_APP_FLAG_EXTERNAL) != 0,
+        SHELL_FRAME_BUDGET_US, tick_us, draw_us, work_us);
+    shell_wait_next_frame();
+  }
+}
+
+void app_shell_start(void) {
+  if (!shell_init_hw_and_display())
+    return;
+  ESP_LOGI(TAG, "stage: oled, audio and imu init done");
+  system_state_init();
+  ESP_LOGI(TAG, "stage: system_state_init done");
+  settings_init();
+  (void)gyro_calibration_load();
+  ESP_LOGI(TAG, "stage: settings init done");
+  {
+    esp_err_t layout_err = led_layout_init();
+    if (layout_err != ESP_OK) {
+      ESP_LOGW(TAG, "led_layout init warning: %s", esp_err_to_name(layout_err));
+    }
+  }
+  {
+    esp_err_t led_settings_err = settings_apply_led_runtime();
+    if (led_settings_err != ESP_OK) {
+      ESP_LOGW(TAG, "LED settings apply warning: %s",
+               esp_err_to_name(led_settings_err));
+    }
+  }
+  {
+    esp_err_t show_err = show_runtime_init();
+    if (show_err != ESP_OK) {
+      ESP_LOGW(TAG, "show runtime init warning: %s", esp_err_to_name(show_err));
+    }
+  }
+  // (void)led_modes_start();     // temporarily disabled
+  // (void)power_monitor_start(); // temporarily disabled
+  shell_setup_link(); // TODO: better names for these setup stages? and sepaate
+                      // components for each service init?
+  ESP_LOGI(TAG, "stage: link setup done");
+  shell_seed_initial_system_state();
+  shell_init_input_and_apps();
+  performance_monitor_init();
+  shell_wait_for_logo();
+  ESP_LOGI(TAG, "stage: input init and app init done");
+  shell_run_loop();
+}

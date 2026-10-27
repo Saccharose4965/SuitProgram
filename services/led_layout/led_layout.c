@@ -35,6 +35,7 @@ static SemaphoreHandle_t s_lock = NULL;
 
 static void layout_fill_default(led_layout_config_t *cfg);
 static void layout_finalize(led_layout_config_t *cfg);
+static bool layout_load_file_locked(const char *path, led_layout_config_t *cfg);
 
 typedef struct {
     const char *name;
@@ -1081,24 +1082,29 @@ static esp_err_t layout_build_path(char *out, size_t out_sz)
     return storage_sd_make_path(out, out_sz, LED_LAYOUT_FILE_NAME);
 }
 
-static esp_err_t layout_save_to_sd_locked(const led_layout_config_t *cfg)
+static bool layout_build_recovery_paths(char *path, size_t path_sz,
+                                        char *tmp_path, size_t tmp_sz,
+                                        char *bak_path, size_t bak_sz)
 {
-    if (!cfg) return ESP_ERR_INVALID_ARG;
-    ESP_RETURN_ON_ERROR(storage_mount_sd(), TAG, "mount sd");
+    if (layout_build_path(path, path_sz) != ESP_OK) return false;
+    int tmp_len = snprintf(tmp_path, tmp_sz, "%s.tmp", path);
+    int bak_len = snprintf(bak_path, bak_sz, "%s.bak", path);
+    return tmp_len > 0 && (size_t)tmp_len < tmp_sz &&
+           bak_len > 0 && (size_t)bak_len < bak_sz;
+}
 
-    char path[96];
-    ESP_RETURN_ON_ERROR(layout_build_path(path, sizeof(path)), TAG, "path");
+static esp_err_t layout_write_file_locked(const char *path,
+                                          const led_layout_config_t *cfg)
+{
+    if (!path || !cfg) return ESP_ERR_INVALID_ARG;
 
-    char tmp_path[104];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
-
-    FILE *f = fopen(tmp_path, "w");
+    FILE *f = fopen(path, "w");
     if (!f) {
-        ESP_LOGW(TAG, "open write failed: %s", tmp_path);
+        ESP_LOGW(TAG, "open write failed: %s", path);
         return ESP_FAIL;
     }
 
-    fprintf(f, "version=2\n");
+    fprintf(f, "version=3\n");
     fprintf(f, "profile=%s\n", cfg->profile);
     fprintf(f, "strip_count=%u\n", (unsigned)cfg->strip_count);
     for (size_t strip = 0; strip < cfg->strip_count; ++strip) {
@@ -1128,28 +1134,78 @@ static esp_err_t layout_save_to_sd_locked(const led_layout_config_t *cfg)
             fprintf(f, "section%u_sweep_deg=%.5f\n", (unsigned)i, sec->sweep_deg);
         }
     }
+    fprintf(f, "complete=1\n");
 
-    fflush(f);
+    bool write_ok = !ferror(f) && fflush(f) == 0;
     int fd = fileno(f);
-    if (fd >= 0) {
-        fsync(fd);
-    }
-    fclose(f);
-
-    if (rename(tmp_path, path) != 0) {
-        int rename_errno = errno;
-
-        // FAT/VFS often refuses rename-over-existing; remove old file and retry.
-        if (unlink(path) == 0) {
-            if (rename(tmp_path, path) == 0) {
-                return ESP_OK;
-            }
-            rename_errno = errno;
-        }
-
-        unlink(tmp_path);
-        ESP_LOGW(TAG, "rename failed: %s -> %s (errno=%d)", tmp_path, path, rename_errno);
+    if (fd < 0 || fsync(fd) != 0) write_ok = false;
+    if (fclose(f) != 0) write_ok = false;
+    if (!write_ok) {
+        unlink(path);
+        ESP_LOGW(TAG, "layout write/sync failed: %s", path);
         return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t layout_promote_temp_locked(const char *path,
+                                            const char *tmp_path,
+                                            const char *bak_path)
+{
+    // Validate the synced candidate before changing either recoverable copy.
+    static EXT_RAM_BSS_ATTR led_layout_config_t candidate;
+    if (!layout_load_file_locked(tmp_path, &candidate)) return ESP_ERR_INVALID_RESPONSE;
+
+    static EXT_RAM_BSS_ATTR led_layout_config_t previous;
+    bool primary_valid = layout_load_file_locked(path, &previous);
+    if (primary_valid) {
+        (void)unlink(bak_path);
+        if (rename(path, bak_path) != 0) {
+            ESP_LOGW(TAG, "backup rename failed: %s -> %s (errno=%d)",
+                     path, bak_path, errno);
+            return ESP_FAIL;
+        }
+    } else {
+        (void)unlink(path);
+    }
+
+    if (rename(tmp_path, path) == 0) return ESP_OK;
+
+    int promote_errno = errno;
+    if (primary_valid) {
+        // Best effort restores the prior primary. If FAT refuses, the valid
+        // backup remains available to startup recovery.
+        if (rename(bak_path, path) != 0) {
+            ESP_LOGW(TAG, "primary restore failed: %s -> %s (errno=%d)",
+                     bak_path, path, errno);
+        }
+    }
+    ESP_LOGW(TAG, "layout promote failed: %s -> %s (errno=%d)",
+             tmp_path, path, promote_errno);
+    return ESP_FAIL;
+}
+
+static esp_err_t layout_save_to_sd_locked(const led_layout_config_t *cfg)
+{
+    if (!cfg) return ESP_ERR_INVALID_ARG;
+    ESP_RETURN_ON_ERROR(storage_mount_sd(), TAG, "mount sd");
+
+    char path[96];
+    char tmp_path[104];
+    char bak_path[104];
+    if (!layout_build_recovery_paths(path, sizeof(path),
+                                     tmp_path, sizeof(tmp_path),
+                                     bak_path, sizeof(bak_path))) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    esp_err_t write_err = layout_write_file_locked(tmp_path, cfg);
+    if (write_err != ESP_OK) return write_err;
+
+    esp_err_t promote_err = layout_promote_temp_locked(path, tmp_path, bak_path);
+    if (promote_err != ESP_OK) {
+        // Keep a complete temporary file for startup recovery.
+        return promote_err;
     }
     return ESP_OK;
 }
@@ -1172,14 +1228,9 @@ static bool layout_parse_key_index(const char *key,
     return true;
 }
 
-static bool layout_load_from_sd_locked(led_layout_config_t *cfg)
+static bool layout_load_file_locked(const char *path, led_layout_config_t *cfg)
 {
-    if (!cfg) return false;
-
-    char path[96];
-    if (layout_build_path(path, sizeof(path)) != ESP_OK) {
-        return false;
-    }
+    if (!path || !cfg) return false;
 
     FILE *f = fopen(path, "r");
     if (!f) return false;
@@ -1187,6 +1238,9 @@ static bool layout_load_from_sd_locked(led_layout_config_t *cfg)
     // Protected by the layout mutex; keep the large parse buffer off task stacks.
     static EXT_RAM_BSS_ATTR led_layout_config_t tmp;
     layout_fill_default(&tmp);
+    uint32_t file_version = 0;
+    bool saw_version = false;
+    bool complete = false;
 
     char line[160];
     while (fgets(line, sizeof(line), f)) {
@@ -1200,7 +1254,12 @@ static bool layout_load_from_sd_locked(led_layout_config_t *cfg)
 
         uint32_t index = 0;
         const char *suffix = NULL;
-        if (strcmp(key, "profile") == 0) {
+        if (strcmp(key, "version") == 0) {
+            saw_version = parse_u32(val, &file_version);
+        } else if (strcmp(key, "complete") == 0) {
+            bool value = false;
+            complete = parse_bool(val, &value) && value;
+        } else if (strcmp(key, "profile") == 0) {
             copy_name(tmp.profile, sizeof(tmp.profile), val);
         } else if (strcmp(key, "strip_count") == 0) {
             uint32_t count = 0;
@@ -1266,7 +1325,10 @@ static bool layout_load_from_sd_locked(led_layout_config_t *cfg)
         }
     }
 
+    bool read_ok = !ferror(f);
     fclose(f);
+    if (!read_ok) return false;
+    if (saw_version && file_version >= 3 && !complete) return false;
     layout_upgrade_legacy_names(&tmp);
     // Add absent leg placeholders to existing chestplate files without changing
     // any physical address, saved length, direction or custom geometry.
@@ -1290,6 +1352,46 @@ static bool layout_load_from_sd_locked(led_layout_config_t *cfg)
     layout_finalize(&tmp);
     *cfg = tmp;
     return true;
+}
+
+static bool layout_load_from_sd_locked(led_layout_config_t *cfg)
+{
+    if (!cfg) return false;
+
+    char path[96];
+    char tmp_path[104];
+    char bak_path[104];
+    if (!layout_build_recovery_paths(path, sizeof(path),
+                                     tmp_path, sizeof(tmp_path),
+                                     bak_path, sizeof(bak_path))) {
+        return false;
+    }
+
+    static EXT_RAM_BSS_ATTR led_layout_config_t recovered;
+
+    // A complete temporary file is the newest synced save. Promote it before
+    // considering the prior primary.
+    if (layout_load_file_locked(tmp_path, &recovered)) {
+        esp_err_t promote = layout_promote_temp_locked(path, tmp_path, bak_path);
+        if (promote != ESP_OK) {
+            ESP_LOGW(TAG, "using recovered temporary layout in memory");
+        }
+        *cfg = recovered;
+        return true;
+    }
+    (void)unlink(tmp_path);
+
+    if (layout_load_file_locked(path, cfg)) return true;
+
+    if (layout_load_file_locked(bak_path, &recovered)) {
+        (void)unlink(path);
+        if (rename(bak_path, path) != 0) {
+            ESP_LOGW(TAG, "using backup layout; primary restore failed (errno=%d)", errno);
+        }
+        *cfg = recovered;
+        return true;
+    }
+    return false;
 }
 
 static bool section_sample_polyline(const led_layout_section_t *sec, float t, led_point_t *out)

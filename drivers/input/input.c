@@ -71,6 +71,11 @@ bool input_sample(input_button_t *out_btn, int *out_mv)
     return true;
 }
 
+input_button_t input_current_button(void)
+{
+    return s_prev_btn;
+}
+
 void input_init(void)
 {
     // Ensure ADC is ready for ladder sampling.

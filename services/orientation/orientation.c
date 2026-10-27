@@ -1,5 +1,4 @@
 #include "orientation.h"
-#include "orientation_reference.h"
 #include <math.h>
 
 #ifndef M_PI
@@ -40,33 +39,6 @@ static inline vec3 v3_normed(vec3 a){
  * ========================= */
 
 static inline imu_quat_t q_ident(void){ return (imu_quat_t){1,0,0,0}; }
-
-static inline imu_quat_t q_conj(imu_quat_t q){
-    return (imu_quat_t){ q.w, -q.x, -q.y, -q.z };
-}
-
-static inline imu_quat_t q_mul(imu_quat_t a, imu_quat_t b){
-    return (imu_quat_t){
-        .w = a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z,
-        .x = a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
-        .y = a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
-        .z = a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w
-    };
-}
-
-static inline imu_quat_t q_normed(imu_quat_t q){
-    float n = sqrtf(q.w*q.w + q.x*q.x + q.y*q.y + q.z*q.z);
-    if (n < 1e-9f) return q_ident();
-    float inv = 1.0f/n;
-    q.w*=inv; q.x*=inv; q.y*=inv; q.z*=inv;
-    return q;
-}
-
-static inline vec3 q_rotate(imu_quat_t q, vec3 v){
-    imu_quat_t p = {0, v.x, v.y, v.z};
-    imu_quat_t r = q_mul(q_mul(q,p), q_conj(q));
-    return v3(r.x,r.y,r.z);
-}
 
 static inline vec3 map_accel(float ax,float ay,float az){
     return v3(ax, ay, az);
@@ -166,7 +138,6 @@ void imu_orientation_init(imu_orientation_t *st, float beta)
     st->have_sample = false;
     st->t_prev_us = 0;
     st->q_BW = q_ident();
-    st->q_zero = q_ident();
     st->beta = (beta > 0.0f) ? beta : 0.05f;
     st->gyro_bias_dps[0]=GYRO_BIAS_X_DPS;
     st->gyro_bias_dps[1]=GYRO_BIAS_Y_DPS;
@@ -176,20 +147,6 @@ void imu_orientation_init(imu_orientation_t *st, float beta)
 bool imu_orientation_ready(const imu_orientation_t *st)
 {
     return st && st->ready && st->have_sample;
-}
-
-void imu_orientation_recenter(imu_orientation_t *st)
-{
-    if (!st || !st->ready) return;
-    (void)orientation_reference_calibrate(&st->q_zero, st->q_BW);
-}
-
-imu_quat_t imu_orientation_get(const imu_orientation_t *st)
-{
-    if (!st) return q_ident();
-    // return relative orientation (zeroed)
-    imu_quat_t q = q_mul(q_conj(st->q_zero), st->q_BW);
-    return q_normed(q);
 }
 
 void imu_orientation_update(
@@ -210,7 +167,6 @@ void imu_orientation_update(
         st->init = true;
         st->t_prev_us = t_us;
         st->q_BW = q_ident();
-        st->q_zero = st->q_BW;
         st->ready = false;
         st->have_sample = false;
         return; // need next sample for dt
@@ -233,6 +189,5 @@ void imu_orientation_update(
 
     if (!st->ready) {
         st->ready = true;
-        (void)orientation_reference_calibrate(&st->q_zero, st->q_BW);
     }
 }

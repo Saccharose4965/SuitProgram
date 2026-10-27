@@ -46,19 +46,18 @@ allows it, followed by equivalent 3072-byte attempts. Failure leaves no active
 session. The path is copied into task arguments, and only one global path/mode/
 pause state exists.
 
-Optional standalone heap tracing begins only for Bluetooth playback. It freezes
-on a stall or internal heap below 16 KiB and reports grouped outstanding
-internal allocations after playback, when logging is less likely to disturb
-audio. These reports are diagnostics and are explicitly not leak proof.
+Playback logs internal free/largest-block memory before opening the file and
+after cleanup. A real progress stall records Bluetooth stream health once; a
+normal end does not produce an allocation report.
 
 ## Current ownership limits
 
 Control fields and the task handle are shared through volatile flags rather
 than a lock. `audio_player_set_current` can be replaced by worker completion,
 which clears the path. Local and Bluetooth output implementations remain in
-other modules, and Bluetooth currently calls back into this service on
-disconnect. Those cycles will be handled while separating the audio driver and
-Bluetooth service; changing them independently would risk the stable stream.
+other modules. The shell forwards a queued Bluetooth disconnect notification;
+only a session currently using Bluetooth is aborted. The worker's status poll
+remains the independent fallback if that event is delayed or dropped.
 
-The retained host tests exercise stall/drain/disconnect decisions and bounded
-heap-diagnostic lifecycle without hardware.
+The retained host test exercises stall, drain and disconnect decisions without
+hardware.

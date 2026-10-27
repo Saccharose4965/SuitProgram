@@ -16,6 +16,8 @@ discarded, and stable direct changes between buttons are accepted.
 Every accepted change restarts hold timing. A pressed level produces a press
 event, followed by one long-press event after 1200 ms. Release updates state
 without producing a UI event. Failed ADC reads leave the existing state intact.
+Continuous controls can read the cached debounced level. This performs no ADC
+transaction and stays consistent with the event stream.
 
 ## Report activity
 

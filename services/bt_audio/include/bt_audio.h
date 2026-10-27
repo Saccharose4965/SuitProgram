@@ -34,6 +34,11 @@ typedef struct {
     char    name[32];
 } bt_audio_device_t;
 
+typedef enum {
+    BT_AUDIO_EVENT_DISCONNECTED = 0,
+    BT_AUDIO_EVENT_PLAY_PAUSE,
+} bt_audio_event_t;
+
 // Initialize Classic BT stack (A2DP Source) and start discovery+connect
 // Set force_rescan=true to restart inquiry even if we already tried.
 esp_err_t bt_audio_start(bool force_rescan);
@@ -96,8 +101,10 @@ void bt_audio_volume_set_percent(int percent);
 int  bt_audio_volume_get_percent(void);
 void bt_audio_volume_up(void);
 void bt_audio_volume_down(void);
-typedef void (*bt_audio_disconnect_cb_t)(void);
-void bt_audio_set_disconnect_cb(bt_audio_disconnect_cb_t cb);
+
+// Non-blocking service events. Bluetooth callbacks only enqueue; the shell
+// consumes these from normal task context.
+bool bt_audio_poll_event(bt_audio_event_t *event);
 
 #ifdef __cplusplus
 }

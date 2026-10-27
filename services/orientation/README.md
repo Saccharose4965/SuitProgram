@@ -18,8 +18,10 @@ integration follows motion quickly; gravity correction limits tilt drift.
 Horizontal heading can drift, so consumers establish a reference through user
 calibration.
 
-The service publishes a coherent quaternion and sample timestamp. Raw acceleration
-also remains available. The MPU driver supplies the physical measurements.
+The service publishes one coherent absolute quaternion and sample timestamp.
+It also provides a freshness-checked snapshot so every pose consumer applies
+the same age rule. Raw acceleration remains available for Fluid and calibration.
+The MPU driver supplies the physical measurements.
 
 ## Establish the reference
 
@@ -31,8 +33,9 @@ The forearm should be folded horizontally. Near-vertical calibration is rejected
 because its horizontal projection gives an unreliable heading. Invalid input
 preserves the previous valid reference.
 
-This policy lives in `orientation_reference.h`. Each consumer owns a reference
-value, giving each feature an independent calibration lifetime.
+This policy lives in `orientation_reference.h`. Its shared reference type owns
+the heading, validity and relative-rotation operation. Each consumer owns an
+instance, giving each feature an independent calibration lifetime.
 
 ## Convert a direction
 
@@ -46,12 +49,19 @@ allows a display to represent hand rotation as well as pointing.
 Consumers receive the orientation together with its timestamp and choose how to
 respond to stale samples. The current consumers use a 250 ms limit.
 
+Startup is serialized by a statically allocated lifecycle mutex. Concurrent
+callers cannot add duplicate SPI devices or tasks: they reuse a successful
+result or retry after a clean failure. The service becomes visible only after
+the filter task and MPU sampler both exist. A failed attempt removes its task
+and SPI device so a later call can retry cleanly.
+
 A timing gap rejected by the filter can still result in an unchanged quaternion
 being published with the latest sample timestamp. Consequently, publication age
 alone cannot establish that integration advanced. This limitation remains open.
 
-Legacy filter getter/recenter functions remain available; new consumers use the
-coherent snapshot and their own reference.
+The filter stores only absolute sensor orientation. References belong to the
+features that request them, so calibrating Paint, Synth, Arm Pose or 3D cannot
+change another feature's coordinate frame.
 
 ## Gyro bias calibration
 
@@ -81,7 +91,7 @@ Each suit's SD card therefore carries its own sensor correction.
 ## Verification
 
 Host tests cover heading extraction under tilt/roll, vertical and invalid-input
-rejection, reference preservation and filter recentering. Hardware validation
+rejection, reference preservation and absolute filter output. Hardware validation
 checks the actual mounting: calibrate with slight wrist roll, unfold, and confirm
 that upward motion remains upward.
 

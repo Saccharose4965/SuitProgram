@@ -3,6 +3,20 @@ cmake_minimum_required(VERSION 3.16)
 # Migrated layers: list component directories explicitly, keeping component
 # names stable while the remaining components are migrated incrementally.
 set(EXTRA_COMPONENT_DIRS
+    "${CMAKE_CURRENT_LIST_DIR}/apps/shell"
+    "${CMAKE_CURRENT_LIST_DIR}/services/performance_monitor"
+    "${CMAKE_CURRENT_LIST_DIR}/services/live_sync"
+    "${CMAKE_CURRENT_LIST_DIR}/apps/remote_control_app"
+    "${CMAKE_CURRENT_LIST_DIR}/services/remote_control"
+    "${CMAKE_CURRENT_LIST_DIR}/apps/led_control"
+    "${CMAKE_CURRENT_LIST_DIR}/services/led_source"
+    "${CMAKE_CURRENT_LIST_DIR}/apps/synth"
+    "${CMAKE_CURRENT_LIST_DIR}/services/synth_service"
+    "${CMAKE_CURRENT_LIST_DIR}/apps/settings_app"
+    "${CMAKE_CURRENT_LIST_DIR}/services/settings"
+    "${CMAKE_CURRENT_LIST_DIR}/apps/music"
+    "${CMAKE_CURRENT_LIST_DIR}/apps/message_app"
+    "${CMAKE_CURRENT_LIST_DIR}/services/messages"
     "${CMAKE_CURRENT_LIST_DIR}/apps/call_app"
     "${CMAKE_CURRENT_LIST_DIR}/apps/arm_pose"
     "${CMAKE_CURRENT_LIST_DIR}/apps/gyro_calibration"

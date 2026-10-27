@@ -12,36 +12,39 @@ extern "C" {
 #endif
 
 typedef enum {
-    SHOW_RUNTIME_STOPPED = 0,
-    SHOW_RUNTIME_LOADED,
-    SHOW_RUNTIME_PLAYING,
-    SHOW_RUNTIME_PAUSED,
+  SHOW_RUNTIME_STOPPED = 0,
+  SHOW_RUNTIME_LOADED,
+  SHOW_RUNTIME_PLAYING,
+  SHOW_RUNTIME_PAUSED,
 } show_runtime_state_t;
 
 typedef struct {
-    bool initialized;
-    bool loaded;
-    bool owns_leds;
-    bool authority;
-    bool synced;
-    show_runtime_state_t state;
-    uint8_t role_id;
-    uint64_t show_uid;
-    uint32_t duration_ms;
-    uint32_t playhead_ms;
-    uint16_t peer_count;
-    uint16_t best_rtt_ms;
-    uint8_t present_roles; /* A/B/C bitmask, including this suit */
-    uint8_t master_roles;
-    bool role_conflict;
-    bool role_ready;
-    bool role_pending;
-    char slug[32];
-    char error[32];
+  bool initialized;
+  bool loaded;
+  bool owns_leds;
+  bool authority;
+  bool synced;
+  show_runtime_state_t state;
+  uint8_t role_id;
+  uint64_t show_uid;
+  uint32_t duration_ms;
+  uint32_t playhead_ms;
+  uint16_t peer_count;
+  uint16_t best_rtt_ms;
+  uint8_t present_roles; /* A/B/C bitmask, including this suit */
+  uint8_t master_roles;
+  bool role_conflict;
+  bool role_ready;
+  bool role_pending;
+  char slug[32];
+  char error[32];
 } show_runtime_status_t;
 
 esp_err_t show_runtime_init(void);
 void show_runtime_set_menu_open(bool open);
+/* Keep A/B/C role discovery alive for services that use suit identity without
+ * opening or taking ownership of the Show player. */
+void show_runtime_set_role_presence(bool active);
 void show_runtime_set_bt_delay_ms(uint16_t delay_ms);
 uint16_t show_runtime_get_bt_delay_ms(void);
 esp_err_t show_runtime_load(const char *show_slug, uint8_t role_id);
@@ -54,7 +57,8 @@ void show_runtime_stop(bool broadcast);
 void show_runtime_service_tick(float dt_sec);
 
 /* Safe in the link receive callback; work is queued to the shell task. */
-void show_runtime_handle_link_frame(link_msg_type_t type, const uint8_t *src_mac,
+void show_runtime_handle_link_frame(link_msg_type_t type,
+                                    const uint8_t *src_mac,
                                     const uint8_t *payload, size_t len);
 
 bool show_runtime_owns_leds(void);

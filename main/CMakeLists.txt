@@ -1,26 +1,6 @@
 idf_component_register(
     SRCS
         "app_main.c"
-        "app_shell.c"
-        "app_menu.c"
-        "app_status.c"
-        "app_volume.c"
-        "app_preferences.c"
-        "app_master_control.c"
-        "app_service_restart.c"
-        "app_adc_debug.c"
-        "app_settings.c"
-        "app_leds.c"
-        "app_led_source.c"
-        "app_led_color.c"
-        "app_manual_bpm.c"
-        "app_fft_sync.c"
-        "app_music.c"
-        "app_message.c"
-        "message_notifications.c"
-        "message_direct.c"
-        "app_synth.c"
-        "shell_profiler.c"
     INCLUDE_DIRS "."
-    REQUIRES arm_pose gyro_calibration paint_app audio_policy state input input_audio_policy oled hw ui_shell flappy twenty48 tetris audio audio_i2s audio_player fft fft_view keyboard storage_sd led_modes led_layout led_layout_app power link audio_rx file_rx bt_audio bluetooth snake pong pong_app threedee fluid orientation paint bad_apple calculator microphone telemetry show_package show_runtime show_player call call_app
+    REQUIRES shell ui_shell
 )

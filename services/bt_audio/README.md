@@ -37,14 +37,16 @@ Queued frame counts provide progress and stall observation to Audio Player.
 Volume is a Q15-style software gain with percent helpers. The file streamer
 also submits frame progress to the shared audio clock used by show timing.
 
-## Ownership constraints
+## Event boundary
 
-The service and Audio Player currently depend on each other: Audio Player owns
-session decisions, while Bluetooth owns callbacks and file delivery. A single
-disconnect callback points back to Music app state and is currently invoked by
-the Bluetooth screen. This cycle is retained because stream stability has been
-hard-won; replacement should use a small event interface tested against play,
-pause, drain, disconnect and rapid track changes.
+Bluetooth callbacks publish disconnect and AVRCP play/pause requests to a
+fixed, statically allocated queue. The shell drains it in normal task context.
+Bluetooth therefore has no build dependency on Audio Player or Music, and its
+callbacks do not perform higher-level playback work. Audio Player still owns
+session teardown and independently observes connection state while streaming.
+
+The queue does not alter PCM delivery, media-command serialization, discovery,
+reconnection or task placement. Volume commands remain local to this service.
 
 The service relies on private Bluedroid headers for its no-sniff policy. That is
 an ESP-IDF-version-sensitive dependency. The retained host test exercises voice

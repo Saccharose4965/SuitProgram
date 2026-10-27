@@ -1,10 +1,6 @@
 #include "app_shell.h"
 #include "ui_draw.h"
-#include "audio_bus.h"
 #include "audio_policy.h"
-
-#include "esp_err.h"
-#include "esp_log.h"
 
 #include "fft.h"
 #include "fft_display.h"
@@ -12,11 +8,7 @@
 #include "oled.h"
 #include "esp_attr.h"
 
-#include <stdio.h>
 #include <string.h>
-
-static const char *TAG = "shell";
-static esp_err_t s_fft_start_err = ESP_OK;
 
 static fft_view_t g_fft_view = FFT_VIEW_SPECTRUM;
 static EXT_RAM_BSS_ATTR fft_history_snapshot_t s_draw_snapshot;
@@ -50,28 +42,15 @@ void fft_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
 void fft_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
-    s_fft_start_err = ESP_OK;
-    if (audio_policy_fft_blocked_by_bluetooth()) {
-        s_fft_start_err = ESP_ERR_INVALID_STATE;
-        return;
-    }
-    if (!audio_bus_init_if_needed()) {
-        ESP_LOGE(TAG, "audio_init failed; FFT won't run");
-        s_fft_start_err = ESP_ERR_INVALID_STATE;
-        return;
-    }
     g_fft_view = FFT_VIEW_SPECTRUM;
-    s_fft_start_err = fft_visualizer_start();
-    if (s_fft_start_err != ESP_OK) {
-        ESP_LOGE(TAG, "fft_visualizer_start failed: %s", esp_err_to_name(s_fft_start_err));
-        return;
-    }
+    audio_policy_fft_request(AUDIO_POLICY_FFT_REQ_VIEW, true);
     s_have_frame = false;
 }
 
 void fft_app_deinit(shell_app_context_t *ctx)
 {
     (void)ctx;
+    audio_policy_fft_request(AUDIO_POLICY_FFT_REQ_VIEW, false);
 }
 
 void fft_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)
@@ -82,17 +61,13 @@ void fft_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, in
     (void)w;
     (void)h;
     if (!fb) return;
-    if (s_fft_start_err != ESP_OK) {
+    if (!fft_visualizer_running()) {
         if (audio_policy_fft_blocked_by_bluetooth()) {
             oled_draw_text3x5(fb, 0, 0, "FFT paused for Bluetooth");
-            oled_draw_text3x5(fb, 0, 10, "Disconnect BT, then reopen FFT");
-            return;
+            oled_draw_text3x5(fb, 0, 10, "Resumes when Bluetooth is idle");
+        } else {
+            oled_draw_text3x5(fb, 0, 0, "FFT waiting for audio");
         }
-        char line[24];
-        oled_draw_text3x5(fb, 0, 0, "FFT start failed");
-        snprintf(line, sizeof(line), "err:%s", esp_err_to_name(s_fft_start_err));
-        oled_draw_text3x5(fb, 0, 10, line);
-        oled_draw_text3x5(fb, 0, 20, "Try closing BT scan");
         return;
     }
     uint32_t generation = fft_history_snapshot(&s_draw_snapshot);

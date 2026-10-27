@@ -33,6 +33,7 @@ static unsigned            s_output_users;
 static int32_t             s_vol_q15   = 32767; // 1.0 in Q1.15
 static portMUX_TYPE s_progress_mux = portMUX_INITIALIZER_UNLOCKED;
 static audio_progress_t s_progress;
+static uint16_t s_bluetooth_delay_ms = 100;
 
 void audio_progress_reset(void)
 {
@@ -59,6 +60,52 @@ audio_progress_t audio_progress_get(void)
     audio_progress_t p = s_progress;
     portEXIT_CRITICAL(&s_progress_mux);
     return p;
+}
+
+void audio_bluetooth_delay_set_ms(uint16_t delay_ms)
+{
+    if (delay_ms > 1000) delay_ms = 1000;
+    portENTER_CRITICAL(&s_progress_mux);
+    s_bluetooth_delay_ms = delay_ms;
+    portEXIT_CRITICAL(&s_progress_mux);
+}
+
+uint16_t audio_bluetooth_delay_get_ms(void)
+{
+    portENTER_CRITICAL(&s_progress_mux);
+    uint16_t delay_ms = s_bluetooth_delay_ms;
+    portEXIT_CRITICAL(&s_progress_mux);
+    return delay_ms;
+}
+
+audio_timeline_t audio_timeline_get(int64_t now_us)
+{
+    audio_progress_t progress;
+    uint16_t bluetooth_delay_ms;
+    portENTER_CRITICAL(&s_progress_mux);
+    progress = s_progress;
+    bluetooth_delay_ms = s_bluetooth_delay_ms;
+    portEXIT_CRITICAL(&s_progress_mux);
+
+    audio_timeline_t timeline = {
+        .bluetooth = progress.bluetooth,
+    };
+    if (!progress.rate || !progress.frames || !progress.updated_us) return timeline;
+
+    int64_t submitted_us = (int64_t)(progress.frames * 1000000ULL / progress.rate);
+    int64_t delay_us = progress.bluetooth
+        ? (int64_t)bluetooth_delay_ms * 1000
+        : 8LL * 256 * 1000000 / progress.rate;
+    int64_t elapsed_us = now_us - progress.updated_us;
+    if (elapsed_us < 0) elapsed_us = 0;
+    if (elapsed_us > delay_us) elapsed_us = delay_us;
+
+    int64_t audible_us = submitted_us - delay_us + elapsed_us;
+    if (audible_us < 0) audible_us = 0;
+    timeline.valid = true;
+    timeline.stalled = now_us - progress.updated_us > delay_us + 100000;
+    timeline.position_ms = (uint32_t)(audible_us / 1000);
+    return timeline;
 }
 
 // Yield occasionally during long streaming loops to keep UI responsive.

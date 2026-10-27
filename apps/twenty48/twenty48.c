@@ -1,222 +1,248 @@
 #include "app_shell.h"
+#include "t48_sprites.h"
 #include "twenty48_game.h"
 #include "ui_draw.h"
 
 #include <math.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <string.h>
 #include <stdio.h>
-
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_random.h"
-#include "esp_log.h"
-
-#include "hw.h"
-#include "oled.h"
-#include "t48_sprites.h"
+#include <string.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
-// Board layout: tiles 15x15, stride 14, origins at x={35,49,63,77}, y={0,14,28,42}
-enum { T48_STRIDE = 14, T48_TILE = T48_TILE_SIZE };
-static const int kBoardX0 = 35;
-static const int kBoardY0 = 0;
-
-// Framebuffer helpers
-static uint8_t g_fb[PANEL_W * PANEL_H / 8];
-static uint8_t g_bg[PANEL_W * PANEL_H / 8]; // static background (grid only)
-static inline void fb_clear(void){ memset(g_fb, 0, sizeof(g_fb)); }
-static inline void fb_pset(int x, int y){
-    if ((unsigned)x >= PANEL_W || (unsigned)y >= PANEL_H) return;
-    int idx = y * PANEL_W + x;
-    g_fb[idx >> 3] |= (uint8_t)(1u << (7 - (idx & 7)));
-}
-static inline void fb_pclr(int x, int y){
-    if ((unsigned)x >= PANEL_W || (unsigned)y >= PANEL_H) return;
-    int idx = y * PANEL_W + x;
-    g_fb[idx >> 3] &= (uint8_t)~(1u << (7 - (idx & 7)));
-}
-static void fb_clear_rect(int x0, int y0, int w, int h){
-    for (int y = y0; y < y0 + h; ++y)
-        for (int x = x0; x < x0 + w; ++x)
-            fb_pclr(x, y);
-}
-static void draw_rect(int x0, int y0, int w, int h){
-    int x1 = x0 + w - 1, y1 = y0 + h - 1;
-    for (int x = x0; x <= x1; ++x){ fb_pset(x, y0); fb_pset(x, y1); }
-    for (int y = y0; y <= y1; ++y){ fb_pset(x0, y); fb_pset(x1, y); }
-}
-
-static void blit_tile(const uint16_t *rows, int size, int x, int y){
-    for (int dy = 0; dy < size; ++dy){
-        int yy = y + dy;
-        if ((unsigned)yy >= PANEL_H) continue;
-        uint16_t bits = rows[dy];
-        for (int dx = 0; dx < size; ++dx){
-            int xx = x + dx;
-            if ((unsigned)xx >= PANEL_W) continue;
-            if (bits & (1u << (size - 1 - dx))) fb_pset(xx, yy);
-        }
-    }
-}
-
-static float a, da;
-static void build_background(void){
-    fb_clear();
-    // Board grid
-    for (int r = 0; r < 4; ++r){
-        for (int c = 0; c < 4; ++c){
-            int x = kBoardX0 + c * T48_STRIDE;
-            int y = kBoardY0 + r * T48_STRIDE;
-            draw_rect(x, y, T48_TILE, T48_TILE);
-        }
-    }
-    memcpy(g_bg, g_fb, sizeof(g_fb));
-}
-
-static void render(void){
-    const t48_state_t *state = t48_game_state();
-    memcpy(g_fb, g_bg, sizeof(g_fb));
-
-    // Draw tiles (during animation: from old grid with state->motion; after: state->grid_old already updated)
-    float ca = cosf(a);
-    float offset_scale = (ca - 1.0f) * 0.5f; // matches (cos(a)-1)/2
-
-    for (int i = 0; i < 4; ++i){
-        for (int j = 0; j < 4; ++j){
-            int exp = state->grid_old[i][j];
-            if (exp <= 0) continue;
-            int sprite = exp - 1;
-            if (sprite < 0 || sprite >= T48_TILE_COUNT) continue;
-
-            int base_x = kBoardX0 + j * T48_STRIDE;
-            int base_y = kBoardY0 + i * T48_STRIDE;
-            // state->motion is positive along dir; apply direction factors like the sketch
-            float dx = 0.0f, dy = 0.0f;
-            if ((state->direction & 1) == 0){ // horizontal
-                dx = offset_scale * (float)(state->direction - 1) * (float)state->motion[i][j] * (float)T48_STRIDE;
-            } else {           // vertical
-                dy = offset_scale * (float)(state->direction - 2) * (float)state->motion[i][j] * (float)T48_STRIDE;
-            }
-
-            int x = base_x + (int)lroundf(dx);
-            int y = base_y + (int)lroundf(dy);
-            blit_tile(t48_tiles_15[sprite], T48_TILE, x, y);
-        }
-    }
-
-    // Draw score + high score stacked in the left margin
-    fb_clear_rect(0, 0, kBoardX0 - 2, 24);
-    oled_draw_text3x5(g_fb, 2, 2, "SCORE:");
-    char buf[16];
-    snprintf(buf, sizeof(buf), " %u", (unsigned)state->score);
-    oled_draw_text3x5(g_fb, 2, 8, buf);
-    oled_draw_text3x5(g_fb, 2, 14, "BEST:");
-    snprintf(buf, sizeof(buf), " %u", (unsigned)state->best);
-    oled_draw_text3x5(g_fb, 2, 20, buf);
-
-}
-
-static void t48_screen_tick(void){
-    // Button handling: edges only
-    static hw_button_id_t last = HW_BTN_NONE;
-    hw_button_id_t b = HW_BTN_NONE;
-    if (hw_buttons_read(&b) != ESP_OK) b = HW_BTN_NONE;
-
-    if (last == HW_BTN_NONE && b != HW_BTN_NONE && a == 0.0f){
-        int d;
-        // Map buttons: A=left, B=up, C=right, D=down
-        if      (b == HW_BTN_A) d = 2;
-        else if (b == HW_BTN_B) d = 3;
-        else if (b == HW_BTN_C) d = 0;
-        else if (b == HW_BTN_D) d = 1;
-        else d = 0;
-
-        da = t48_game_move(d) ? 0.2f : 0.0f;
-    }
-    last = b;
-
-    // Animate
-    if (da != 0.0f){
-        a += da;
-        render();
-        if (a >= (float)M_PI){
-            t48_game_commit();
-            a = 0.0f;
-            da = 0.0f;
-            render();
-        }
-    }
-}
-
-
-
-
-#if configNUMBER_OF_CORES > 1
-#define APP_TASK_CORE 1
-#else
-#define APP_TASK_CORE 0
-#endif
-
-static TaskHandle_t s_t2048_task = NULL;
-static volatile bool s_t2048_stop = false;
-
-const shell_legend_t T2048_LEGEND = {
-    .slots = { SHELL_ICON_LEFT, SHELL_ICON_UP, SHELL_ICON_RIGHT, SHELL_ICON_DOWN },
+enum {
+    T48_STRIDE = 14,
+    T48_TILE = T48_TILE_SIZE,
 };
 
-static void t2048_task_fn(void *arg)
+typedef enum {
+    T48_READY,
+    T48_PLAYING,
+    T48_RESULTS,
+} t48_screen_t;
+
+static const int kBoardX0 = 35;
+static const int kBoardY0 = 0;
+static const float kAnimationRate = 0.2f / 0.012f;
+static const float kRetryDelaySeconds = 2.0f;
+
+static uint8_t s_background[PANEL_W * PANEL_H / 8];
+static t48_screen_t s_screen;
+static float s_animation_phase;
+static float s_result_time;
+static bool s_animating;
+
+shell_legend_t T2048_LEGEND;
+
+static inline void fb_pset(uint8_t *fb, int x, int y)
 {
-    (void)arg;
-    t48_game_init();
-    a = da = 0.0f;
-    build_background();
-    render();
-    while (!s_t2048_stop) {
-        t48_screen_tick();
-        vTaskDelay(pdMS_TO_TICKS(12));
-    }
-    t48_game_deinit();
-    s_t2048_task = NULL;
-    vTaskDelete(NULL);
+    if ((unsigned)x >= PANEL_W || (unsigned)y >= PANEL_H) return;
+    int index = y * PANEL_W + x;
+    fb[index >> 3] |= (uint8_t)(1u << (7 - (index & 7)));
 }
 
-void t2048_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
+static inline void fb_pclr(uint8_t *fb, int x, int y)
 {
-    (void)ctx;
-    (void)ev;
+    if ((unsigned)x >= PANEL_W || (unsigned)y >= PANEL_H) return;
+    int index = y * PANEL_W + x;
+    fb[index >> 3] &= (uint8_t)~(1u << (7 - (index & 7)));
+}
+
+static void fb_clear_rect(uint8_t *fb, int x, int y, int w, int h)
+{
+    for (int py = y; py < y + h; ++py)
+        for (int px = x; px < x + w; ++px) fb_pclr(fb, px, py);
+}
+
+static void draw_rect(uint8_t *fb, int x, int y, int w, int h)
+{
+    int x1 = x + w - 1, y1 = y + h - 1;
+    for (int px = x; px <= x1; ++px) {
+        fb_pset(fb, px, y);
+        fb_pset(fb, px, y1);
+    }
+    for (int py = y; py <= y1; ++py) {
+        fb_pset(fb, x, py);
+        fb_pset(fb, x1, py);
+    }
+}
+
+static void blit_tile(uint8_t *fb, const uint16_t *rows, int size, int x, int y)
+{
+    for (int dy = 0; dy < size; ++dy) {
+        uint16_t bits = rows[dy];
+        for (int dx = 0; dx < size; ++dx)
+            if (bits & (1u << (size - 1 - dx))) fb_pset(fb, x + dx, y + dy);
+    }
+}
+
+static void build_background(void)
+{
+    memset(s_background, 0, sizeof(s_background));
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            draw_rect(s_background,
+                      kBoardX0 + col * T48_STRIDE,
+                      kBoardY0 + row * T48_STRIDE,
+                      T48_TILE, T48_TILE);
+        }
+    }
+}
+
+static void show_direction_legend(void)
+{
+    T2048_LEGEND = (shell_legend_t){
+        .slots = { SHELL_ICON_LEFT, SHELL_ICON_UP, SHELL_ICON_RIGHT, SHELL_ICON_DOWN },
+    };
+}
+
+static void hide_legend(void)
+{
+    T2048_LEGEND = (shell_legend_t){ .slots = { SHELL_ICON_NONE } };
+}
+
+static void show_retry_legend(void)
+{
+    T2048_LEGEND = (shell_legend_t){
+        .slots = { SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_NONE, SHELL_ICON_REFRESH },
+    };
+}
+
+static bool input_direction(input_button_t button, int *direction)
+{
+    if (!direction) return false;
+    switch (button) {
+        case INPUT_BTN_A: *direction = 2; return true;
+        case INPUT_BTN_B: *direction = 3; return true;
+        case INPUT_BTN_C: *direction = 0; return true;
+        case INPUT_BTN_D: *direction = 1; return true;
+        default: return false;
+    }
+}
+
+static void start_game(void)
+{
+    t48_game_init();
+    s_screen = T48_PLAYING;
+    s_animation_phase = 0.0f;
+    s_result_time = 0.0f;
+    s_animating = false;
+    show_direction_legend();
 }
 
 void t2048_app_init(shell_app_context_t *ctx)
 {
     (void)ctx;
-    s_t2048_stop = false;
-    if (!s_t2048_task) {
-        xTaskCreatePinnedToCore(t2048_task_fn, "t2048", 4096, NULL, 5, &s_t2048_task, APP_TASK_CORE);
-    }
+    t48_game_init();
+    build_background();
+    s_screen = T48_READY;
+    s_animation_phase = 0.0f;
+    s_result_time = 0.0f;
+    s_animating = false;
+    show_direction_legend();
 }
 
 void t2048_app_deinit(shell_app_context_t *ctx)
 {
     (void)ctx;
-    s_t2048_stop = true;
-    for (int i = 0; i < 50 && s_t2048_task; ++i) {
-        vTaskDelay(pdMS_TO_TICKS(10));
+    t48_game_deinit();
+}
+
+void t2048_app_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
+{
+    (void)ctx;
+    if (!ev || ev->type != INPUT_EVENT_PRESS) return;
+
+    int direction;
+    if (s_screen == T48_READY) {
+        if (input_direction(ev->button, &direction)) s_screen = T48_PLAYING;
+        return;
     }
-    s_t2048_task = NULL;
+    if (s_screen == T48_RESULTS) {
+        if (s_result_time >= kRetryDelaySeconds && ev->button == INPUT_BTN_D) start_game();
+        return;
+    }
+    if (s_animating || !input_direction(ev->button, &direction)) return;
+
+    if (t48_game_move(direction)) {
+        s_animation_phase = 0.0f;
+        s_animating = true;
+    }
+}
+
+void t2048_app_tick(shell_app_context_t *ctx, float dt_sec)
+{
+    (void)ctx;
+    if (dt_sec < 0.0f) dt_sec = 0.0f;
+    if (dt_sec > 0.25f) dt_sec = 0.25f;
+
+    if (s_screen == T48_RESULTS) {
+        float previous = s_result_time;
+        s_result_time += dt_sec;
+        if (previous < kRetryDelaySeconds && s_result_time >= kRetryDelaySeconds) {
+            show_retry_legend();
+        }
+        return;
+    }
+    if (!s_animating) return;
+
+    s_animation_phase += kAnimationRate * dt_sec;
+    if (s_animation_phase >= (float)M_PI) {
+        t48_game_commit();
+        s_animation_phase = 0.0f;
+        s_animating = false;
+        if (t48_game_is_over()) {
+            t48_game_deinit();
+            s_screen = T48_RESULTS;
+            s_result_time = 0.0f;
+            hide_legend();
+        }
+    }
 }
 
 void t2048_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)
 {
-    (void)ctx;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
+    (void)ctx; (void)x; (void)y; (void)w; (void)h;
     if (!fb) return;
-    memcpy(fb, g_fb, sizeof(g_fb));
+    memcpy(fb, s_background, sizeof(s_background));
+    const t48_state_t *state = t48_game_state();
+    float offset_scale = (cosf(s_animation_phase) - 1.0f) * 0.5f;
+
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            int exponent = state->grid_old[row][col];
+            int sprite = exponent - 1;
+            if (sprite < 0 || sprite >= T48_TILE_COUNT) continue;
+            float dx = 0.0f, dy = 0.0f;
+            if ((state->direction & 1) == 0) {
+                dx = offset_scale * (state->direction - 1) * state->motion[row][col] * T48_STRIDE;
+            } else {
+                dy = offset_scale * (state->direction - 2) * state->motion[row][col] * T48_STRIDE;
+            }
+            blit_tile(fb, t48_tiles_15[sprite], T48_TILE,
+                      kBoardX0 + col * T48_STRIDE + (int)lroundf(dx),
+                      kBoardY0 + row * T48_STRIDE + (int)lroundf(dy));
+        }
+    }
+
+    fb_clear_rect(fb, 0, 0, kBoardX0 - 2, 26);
+    char text[16];
+    oled_draw_text3x5(fb, 2, 2, "SCORE:");
+    snprintf(text, sizeof(text), " %u", (unsigned)state->score);
+    oled_draw_text3x5(fb, 2, 8, text);
+    oled_draw_text3x5(fb, 2, 14, "BEST:");
+    snprintf(text, sizeof(text), " %u", (unsigned)state->best);
+    oled_draw_text3x5(fb, 2, 20, text);
+
+    if (s_screen != T48_PLAYING) {
+        shell_overlay_view_t overlay = {
+            .title = s_screen == T48_READY ? "2048" : "GAME OVER",
+            .line1 = s_screen == T48_READY ? "PRESS A B C D" : text,
+            .line2 = "",
+            .prompt = "",
+        };
+        if (s_screen == T48_RESULTS) snprintf(text, sizeof(text), "SCORE %u", (unsigned)state->score);
+        shell_ui_draw_overlay(fb, 18, 8, 92, 40, &overlay);
+    }
 }

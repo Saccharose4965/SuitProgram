@@ -10,6 +10,7 @@ typedef enum { STATE_PLAYING, STATE_DEAD_FALL, STATE_DEAD_SLIDE, STATE_DEAD_SETT
 typedef struct {
     float bird_x, bird_y, bird_vy, acc_px;
     int pipe_x[3], pipe_gap_y[3], score, best;
+    bool pipe_scored[3];
     int settle_frames, death_frames;
     flappy_phase_t state;
     bool upside_down, running, best_dirty;

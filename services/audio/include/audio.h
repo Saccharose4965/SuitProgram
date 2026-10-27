@@ -20,9 +20,20 @@ typedef struct {
     int64_t updated_us;
     bool bluetooth;
 } audio_progress_t;
+
+typedef struct {
+    bool valid;
+    bool bluetooth;
+    bool stalled;
+    uint32_t position_ms;
+} audio_timeline_t;
+
 void audio_progress_reset(void);
 void audio_progress_submit(size_t frames, uint32_t rate, bool bluetooth);
 audio_progress_t audio_progress_get(void);
+audio_timeline_t audio_timeline_get(int64_t now_us);
+void audio_bluetooth_delay_set_ms(uint16_t delay_ms);
+uint16_t audio_bluetooth_delay_get_ms(void);
 bool      audio_output_active(void);
 esp_err_t audio_set_volume(float vol);
 float     audio_get_volume(void);

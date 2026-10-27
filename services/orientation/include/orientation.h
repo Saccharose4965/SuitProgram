@@ -16,15 +16,12 @@ typedef struct {
     uint64_t t_prev_us;
 
     imu_quat_t q_BW;    // body -> world
-    imu_quat_t q_zero;  // recenter reference
     float beta;
     float gyro_bias_dps[3];
 } imu_orientation_t;
 
 void imu_orientation_init(imu_orientation_t *st, float beta);
 bool imu_orientation_ready(const imu_orientation_t *st);
-void imu_orientation_recenter(imu_orientation_t *st);
-imu_quat_t imu_orientation_get(const imu_orientation_t *st);
 
 void imu_orientation_update(
     imu_orientation_t *st,

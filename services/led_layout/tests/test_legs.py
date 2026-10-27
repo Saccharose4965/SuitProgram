@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[3]
 class LegsTest(unittest.TestCase):
     def test_defaults_migration_and_roundtrip(self):
         headers = {
-            'esp_err.h': '#pragma once\ntypedef int esp_err_t;\n#define ESP_OK 0\n#define ESP_FAIL -1\n#define ESP_ERR_INVALID_STATE 1\n#define ESP_ERR_INVALID_ARG 2\n#define ESP_ERR_NOT_FOUND 3\n',
+            'esp_err.h': '#pragma once\ntypedef int esp_err_t;\n#define ESP_OK 0\n#define ESP_FAIL -1\n#define ESP_ERR_INVALID_STATE 1\n#define ESP_ERR_INVALID_ARG 2\n#define ESP_ERR_NOT_FOUND 3\n#define ESP_ERR_NO_MEM 4\n#define ESP_ERR_INVALID_RESPONSE 5\n',
             'esp_attr.h': '#define EXT_RAM_BSS_ATTR\n',
             'esp_log.h': '#define ESP_LOGW(...) ((void)0)\n#define ESP_LOGI(...) ((void)0)\n',
             'esp_check.h': '#define ESP_RETURN_ON_ERROR(e,...) do {int r=(e); if(r) return r;} while(0)\n',
@@ -66,6 +66,34 @@ int main(void) {
             assert(fabsf(now.sections[i].points[p].z-saved.sections[i].points[p].z)<1e-4f);
         }
     }
+    // Recover the previous valid primary if promotion was interrupted.
+    assert(access("led_layout.txt.bak",F_OK)==0);
+    unlink("led_layout.txt");
+    assert(layout_load_from_sd_locked(&saved));
+    assert(saved.total_leds==old.total_leds);
+    assert(access("led_layout.txt",F_OK)==0);
+
+    // A complete temporary file is a newer synced save and is promoted.
+    led_layout_config_t candidate=now;
+    candidate.sections[0].length=18; layout_finalize(&candidate);
+    assert(layout_write_file_locked("led_layout.txt.tmp",&candidate)==ESP_OK);
+    assert(layout_load_from_sd_locked(&saved));
+    assert(saved.sections[0].length==18);
+    assert(access("led_layout.txt.tmp",F_OK)!=0);
+
+    // A truncated new-format primary is rejected in favour of its backup.
+    FILE *cut=fopen("led_layout.txt","w"); assert(cut);
+    fputs("version=3\nprofile=interrupted\n",cut); fclose(cut);
+    assert(layout_load_from_sd_locked(&saved));
+    assert(saved.total_leds==old.total_leds);
+
+    // An incomplete temporary candidate is discarded without hiding primary.
+    cut=fopen("led_layout.txt.tmp","w"); assert(cut);
+    fputs("version=3\nprofile=interrupted\n",cut); fclose(cut);
+    assert(layout_load_from_sd_locked(&saved));
+    assert(saved.total_leds==old.total_leds);
+    assert(access("led_layout.txt.tmp",F_OK)!=0);
+
     // Allow a future leg to consume spare capacity, then disable it again.
     s_layout=now; s_ready=true;
     unsigned leg=5; assert(!strcmp(s_layout.sections[leg].name,"left_thigh_front"));

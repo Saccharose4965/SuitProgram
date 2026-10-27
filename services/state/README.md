@@ -3,7 +3,7 @@ Pending review
 # Shared status
 
 This service holds the latest values used by status displays: LED mode and name,
-FFT running/BPM, master-control and link status, three battery percentages,
+FFT running/BPM, Live Sync source/link status, three battery percentages,
 connection state and clock. Producers publish values; readers receive a copy
 of the whole structure so a screen can use a consistent snapshot.
 
@@ -12,7 +12,7 @@ before concurrent users start; the lazy initialization fallback is not itself
 synchronized. Calls can wait for the mutex and belong in task context.
 No task, persistence or notifications are created here.
 
-Related fields are updated together: FFT running/BPM, master/link and clock
+Related fields are updated together: FFT running/BPM, sync source/link and clock
 validity/time. Battery values clamp to 100 and invalid slot indices are ignored.
 LED names are copied with a length limit; an empty name preserves the old label.
 Valid times wrap hours and minutes into range. Invalidating the clock retains

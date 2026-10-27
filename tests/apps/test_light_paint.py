@@ -43,15 +43,25 @@ class PaintTest(unittest.TestCase):
 #define portENTER_CRITICAL(p) ((void)(p))
 #define portEXIT_CRITICAL(p) ((void)(p))
 #define pdTRUE 1
-#define SHELL_ICON_LEFT 0
-#define SHELL_ICON_REFRESH 0
-#define SHELL_ICON_RIGHT 0
-#define SHELL_ICON_SELECT 0
+#define SHELL_ICON_NONE 0
+#define SHELL_ICON_UP 1
+#define SHELL_ICON_DOWN 2
+#define SHELL_ICON_LEFT 3
+#define SHELL_ICON_RIGHT 4
+#define SHELL_ICON_SELECT 5
+#define SHELL_ICON_REFRESH 6
 #define LINK_MSG_CONTROL 4
 #define LED_OUTPUT_OWNER_PAINT 2
 typedef int link_msg_type_t;
 typedef struct {void (*request_switch)(const char*,void*);void *request_user_data;} shell_app_context_t;
 typedef struct {int slots[4];} shell_legend_t;
+typedef struct {const char *id,*label;} shell_menu_entry_t;
+typedef struct {float scroll;} shell_menu_motion_t;
+typedef struct {const shell_menu_entry_t *entries;const void *sprites;size_t count,selected;const char *title;const shell_menu_motion_t *motion;} shell_menu_view_t;
+static void shell_ui_menu_reset(shell_menu_motion_t *m,size_t s){m->scroll=(float)s;}
+static void shell_ui_menu_tick(shell_menu_motion_t *m,float dt,size_t s){(void)dt;m->scroll=(float)s;}
+static void shell_ui_draw_menu(uint8_t *f,int x,int y,int w,int h,const shell_menu_view_t *v)
+{(void)f;(void)x;(void)y;(void)w;(void)h;(void)v;}
 enum {INPUT_BTN_A=1,INPUT_BTN_B,INPUT_BTN_C,INPUT_BTN_D,INPUT_EVENT_PRESS=0};
 typedef struct {int button,type;} input_event_t;
 typedef struct {unsigned size,read,write,count;uint8_t *data;} StaticQueue_t;
@@ -69,7 +79,8 @@ static void audio_policy_fft_set_paint_app(bool active){fft_suspended=active;}
 static imu_quat_t sensor={1,0,0,0}; static uint64_t sample=1000000;
 static int64_t esp_timer_get_time(void){return now;}
 static uint32_t esp_random(void){return 123;}
-static bool orientation_service_snapshot(imu_quat_t *q,uint64_t *t){*q=sensor;*t=sample;return sample!=0;}
+static bool orientation_service_fresh_snapshot(imu_quat_t *q,uint64_t age)
+{*q=sensor;return sample!=0 && now>=0 && (uint64_t)now>=sample && (uint64_t)now-sample<=age;}
 static int led_output_claim(int o){(void)o;if(busy)return -1;claimed=true;return ESP_OK;}
 static void led_output_release(int o){(void)o;claimed=false;}
 static int led_show_pixels_owned(int o,const uint8_t *p,size_t n){(void)o;(void)p;assert(claimed && n==3);return 0;}
@@ -94,15 +105,15 @@ int main(void) {
         quat tilted=q_mul(yaw,q_mul((quat){cosf(.1f),sinf(.1f),0,0},roll));
         arm_pose_t p={0};
         assert(arm_pose_calibrate_heading(&p,tilted));
-        assert(fabsf(p.zero.w-yaw.w)<1e-5f && fabsf(p.zero.z-yaw.z)<1e-5f);
-        assert(p.zero.x==0 && p.zero.y==0);
+        assert(fabsf(p.heading.w-yaw.w)<1e-5f && fabsf(p.heading.z-yaw.z)<1e-5f);
+        assert(p.heading.x==0 && p.heading.y==0);
         arm_pose_t other={0};
         assert(arm_pose_calibrate(&other,tilted));
-        assert(fabsf(other.zero.w-p.zero.w)<1e-5f && fabsf(other.zero.z-p.zero.z)<1e-5f);
-        assert(other.zero.x==0 && other.zero.y==0);
-        imu_quat_t saved=other.zero;
+        assert(fabsf(other.heading.w-p.heading.w)<1e-5f && fabsf(other.heading.z-p.heading.z)<1e-5f);
+        assert(other.heading.x==0 && other.heading.y==0);
+        imu_quat_t saved=other.heading;
         assert(!arm_pose_calibrate(&other,(quat){NAN,0,0,0}));
-        assert(other.calibrated && other.zero.w==saved.w && other.zero.z==saved.z);
+        assert(other.calibrated && other.heading.w==saved.w && other.heading.z==saved.z);
     }
     arm_pose_t invalid={0};
     assert(!arm_pose_calibrate_heading(&invalid,(quat){.70710678f,.70710678f,0,0}));
@@ -118,7 +129,7 @@ int main(void) {
         arm_pose_t p={0};arm_vec3_t actual;
         // Arbitrary stored reference still tests vector conversion independently
         // of calibration policy (whose heading/roll checks are above).
-        p.zero=z;p.calibrated=true;
+        p.heading=z;p.calibrated=true;
         quat relative=q_mul(q_conj(z),q);
         quat mounted=apply_mount(relative,(quat){.70710678f,0,0,.70710678f});
         float r[9];q_to_mat3(mounted,r);

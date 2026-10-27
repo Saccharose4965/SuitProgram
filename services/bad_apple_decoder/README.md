@@ -3,7 +3,7 @@ Pending review
 # Bad Apple frame decoder
 
 This service converts a file into successive 128 by 64 one-bit frames. It owns
-the open file, decoding buffers, current frame, playback clock and status. It
+the open file, decoding buffers, current frame and status. It
 contains the vendored heatshrink decoder and its license.
 
 ## Input formats
@@ -23,11 +23,11 @@ and resets all stream state before decoding the first frame again.
 ## Playback clock
 
 Start opens the path, clamps requested cadence to 1..60 fps (invalid low values
-become 30), and decodes one frame immediately. Each tick accumulates elapsed
-seconds and decodes frames whose periods have elapsed. At most two frames are
-decoded in one tick; excess backlog is reduced to one frame period so a stalled
-UI does not trigger unbounded catch-up work. Pause keeps the file and displayed
-frame while stopping clock consumption.
+become 30), and decodes one frame immediately. The caller supplies an absolute
+media playhead in milliseconds. The target frame is derived from that playhead,
+and sequential formats decode up to four missing frames per call. Repeated
+calls continue bounded catch-up until current, keeping shell work finite while
+converging after an SD or UI stall. Pause keeps the file and displayed frame.
 
 The service exposes a copied frame and a copied status snapshot. It performs no
 locking because the current app is its sole caller on the shell path. It is not

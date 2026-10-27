@@ -12,7 +12,9 @@ Initialization remembers the requested sample rate and current RX handle.
 The configuration's pin and I2S fields are legacy fields; this implementation
 uses the shared audio bus configuration.
 
-Starting mounts SD, opens the destination and writes an empty WAV header.
+Starting mounts SD and exclusively creates a `.part` file beside the requested
+destination, so an existing WAV or unfinished recording is never overwritten.
+It writes and syncs an empty WAV header before acquiring audio.
 It sets the audio rate, enables RX, refreshes the RX handle and starts one
 recording task on core 0, priority 5, with a 4096-byte stack. A running session
 is reused; a previous task still finalizing blocks a new start.
@@ -22,10 +24,13 @@ slot. Division by 16384 and saturation produce signed 16-bit mono samples.
 It appends PCM and periodically flushes the file. Empty/read-error batches retry;
 an all-zero batch warns once per recording. A short SD write ends the session.
 
-Stopping clears the run flag, disables audio and waits up to one second.
-The task rewrites the WAV header with the actual byte count, closes the file,
-releases buffers and disables audio. The recording-status query remains true
-while that task is finalizing, even after the run flag is cleared.
+Stopping clears the run flag, disables audio and waits up to one second. The
+task rewrites and syncs the WAV header with the actual byte count, closes the
+file, then renames `.part` to the final WAV name. Failed finalization leaves the
+partial file for diagnosis/recovery. Buffer-allocation failure removes an empty
+partial file. Every startup failure after RX acquisition disables the shared
+audio bus, including worker-creation and missing-handle failures. The
+recording-status query remains true while the task is finalizing.
 
 ## Display data
 
@@ -37,21 +42,18 @@ The screen draws this data without opening another audio reader.
 
 ## Automatic names
 
-recording_counter.c owns the private .rec_counter file on SD. It keeps the
-existing four-byte format and increments before choosing rec_XXXXX.wav.
-Missing or short input starts from zero; overflow wraps to zero. If persistence
-fails, the caller falls back to the low 16 bits of the task tick count.
-Explicit caller paths bypass this counter.
+recording_counter.c owns the private four-byte `.rec_counter` file on SD. It
+loads the highest valid primary, backup or temporary value, then persists the
+next value through temporary and backup names. Corrupt copies restart at zero;
+exclusive file creation skips every existing WAV or partial name while advancing
+the recovered counter. Counter exhaustion returns an error. Explicit caller
+paths bypass the counter but use the same exclusive creation rule.
 
 ## Existing limits
 
-The counter is written in place and is not power-loss atomic. Its flush/sync
-results are unchecked. Automatic names and tick fallback do not check for
-collisions, and opening a destination with wb+ can overwrite an existing file.
-These behaviours are preserved for a separate persistence fix.
-
-WAV-header writes/final flushes have limited error reporting. Task-creation
-failure closes the file but does not undo RX enablement. Stop returns success
-after its bounded wait even if finalization continues. Resource arbitration
-must prevent competing bus users; it is described in
-[audio policy](../audio_policy/README.md).
+Stop returns success after its bounded wait even if finalization continues.
+Periodic payload flush errors are detected by the following write or final
+header sync rather than surfaced immediately. Resource arbitration must prevent
+competing bus users; it is described in [audio policy](../audio_policy/README.md).
+Hardware acceptance should cover an SD-full short write, forced worker-start
+failure and power removal during counter and WAV finalization.

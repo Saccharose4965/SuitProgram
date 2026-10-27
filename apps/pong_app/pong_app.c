@@ -15,6 +15,11 @@
 #define PONG_CENTER_Y ((PONG_TOP + PONG_BOTTOM) / 2)
 
 static unsigned s_selection;
+static shell_menu_motion_t s_menu_motion;
+static const shell_menu_entry_t s_menu_entries[]={
+    {.id="ai",.label="AI"},
+    {.id="human",.label="Human"},
+};
 
 static void pixel(uint8_t *fb,int x,int y)
 {
@@ -28,39 +33,53 @@ static void rect(uint8_t *fb,int x,int y,int w,int h)
         for (int col=x;col<x+w;++col) pixel(fb,col,row);
 }
 
-const shell_legend_t PONG_LEGEND = {
-    .slots = { SHELL_ICON_LEFT, SHELL_ICON_UP, SHELL_ICON_DOWN, SHELL_ICON_SELECT },
-};
+shell_legend_t PONG_LEGEND;
+
+static void update_legend(pong_view_mode_t mode)
+{
+    if (mode==PONG_VIEW_MENU) {
+        PONG_LEGEND=(shell_legend_t){
+            .slots={SHELL_ICON_UP,SHELL_ICON_DOWN,SHELL_ICON_NONE,SHELL_ICON_SELECT},
+        };
+    } else if (mode==PONG_VIEW_AI) {
+        PONG_LEGEND=(shell_legend_t){
+            .slots={SHELL_ICON_UP,SHELL_ICON_DOWN,SHELL_ICON_NONE,SHELL_ICON_PAUSE},
+        };
+    } else if (mode==PONG_VIEW_HUMAN) {
+        PONG_LEGEND=(shell_legend_t){
+            .slots={SHELL_ICON_UP,SHELL_ICON_DOWN,SHELL_ICON_NONE,SHELL_ICON_NONE},
+        };
+    } else {
+        PONG_LEGEND=(shell_legend_t){.slots={SHELL_ICON_NONE}};
+    }
+}
 
 void pong_app_init_wrapper(shell_app_context_t *ctx)
 {
     if (!ctx) return;
     s_selection=0;
     pong_service_init();
+    shell_ui_menu_reset(&s_menu_motion,s_selection);
+    update_legend(PONG_VIEW_MENU);
 }
 
 void pong_handle_input_wrapper(shell_app_context_t *ctx, const input_event_t *ev)
 {
     if (!ctx || !ev || ev->type!=INPUT_EVENT_PRESS) return;
     pong_view_t view; pong_service_snapshot(&view);
-    if (ev->button==INPUT_BTN_A) {
-        if (view.mode==PONG_VIEW_MENU) {
-            if (ctx->request_switch) ctx->request_switch("menu",ctx->request_user_data);
-        } else pong_service_reset();
-        return;
-    }
     if (view.mode==PONG_VIEW_MENU) {
-        if (ev->button==INPUT_BTN_B || ev->button==INPUT_BTN_C) s_selection^=1u;
+        if (ev->button==INPUT_BTN_A && s_selection>0) --s_selection;
+        if (ev->button==INPUT_BTN_B && s_selection<1) ++s_selection;
         if (ev->button==INPUT_BTN_D) {
             if (s_selection) pong_service_start_human();
             else pong_service_start_ai();
+            pong_service_snapshot(&view);
+            update_legend(view.mode);
         }
         return;
     }
     if (view.mode==PONG_VIEW_AI || view.mode==PONG_VIEW_HUMAN) {
-        if (ev->button==INPUT_BTN_B) pong_service_move_paddle(-1);
-        if (ev->button==INPUT_BTN_C) pong_service_move_paddle(1);
-        if (ev->button==INPUT_BTN_D) pong_service_toggle_pause();
+        if (ev->button==INPUT_BTN_D && view.mode==PONG_VIEW_AI) pong_service_toggle_pause();
     }
 }
 
@@ -74,7 +93,20 @@ void pong_tick_wrapper(shell_app_context_t *ctx, float dt_sec)
 {
     (void)ctx;
     (void)dt_sec;
+    pong_view_t view;
+    pong_service_snapshot(&view);
+    int paddle_input=0;
+    if(view.mode==PONG_VIEW_AI || view.mode==PONG_VIEW_HUMAN) {
+        input_button_t held=input_current_button();
+        if(held==INPUT_BTN_A) paddle_input=-1;
+        else if(held==INPUT_BTN_B) paddle_input=1;
+    }
+    pong_service_set_paddle_input(paddle_input);
     pong_service_tick();
+    pong_service_snapshot(&view);
+    update_legend(view.mode);
+    if(view.mode==PONG_VIEW_MENU)
+        shell_ui_menu_tick(&s_menu_motion,dt_sec,s_selection);
 }
 
 void pong_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, int h)
@@ -83,15 +115,18 @@ void pong_draw_wrapper(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int 
     if (!fb || w<20 || h<16) return;
     pong_view_t view; pong_service_snapshot(&view);
     if (view.mode==PONG_VIEW_MENU) {
-        oled_draw_text3x5(fb,x+4,y+2,"Pong");
-        oled_draw_text3x5(fb,x+4,y+12,s_selection==0 ? "> AI" : "  AI");
-        oled_draw_text3x5(fb,x+4,y+22,s_selection==1 ? "> Human" : "  Human");
-        if (!view.human_available) oled_draw_text3x5(fb,x+4,y+32,"Human unavailable");
+        shell_menu_entry_t entries[2]={s_menu_entries[0],s_menu_entries[1]};
+        if(!view.human_available) entries[1].label="Human unavailable";
+        shell_menu_view_t menu={
+            .entries=entries,.count=2,.selected=s_selection,.title="PONG",
+            .motion=&s_menu_motion,
+        };
+        shell_ui_draw_menu(fb,x,y,w,h,&menu);
         return;
     }
     if (view.mode!=PONG_VIEW_AI && view.mode!=PONG_VIEW_HUMAN) {
         oled_draw_text3x5(fb,x+3,y+8,view.mode==PONG_VIEW_WAITING ? "Waiting for player" : "Connecting...");
-        oled_draw_text3x5(fb,x+3,y+20,"A: back"); return;
+        return;
     }
     for (int row=PONG_TOP;row<PONG_BOTTOM;row+=4) pixel(fb,PONG_CENTER_X,row);
     rect(fb,4,(int)view.paddle[0],2,PONG_PADDLE_H);

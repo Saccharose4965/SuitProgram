@@ -7,9 +7,9 @@ The screen owns the camera angle, selected arm and a session-local reference.
 Direction mapping and upper-arm estimation belong to the
 [orientation service](../../services/orientation/README.md).
 
-Opening resets the camera and reference while retaining the selected arm.
+Opening resets the camera and its caller-owned reference while retaining the selected arm.
 A/B rotate the view, C changes arms and invalidates calibration, and D captures
-the folded-arm reference. Samples older than 250 ms are ignored. With a fresh
+the folded-arm reference. Orientation rejects samples older than 250 ms. With a fresh
 sample but no reference, the screen asks for calibration.
 
 Drawing places the elbow from the estimated upper-arm direction and the wrist

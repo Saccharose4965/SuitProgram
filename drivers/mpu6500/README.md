@@ -23,6 +23,5 @@ allowing consumers to detect stale data.
 
 The caller selects sampling rate, task priority, core and stack allocation.
 Starting an existing sampler succeeds without changing its settings. There is
-no stop API. The parameter called stack_words is passed straight to ESP-IDF's
-task creation API, whose stack size is in bytes: the naming/default expression
-is a legacy inconsistency requiring a separate caller audit before alteration.
+no stop API. The stack-size parameter is explicitly measured in bytes; zero
+selects the 4096-byte default used by both current callers.

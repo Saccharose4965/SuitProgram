@@ -51,13 +51,19 @@ Every completed local stream writes a short zero tail before muting and
 disabling TX. The tail lets queued samples drain and reduces the edge that
 would otherwise produce an audible pop.
 
-## Playback progress
+## Playback timeline
 
 The progress snapshot contains submitted frames, their sample rate, the most
 recent update time and whether the frames went to Bluetooth. Updates and reads
-use a short critical section so the Show runtime can derive playback position
-without observing a partially written 64-bit count. Progress is reset by Audio
-Player when a new track is accepted.
+use a short critical section. Progress is reset by Audio Player when a new
+track is accepted.
+
+The shared timeline converts that snapshot into estimated audible position.
+It subtracts the configured Bluetooth delay or the local I2S DMA queue depth,
+then advances from the last submission timestamp across that buffered interval.
+It marks a timeline stalled when submissions stop beyond the queue delay. Show
+Runtime and Bad Apple consume this clock, and the Show delay control updates
+the shared Bluetooth value. The default is 100 ms.
 
 Host-side WAV parser tests remain to be added. Hardware acceptance should play
 mono and stereo files from SD, exercise pause/abort, compare local volume and

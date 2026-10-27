@@ -17,21 +17,23 @@ Rotation tries the requested orientation at the current location, then offsets
 of one left, one right, two left, two right and one up. The first valid attempt
 wins. These are the existing simple kicks, not a full competitive Tetris ruleset.
 
-Each drop request moves down one cell if possible. Otherwise a piece whose
-origin is still above the board resets the board and current score. A piece
-inside the board locks into the occupied cells and complete rows are removed,
-shifting higher rows down. Each cleared row awards 100 points.
+Each drop request moves down one cell if possible. A blocked piece whose origin
+is still above the board marks the run finished and preserves the final board
+and score. A blocked piece inside the board locks into the occupied cells and
+complete rows are removed, shifting higher rows down. Each cleared row awards
+100 points.
 
-Both lock and game-over reset spawn the queued piece at the top and choose a
-new random preview. Shapes use independent random selection, without a bag.
-The shared spawn path keeps these two transitions consistent.
+After a normal lock, the queued piece spawns at the top and a new random preview
+is selected. Shapes use independent random selection, without a bag. Movement,
+rotation and drop calls leave a finished run unchanged until initialization
+starts the next run.
 
 ## State and persistence
 
-Initialization clears the board and score and loads the saved best through the
+Initialization clears the board, score and game-over state and loads the saved best through the
 [scores service](../scores/README.md). A new record marks it dirty. Finish saves
-that record, logging failures. Resetting after game over retains the best.
+that record, logging failures; a successful save clears the dirty flag.
 
-The app owns timing and calls move, rotate and drop synchronously on its worker.
-The service creates no task, reads no buttons and draws nothing. Its const state
-view is for that worker; it is not a synchronized snapshot for other tasks.
+The app owns timing and calls move, rotate and drop synchronously from the shell
+callback path. Its const state view supplies the same path with board, piece,
+score, preview and game-over data.

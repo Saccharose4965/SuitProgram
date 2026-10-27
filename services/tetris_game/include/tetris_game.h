@@ -12,6 +12,7 @@ typedef struct {
     piece_t current;
     uint8_t next_shape;
     uint32_t score, best;
+    bool game_over;
 } tetris_state_t;
 void tetris_game_init(void);
 void tetris_game_finish(void);

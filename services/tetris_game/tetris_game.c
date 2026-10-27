@@ -132,6 +132,7 @@ void tetris_game_init(void) {
     s.current = (piece_t){ BOARD_W/2 - 2, -2, s.next_shape, 0 };
     s.next_shape = (uint8_t)rand_shape();
     s.score = 0; // reset per run
+    s.game_over = false;
     high_dirty = false;
     uint32_t saved_high = 0;
     if (scores_load_high(kScoreKey, &saved_high) == ESP_OK) {
@@ -142,6 +143,7 @@ void tetris_game_init(void) {
     }
 }
 void tetris_game_drop(void) {
+    if (s.game_over) return;
     piece_t p = s.current;
     p.y++;
     if (!collision(p)) {
@@ -149,8 +151,8 @@ void tetris_game_drop(void) {
         return;
     }
     if (s.current.y < 0) {
-        memset(s.board, 0, sizeof(s.board));
-        s.score = 0;
+        s.game_over = true;
+        return;
     } else {
         place(s.current);
         int cleared = clear_lines();
@@ -170,6 +172,7 @@ void tetris_game_finish(void) {
         uint32_t high_out = 0;
         if (scores_update_high(kScoreKey, s.best, &high_out) == ESP_OK) {
             s.best = high_out;
+            high_dirty = false;
         } else {
             ESP_LOGW(TAG, "Failed to save high score");
         }
@@ -177,8 +180,11 @@ void tetris_game_finish(void) {
 }
 
 void tetris_game_move(int dx) {
+    if (s.game_over) return;
     piece_t p=s.current; p.x+=dx;
     if (!collision(p)) s.current=p;
 }
-void tetris_game_rotate(int delta) { (void)try_rotate(&s.current,delta); }
+void tetris_game_rotate(int delta) {
+    if (!s.game_over) (void)try_rotate(&s.current,delta);
+}
 const tetris_state_t *tetris_game_state(void) { return &s; }
