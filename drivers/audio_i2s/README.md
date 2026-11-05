@@ -41,20 +41,6 @@ The RX overflow callback increments a diagnostic counter in interrupt context.
 Consumers compare revisions and overflow counts before and after a read to
 decide whether its samples form a valid uninterrupted window.
 
-The receive-completion callback also counts completed stereo frames and records
-first/latest DMA completion times using the monotonic timer. The observations
-reset at a clock revision; events during reconfiguration are ignored. A short
-ISR critical section publishes a coherent snapshot through
-`audio_i2s_rx_timing_snapshot()`. It allocates no buffers and changes no DMA,
-read, clock or scheduling configuration. The first completion's frame count is
-excluded when estimating rate because its samples precede that first timestamp.
-
-Consumers can compare measured DMA production rate with the configured rate
-and check the age of the latest completion. These statistics do not identify
-which queued descriptor an `i2s_channel_read()` returned and cannot themselves
-measure that read's sample age. Hardware runs must validate observed rates and
-IRQ timing; a successful build does not establish timestamp accuracy.
-
 ## Release and restoration
 
 `audio_i2s_release()` disables both directions, mutes the amplifier and deletes

@@ -6,7 +6,6 @@
 #include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -19,8 +18,6 @@ static volatile int s_rate = 48000;
 static volatile bool s_rate_changing;
 static volatile uint32_t s_clock_revision;
 static volatile uint32_t s_rx_overflows;
-static portMUX_TYPE s_rx_timing_mux = portMUX_INITIALIZER_UNLOCKED;
-static audio_i2s_rx_timing_t s_rx_timing;
 static bool s_tx_enabled;
 static bool s_rx_enabled;
 static bool s_configured;
@@ -39,35 +36,6 @@ static bool IRAM_ATTR rx_overflow(i2s_chan_handle_t channel,
     (void)user;
     ++s_rx_overflows;
     return false;
-}
-
-static bool IRAM_ATTR rx_received(i2s_chan_handle_t channel,
-                                  i2s_event_data_t *event, void *user)
-{
-    (void)channel;
-    (void)user;
-    if (s_rate_changing) return false;
-    int64_t now = esp_timer_get_time();
-    uint32_t frames = event->size / (2 * sizeof(int32_t));
-    portENTER_CRITICAL_ISR(&s_rx_timing_mux);
-    if (s_rx_timing.revision != s_clock_revision || !s_rx_timing.first_us) {
-        s_rx_timing = (audio_i2s_rx_timing_t){
-            .first_us = now, .first_frames = frames, .revision = s_clock_revision,
-        };
-    }
-    s_rx_timing.frames += frames;
-    s_rx_timing.latest_us = now;
-    portEXIT_CRITICAL_ISR(&s_rx_timing_mux);
-    return false;
-}
-
-bool audio_i2s_rx_timing_snapshot(audio_i2s_rx_timing_t *out)
-{
-    if (!out) return false;
-    portENTER_CRITICAL(&s_rx_timing_mux);
-    *out = s_rx_timing;
-    portEXIT_CRITICAL(&s_rx_timing_mux);
-    return out->first_us > 0 && out->revision == s_clock_revision && !s_rate_changing;
 }
 
 esp_err_t audio_i2s_init(const audio_i2s_config_t *config)
@@ -123,7 +91,7 @@ esp_err_t audio_i2s_init(const audio_i2s_config_t *config)
     if (config->din_gpio >= 0) {
         err = i2s_channel_init_std_mode(s_rx, &rx_config);
         if (err != ESP_OK) goto fail;
-        i2s_event_callbacks_t callbacks = {.on_recv = rx_received, .on_recv_q_ovf = rx_overflow};
+        i2s_event_callbacks_t callbacks = {.on_recv_q_ovf = rx_overflow};
         err = i2s_channel_register_event_callback(s_rx, &callbacks, NULL);
         if (err != ESP_OK) goto fail;
     } else {

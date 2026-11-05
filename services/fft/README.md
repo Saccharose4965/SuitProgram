@@ -13,7 +13,7 @@ Capture uses 44,100 Hz stereo I2S reads and non-overlapping 1024-sample frames.
 The first read selects the stronger microphone slot. Signed PCM receives a
 saturating fourfold gain, a Hann window and a radix-2 FFT. The first read anchors
 sample time to the monotonic clock; subsequent timestamps advance by sample
-count. DMA receive statistics independently observe frame production and time.
+count. RX overflow counts and clock revisions protect capture continuity.
 
 Each frame becomes 32 linear bands of log magnitude above 100 Hz. Bands 16–23
 receive a square-root-of-two weight. Broad upper-band impulses retain the
@@ -150,22 +150,10 @@ spectrogram/history column. The viewer draws the full phase curve below its
 folded sum, translating the emitted output-clock boundary to the left border.
 [FFT View](../../apps/fft_view/README.md) owns OLED drawing and navigation.
 
-The five-second capture report includes work/cadence, result age, overdue work,
-errors, held BPM, evidence, heap and stack headroom. While phase is available,
-`phase timing v2` reports:
-
-- `peak`: strongest full-curve position relative to the clock; zero is the border.
-- `target`: signed output-anchor error in base-period fractions.
-- `ratio`: requested/applied ratio; `offbeat` and `offset`: current controls.
-- `capture-age`: age of the calculated last processed audio timestamp.
-- `phase-age`: age of the active phase update.
-- `emit-late`: event-request lateness after its nominal boundary.
-- `leds`: enabled Beat effect, or `other-renderer`; `export`: FFT LED permission.
-
-`RX clock` reports cumulative DMA production rate, latest-completion age, family
-and side. The driver owns those observations; see its
-[I2S documentation](../../drivers/audio_i2s/README.md). Physical sample age and
-LED output latency require hardware measurement beyond these counters.
+Capture reports warnings for audio discontinuities and errors for failed
+operations. Runtime status remains available through the service snapshot for
+the viewer and other consumers. Capture processing stays focused on receiving
+and analyzing audio.
 
 ## Verification
 

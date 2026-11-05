@@ -165,15 +165,15 @@
   },
   "drivers/audio_i2s/CMakeLists.txt": {
     "doc": "drivers/audio_i2s/README.md",
-    "sha256": "6f5d21fc70526535b0983bb3b32facf757dc9cc2534e7c45e8e4ce0881db632a"
+    "sha256": "d65124b07e8ba8bed28bd3d812377aae899629fd0f1c7c68e8c86deb3f5b7446"
   },
   "drivers/audio_i2s/audio_i2s.c": {
     "doc": "drivers/audio_i2s/README.md",
-    "sha256": "ebddd980725c3e1b6a00be0e97624a7e6ce665c9ab5e57caf1793cdbbb17aa34"
+    "sha256": "996db5ceab6831c707a13739d0b5a9ee0118b1828ef83161d86bed954bf8e64a"
   },
   "drivers/audio_i2s/include/audio_i2s.h": {
     "doc": "drivers/audio_i2s/README.md",
-    "sha256": "61a06a11be13369114b24bd5e5c71017d3496aae291a44692a69e8e4e9382fb0"
+    "sha256": "b2d24463dd09d11b4547a40c0acfe878e61c44bb8f95979b933cac17e4eb782b"
   },
   "drivers/hw/CMakeLists.txt": {
     "doc": "drivers/hw/README.md",
@@ -245,7 +245,7 @@
   },
   "services/fft/fft.c": {
     "doc": "services/fft/README.md",
-    "sha256": "12d63842e7e2012350f25c1b6ee8920f0c4c39564427bfffbf9fd3912814a06a"
+    "sha256": "2e4ba3c4e5b091cae6dcf675bfd4da674cb4f554a4bd6867af2f00545a75bca7"
   },
   "services/fft/fft_detector.c": {
     "doc": "services/fft/README.md",

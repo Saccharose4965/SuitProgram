@@ -100,9 +100,7 @@ static unsigned s_clock_ratio = 1;
 static bool s_clock_offbeat;
 static float s_clock_offset;
 static double s_last_emit;
-static float s_emit_lateness_ms;
 static uint32_t s_skipped, s_capture_errors;
-static double s_analysis_interval;
 static level_track_t s_level[4];
 
 static float wrap(float p) { return p - floorf(p); }
@@ -124,7 +122,6 @@ static void clear_capture(void)
     memset(&s_phase_decision, 0, sizeof(s_phase_decision));
     fft_beat_clock_reset(&s_clock);
     s_last_emit = 0;
-    s_emit_lateness_ms = 0;
     if (s_beats) xQueueReset(s_beats);
     fft_history_reset();
     portENTER_CRITICAL(&s_mux);
@@ -263,7 +260,6 @@ static void poll_analysis(controls_t c)
     float accepted_phase = s_current.detector.accepted_phase;
     double beat_time = s_current.detector.beat_time;
     if (had_phase) memcpy(live_phase, s_current.detector.phase, sizeof(live_phase));
-    s_analysis_interval = s_current.time > 0 ? result.time - s_current.time : 0;
     s_current = result;
     detector_result_t *d = &s_current.detector;
     if (had_phase) {
@@ -386,7 +382,6 @@ static void emit_and_publish(double now, controls_t c)
         // Emit the newest crossed boundary once. A delayed capture iteration may
         // make a flash late, but must not silently delete the beat.
         if (emitted) {
-            s_emit_lateness_ms = (float)((now - s_clock.beat_start) * 1000);
             if (c.beat_enabled) {
                 fft_beat_event_t evt = { .bpm = bpm, .confidence = fminf(1, d->confidence) };
                 xQueueSend(s_beats, &evt, 0);
@@ -508,7 +503,6 @@ static void capture_task(void *arg)
     double origin = 0;
     int fill = 0, slot = -1;
     bool suspended = false;
-    int64_t report_time = esp_timer_get_time();
     while (!s_stop_capture) {
         uint32_t revision = audio_i2s_get_clock_revision();
         bool unavailable = audio_i2s_get_rate() != DETECTOR_SAMPLE_RATE || mic_rec_is_recording();
@@ -573,60 +567,7 @@ static void capture_task(void *arg)
                 fill = 0;
             }
         }
-        if (esp_timer_get_time() - report_time >= 5000000) {
-            fft_sync_state_t status;
-            fft_get_sync_state(&status);
-            ESP_LOGI(TAG, "capture %.0f%% worker %.0fms cadence %.2fs age %.2fs overdue-frames %lu errors %lu held %.0f evidence %.2f lost %.1fs",
-                     status.capture_load, status.analysis_ms, s_analysis_interval,
-                     s_current.time > 0 ? esp_timer_get_time() / 1e6 - s_current.time : 0,
-                     (unsigned long)s_skipped,
-                     (unsigned long)s_capture_errors, status.held_bpm, status.evidence, status.lost_seconds);
-            if (s_clock.initialized && s_current.detector.phase_valid &&
-                s_current.detector.held_bpm > 0) {
-                controls_t cfg = controls_get();
-                detector_result_t *d = &s_current.detector;
-                int peak = 0;
-                for (int i = 1; i < DETECTOR_PHASE_BINS; ++i)
-                    if (d->phase[i] > d->phase[peak]) peak = i;
-                double base_period = 60.0 / d->held_bpm;
-                double clock_origin = s_clock.beat_start / base_period;
-                clock_origin -= floor(clock_origin);
-                double peak_relative = peak / (double)DETECTOR_PHASE_BINS - clock_origin;
-                peak_relative -= floor(peak_relative);
-                double target_error = (phase_clock_anchor(cfg) - s_clock.beat_start) / base_period;
-                target_error -= round(target_error);
-                double capture_age = -1;
-                if (samples > (uint64_t)fill) {
-                    double frame_time = origin + (samples - fill - 1) /
-                                                (double)DETECTOR_SAMPLE_RATE;
-                    capture_age = (esp_timer_get_time() / 1e6 - frame_time) * 1000;
-                }
-                ESP_LOGI(TAG, "phase timing v2: peak=%.3f target=%+.3f ratio=%u/%u offbeat=%d offset=%.3f capture-age=%.1fms phase-age=%.1fms emit-late=%.1fms leds=%s export=%d",
-                         peak_relative, target_error, cfg.ratio, s_clock_ratio,
-                         cfg.offbeat, cfg.offset,
-                         capture_age,
-                         s_phase_tracker.active.have ?
-                             (esp_timer_get_time() / 1e6 - s_phase_tracker.active.last_update) * 1000 : -1,
-                         s_emit_lateness_ms,
-                         led_beat_enabled() ? led_beat_anim_name(led_beat_anim_get()) : "other-renderer",
-                         cfg.export_leds);
-                audio_i2s_rx_timing_t rx_time;
-                if (audio_i2s_rx_timing_snapshot(&rx_time) &&
-                    rx_time.latest_us > rx_time.first_us) {
-                    double measured_rate = (rx_time.frames - rx_time.first_frames) * 1e6 /
-                                           (rx_time.latest_us - rx_time.first_us);
-                    ESP_LOGI(TAG, "RX clock: measured=%.3fHz nominal=%d latest-DMA-age=%.1fms family=%d side=%d branch=nearest-anchor",
-                             measured_rate, DETECTOR_SAMPLE_RATE,
-                             (esp_timer_get_time() - rx_time.latest_us) / 1000.0,
-                             s_phase_tracker.active.family, s_phase_tracker.active.side);
-                }
-            }
-            ESP_LOGI(TAG, "internal heap %u; stack headroom capture %u worker %u bytes",
-                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
-                     (unsigned)uxTaskGetStackHighWaterMark(NULL),
-                     s_analysis_task ? (unsigned)uxTaskGetStackHighWaterMark(s_analysis_task) : 0);
-            report_time = esp_timer_get_time();
-        }
+
     }
     free(input);
     s_capture_task = NULL;
@@ -660,7 +601,6 @@ esp_err_t fft_visualizer_start(void)
     s_job_busy = s_phase_busy = false;
     s_stop_capture = s_stop_analysis = s_stop_phase = false;
     s_skipped = s_capture_errors = 0;
-    s_analysis_interval = 0;
     memset(s_level, 0, sizeof(s_level));
     fft_detector_reset();
     s_capture_epoch = controls_get().epoch;
