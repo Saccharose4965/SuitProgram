@@ -6,6 +6,7 @@
 #undef main
 #include "fft_detector.h"
 #include "fft_phase.h"
+#include "fft_display.h"
 #include <assert.h>
 
 static float embedded_frames[DETECTOR_FRAMES * DETECTOR_BANDS];
@@ -159,14 +160,18 @@ static void test_phase_replay(void)
         assert(a.familySwitched == b.family_switched && a.selectedSide == b.side);
         assert(fabs(a.flashAnchorTime - b.anchor) < 1e-9);
         assert(fabs(a.preciseBpm - b.precise_bpm) < 1e-9);
-        if (a.valid && certain) {
+        if (a.valid) {
             if (!pc_clock.initialized || a.acquired || a.restored) {
-                beat_clock_init_from_detected_beat(&pc_clock, a.preciseBpm, a.flashAnchorTime, time);
-                fft_beat_clock_init(&clock, b.precise_bpm, b.anchor, time);
-            } else if (a.correctionApplied || a.familySwitched) {
+                if (certain) {
+                    beat_clock_init_from_detected_beat(&pc_clock, a.preciseBpm,
+                                                       a.flashAnchorTime, time);
+                    fft_beat_clock_init(&clock, b.precise_bpm, b.anchor, time);
+                }
+            } else if (certain) {
                 beat_clock_schedule_from_detected_beat(&pc_clock, a.preciseBpm, a.flashAnchorTime);
                 fft_beat_clock_schedule(&clock, b.precise_bpm, b.anchor);
             }
+            if (!certain) { pc_clock.hasPendingBpm = 0; clock.pending = false; }
         }
         beat_clock_update(&pc_clock, time);
         fft_beat_clock_update(&clock, time);
@@ -175,18 +180,136 @@ static void test_phase_replay(void)
     puts("1200-step PC/ESP phase and beat-clock replay passed.");
 }
 
+static void test_phase_wrap_and_family_replacement(void)
+{
+    const double starts[] = {.49, .51, .01, .99};
+    const double ends[] = {.51, .49, -.01, 1.01};
+    const double targets[] = {.70, .30, .80, .20};
+    for (unsigned run = 0; run < sizeof(starts) / sizeof(starts[0]); ++run) {
+        PhaseTracker pc = {0}; fft_phase_tracker_t port = {0};
+        bool switched = false;
+        for (int n = 0; n < 200; ++n) {
+            PhaseEvidence evidence = {0}; fft_phase_evidence_t e = {0};
+            double peak = starts[run] + (ends[run] - starts[run]) * fmin(n / 100.0, 1);
+            for (int i = 0; i < 128; ++i) {
+                double a = phase_wrap_error(i / 128.0 - peak, 1);
+                double b = phase_wrap_error(i / 128.0 - targets[run], 1);
+                evidence.score[0][i] = exp(-a*a/.0001) +
+                    (n > 120 ? 3 : 0) * exp(-b*b/.0001);
+            }
+            phase_finalize_evidence_mode(&evidence, PHASE_SCORE_MEAN);
+            memcpy(e.score, evidence.score[0], sizeof(e.score));
+            memcpy(e.folded, evidence.folded[0], sizeof(e.folded));
+            e.best_family = evidence.bestFamily[0]; e.best_side = evidence.bestSide[0];
+            e.prominence = evidence.familyProminence[0];
+            double time = 100 + n * 8.0 * FFT_SIZE / SAMPLE_RATE;
+            PhaseDecision a = phase_tracker_update(&pc, &evidence, PHASE_SCORE_MEAN,
+                                                   120, time, 1, 0);
+            fft_phase_decision_t b = fft_phase_update(&port, &e, 120, time, true, false);
+            assert(a.valid && b.valid && a.familySwitched == b.family_switched);
+            assert(a.selectedSide == b.side);
+            assert(fabs(a.flashAnchorTime - b.anchor) < 1e-9);
+            double anchor_phase = phase_wrap01(a.flashAnchorTime * 2);
+            if (n == 120) assert(fabs(phase_wrap_error(anchor_phase - ends[run], 1)) < .03);
+            if (a.familySwitched) {
+                switched = true;
+                // A numerical side bit must never add an unintended half-beat.
+                assert(fabs(phase_wrap_error(anchor_phase - targets[run], 1)) < .03);
+            }
+        }
+        assert(switched);
+    }
+    puts("Phase branch regression: half/full-cycle wrap in both directions, then family replacement; no half-beat jump.");
+}
+
+static void test_output_clock_and_graph(void)
+{
+    SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0, 512, 256, 32,
+                                                         SDL_PIXELFORMAT_ARGB8888);
+    assert(surface);
+    SDL_Renderer *renderer = SDL_CreateSoftwareRenderer(surface);
+    assert(renderer);
+    const int tempos[] = {80, 105, 120, 138, 159};
+    for (unsigned t = 0; t < sizeof(tempos) / sizeof(tempos[0]); ++t) {
+        for (int mode = 0; mode < 3; ++mode) {
+            double bpm = tempos[t], base_period = 60 / bpm;
+            int ratio = mode == 2 ? 2 : 1;
+            double anchor = .25 * base_period;
+            double output_anchor = anchor + (mode == 1 ? .5 * base_period : 0);
+            double now = 100.137;
+            BeatClock pc = {0}; fft_beat_clock_t esp = {0};
+            beat_clock_init_from_detected_beat(&pc, bpm * ratio, output_anchor, now);
+            fft_beat_clock_init(&esp, bpm * ratio, output_anchor, now);
+            double pc_last = 0, esp_last = 0;
+            for (int n = 0; n < 300; ++n) {
+                // Include delayed updates, local corrections, and a control change.
+                now += n % 47 == 0 ? base_period * .8 : 1024.0 / 44100;
+                if (n % 8 == 0) {
+                    beat_clock_schedule_from_detected_beat(&pc, bpm * ratio, output_anchor + .002);
+                    fft_beat_clock_schedule(&esp, bpm * ratio, output_anchor + .002);
+                }
+                if (n == 150) {
+                    output_anchor += .5 * base_period;
+                    beat_clock_init_from_detected_beat(&pc, bpm * ratio, output_anchor, now);
+                    fft_beat_clock_init(&esp, bpm * ratio, output_anchor, now);
+                }
+                assert(beat_clock_emit(&pc, now, &pc_last) ==
+                       fft_beat_clock_emit(&esp, now, &esp_last));
+                assert(fabs(pc_last - esp_last) < 1e-9);
+                assert(fabs(pc.beatStartTime - esp.beat_start) < 1e-8);
+                assert(fabs(pc.nextBeatTime - esp.next_beat) < 1e-8);
+            }
+            // Render identical absolute evidence through both production views.
+            BeatDebug debug = {.phaseValid=1, .targetBpm=bpm, .targetPhaseCount=128};
+            fft_history_snapshot_t history = {0};
+            history.detector.phase_valid = true;
+            history.latest.status.bpm = (float)esp.bpm;
+            double origin = esp.beat_start * bpm / 60;
+            history.latest.clock_origin = (float)(origin - floor(origin));
+            for (int i = 0; i < 128; ++i) {
+                float error = (float)phase_wrap_error(i / 128.0 - .25, 1);
+                float value = expf(-error * error / .001f);
+                debug.targetPhaseScore[i] = history.detector.phase[i] = value;
+            }
+            draw_target_choice_panel(renderer, 0, 0, 512, 256, &debug, &pc, ratio, now);
+            SDL_RenderPresent(renderer);
+            uint8_t fb[FFT_DISPLAY_BYTES];
+            fft_display_draw(&history, FFT_VIEW_PHASE_COMB, fb);
+            // Compare the horizontally brightest bin across both phase bands.
+            for (int band = 0; band < 2; ++band) {
+                int pc_best = 0, esp_best = 0, pc_height = -1, esp_height = -1;
+                for (int col = 0; col < 128; ++col) {
+                    int a = 0, b = 0;
+                    for (int y = band * 128 + 1; y < (band + 1) * 128; ++y) {
+                        Uint32 *row = (Uint32 *)((char *)surface->pixels + y * surface->pitch);
+                        a += row[256 + col * 2] == 0xffd2d2d2;
+                    }
+                    for (int y = band * 32; y < (band + 1) * 32; ++y) {
+                        int bit = y * 128 + col;
+                        b += (fb[bit / 8] >> (7 - bit % 8)) & 1;
+                    }
+                    if (a > pc_height) { pc_height = a; pc_best = col; }
+                    if (b > esp_height) { esp_height = b; esp_best = col; }
+                }
+                assert(phase_circular_distance(pc_best, esp_best, 128) <= 2);
+            }
+        }
+    }
+    SDL_DestroyRenderer(renderer); SDL_FreeSurface(surface);
+    puts("PC/ESP output parity: 4500 emission steps and both rendered phase bands, on/offbeat and 2x.");
+}
+
 static void test_bpm_replay(void)
 {
     detector_t port = {0};
     BpmHoldState pc = {0};
     ScoreHistory history = {0};
-    double time = 0, lost = 0, loss_time = 0;
-    bool have_loss_time = false;
+    double time = 0;
     const double hop = DETECTOR_HOP_FRAMES * FFT_SIZE / (double)SAMPLE_RATE;
-    int stops = 0, switches = 0;
+    int switches = 0;
     for (int n = 0; n < 900; ++n) {
         int stage = n % 300;
-        int bpm = stage < 70 ? 120 : stage < 140 ? 145 :
+        int bpm = stage < 70 ? 120 : stage < 140 ? 121 :
                   stage < 220 ? ((n & 1) ? 100 : 130) : 105;
         if (stage == 35 || stage == 36) bpm = 138; // short challenger
         float scores[BPM_COUNT]; double reference[BPM_COUNT], mean[BPM_COUNT];
@@ -207,13 +330,7 @@ static void test_bpm_replay(void)
             &confidence, &evidence, &trusted);
         bool changed = pc.have && pc.bpm != previous;
         switches += changed;
-        lost = update_lost_pulse(lost, have_loss_time ? time - loss_time : .5,
-            0, pc.have, held_score_ratio(mean, final_bpm), changed);
-        loss_time = time; have_loss_time = true;
-        bool stopped = pc.have && lost >= AUTO_STOP_LOST_SECONDS;
-        if (stopped) {
-            ++stops; bpm_hold_reset(&pc); lost = 0; have_loss_time = false;
-        }
+        bool stopped = false;
         detector_result_t out;
         detector_update(&port, scores, time, (detector_control_t){.phase_lock=soft}, &out);
         assert(out.held_bpm == (pc.have ? pc.bpm : 0));
@@ -226,11 +343,11 @@ static void test_bpm_replay(void)
             assert(out.trusted == trusted);
             assert(fabs(out.confidence - confidence) < 1e-4);
             assert(fabs(out.evidence - evidence) < 1e-4);
-            assert(fabs(out.lost_seconds - lost) < 1e-4);
+            assert(out.lost_seconds == 0);
         }
     }
-    assert(stops > 0 && switches > 5);
-    puts("900-step PC/ESP BPM replay passed: acquisition, rejection, switching, soft lock, delayed jobs, loss/reacquisition.");
+    assert(switches > 5);
+    puts("900-step PC/ESP BPM replay passed: acquisition, rejection, switching, soft lock, delayed jobs, no automatic release.");
 }
 
 int main(void)
@@ -238,5 +355,7 @@ int main(void)
     test_scores_and_phase(); test_filter_reference(); test_readiness_reference();
     test_phase_replay();
     test_bpm_replay();
+    test_output_clock_and_graph();
+    test_phase_wrap_and_family_replacement();
     puts("Actual localFFT reference regressions passed.");
 }

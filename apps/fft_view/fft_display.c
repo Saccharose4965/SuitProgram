@@ -8,9 +8,9 @@
 static float clamp(float x, float max) { return isfinite(x) ? fminf(max, fmaxf(0, x)) : 0; }
 static float wrap(float x) { return x - floorf(x); }
 
-float fft_display_clock_phase(float absolute, float origin, unsigned ratio)
+float fft_display_relative_phase(float absolute, float origin, unsigned folds)
 {
-    return wrap((absolute - origin) * (ratio ? ratio : 1));
+    return wrap((absolute - origin) * (folds ? folds : 1));
 }
 
 static void pixel(uint8_t *fb, int x, int y)
@@ -74,38 +74,46 @@ static void tempo(const fft_history_snapshot_t *d, uint8_t *fb, int x, int y, in
 {
     float scale = 1e-9f;
     for (int i = 0; i < DETECTOR_BPM_COUNT; ++i) scale = fmaxf(scale, d->detector.scores[i]);
-    for (int col = 0; col < w; ++col) {
-        int a = col * DETECTOR_BPM_COUNT / w;
-        int b = (col + 1) * DETECTOR_BPM_COUNT / w;
-        if (b <= a) b = a + 1;
-        float value = 0;
-        for (int i = a; i < b; ++i) value = fmaxf(value, d->detector.scores[i]);
+    int count = w < DETECTOR_BPM_COUNT ? w : DETECTOR_BPM_COUNT;
+    int left = x + (w - count) / 2;
+    for (int col = 0; col < count; ++col) {
+        float value = d->detector.scores[col];
         int height = (int)lroundf(clamp(value / scale, 1) * h);
+        if (height) vertical(fb, left + col, y + h - height, y + h - 1, 1);
+    }
+}
+
+static void phase_band(const float *scores, int count, float origin, unsigned folds,
+                       uint8_t *fb, int x, int y, int w, int h)
+{
+    float low = scores[0], high = low;
+    for (int i = 1; i < count; ++i) {
+        low = fminf(low, scores[i]);
+        high = fmaxf(high, scores[i]);
+    }
+    for (int col = 0; col < w; ++col) {
+        float relative = (float)col / w;
+        float absolute = wrap(origin + relative / folds);
+        int bin = (int)floorf(absolute * DETECTOR_PHASE_BINS + 1e-4f) % count;
+        float level = high > low ? (scores[bin] - low) / (high - low) : 0;
+        int height = (int)lroundf(clamp(level, 1) * h);
         if (height) vertical(fb, x + col, y + h - height, y + h - 1, 1);
     }
 }
 
 static void phase(const fft_history_snapshot_t *d, uint8_t *fb, int x, int y, int w, int h)
 {
-    const fft_sync_state_t *s = &d->latest.status;
-    if (d->detector.phase_valid && s->bpm > 0) {
-        float low = d->detector.phase[0], high = low;
-        for (int p = 1; p < DETECTOR_PHASE_BINS; ++p) {
-            low = fminf(low, d->detector.phase[p]); high = fmaxf(high, d->detector.phase[p]);
-        }
-        float heights[W] = {0};
-        for (int p = 0; p < DETECTOR_PHASE_BINS; ++p) {
-            float output = fft_display_clock_phase((float)p / DETECTOR_PHASE_BINS,
-                                                   d->latest.clock_origin, s->ratio);
-            int col = (int)lroundf(output * (w - 1));
-            float level = high > low ? (d->detector.phase[p] - low) / (high - low) : 0;
-            heights[col] = fmaxf(heights[col], level);
-        }
-        for (int col = 0; col < w; ++col) {
-            int height = (int)lroundf(clamp(heights[col], 1) * h);
-            if (height) vertical(fb, x + col, y + h - height, y + h - 1, 1);
-        }
-    }
+    if (!d->detector.phase_valid || d->latest.status.bpm <= 0 || h < 2) return;
+
+    float folded[DETECTOR_PHASE_BINS / 2];
+    for (int i = 0; i < DETECTOR_PHASE_BINS / 2; ++i)
+        folded[i] = d->detector.phase[i] + d->detector.phase[i + DETECTOR_PHASE_BINS / 2];
+
+    int top = h / 2;
+    float origin = d->latest.clock_origin;
+    phase_band(folded, DETECTOR_PHASE_BINS / 2, origin, 2, fb, x, y, w, top);
+    phase_band(d->detector.phase, DETECTOR_PHASE_BINS, origin, 1,
+               fb, x, y + top, w, h - top);
 }
 
 void fft_display_draw(const fft_history_snapshot_t *d, fft_view_t view,

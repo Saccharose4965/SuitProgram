@@ -13,7 +13,7 @@ flags=(-std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fsanitize=address,undefine
 if [[ -f ../localFFT/LatestFFT.c ]] && pkg-config --exists alsa sdl2; then
     read -ra pc_cflags <<< "$(pkg-config --cflags alsa sdl2)"
     read -ra pc_libs <<< "$(pkg-config --libs alsa sdl2)"
-    "${CC:-gcc}" "${flags[@]}" -D_DEFAULT_SOURCE "${pc_cflags[@]}" services/fft/tests/test_localfft_reference.c services/fft/fft_detector.c services/fft/fft_phase.c "${pc_libs[@]}" -lm -o "$fft_test_dir/reference"
+    "${CC:-gcc}" "${flags[@]}" -I apps/fft_view/include -I services/fft/tests/host_stubs -D_DEFAULT_SOURCE "${pc_cflags[@]}" services/fft/tests/test_localfft_reference.c services/fft/fft_detector.c services/fft/fft_phase.c apps/fft_view/fft_display.c "${pc_libs[@]}" -lm -o "$fft_test_dir/reference"
     "$fft_test_dir/reference"
 else
     echo 'SKIP actual desktop parity: requires ../localFFT/LatestFFT.c and ALSA/SDL2 development packages.'

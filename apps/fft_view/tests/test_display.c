@@ -29,7 +29,7 @@ int main(void)
     packet.status = (fft_sync_state_t){.held_bpm=120, .detected_bpm=122, .bpm=240,
         .ratio=2, .running=true, .beat_enabled=true, .beat_phase=.25f,
         .trigger_phase=.5f, .evidence=1.05f, .lost_seconds=12.5f};
-    packet.decision = 1.08f; packet.time = 10; packet.clock_origin = .17f;
+    packet.decision = 1.08f; packet.time = 10; packet.clock_origin = .25f;
     // Energy only above 11 kHz must reach the top of the graph. The old view
     // accidentally covered only the lower 256 FFT bins (half the frequency range).
     for (int i = 16; i < FFT_HISTORY_ROWS; ++i) packet.magnitudes[i] = 50;
@@ -51,9 +51,11 @@ int main(void)
     assert(display.confidence[20] == .2f && display.evidence[20] == .3f);
     assert(display.spectrogram[20][31] == 0 && display.spectrogram[19][31] == 255);
     display.detector.phase_valid = true;
-    display.detector.candidate_phase = .67f; display.detector.accepted_phase = .17f;
+    display.detector.candidate_phase = .67f; display.detector.accepted_phase = .25f;
     display.detector.scores[40] = .4f;
-    for (int i = 0; i < DETECTOR_PHASE_BINS; ++i) display.detector.phase[i] = 2 + sinf(i * .1f);
+    for (int i = 0; i < DETECTOR_PHASE_BINS; ++i) display.detector.phase[i] = 1;
+    display.detector.phase[32] = 5;  // accepted unfolded side
+    display.detector.phase[96] = 3;  // opposite side in the same folded family
     before = display;
     for (int view = 0; view < FFT_VIEW_COUNT; ++view) {
         draw((fft_view_t)view, guarded.fb);
@@ -61,9 +63,17 @@ int main(void)
         assert(memcmp(&before, &display, sizeof(display)) == 0); // drawing never advances history
     }
     for (int i = 0; i < 16; ++i) assert(guarded.left[i] == 0xa5 && guarded.right[i] == 0xa5);
-    assert(fabsf(fft_display_clock_phase(.67f, .17f, 1) - .5f) < 1e-6f);
-    assert(fabsf(fft_display_clock_phase(.67f, .17f, 2)) < 1e-6f);
-    assert(fabsf(fft_display_clock_phase(.67f, .17f, 3) - .5f) < 1e-6f);
+    draw(FFT_VIEW_PHASE_COMB, guarded.fb);
+    assert(pixels(guarded.fb, 0, 0, 1, 32) == 32);   // folded family starts at phase 0
+    assert(pixels(guarded.fb, 1, 0, 2, 32) == 32);   // 64 folded bins span two columns each
+    assert(pixels(guarded.fb, 0, 32, 1, 64) == 32);  // accepted full phase starts at phase 0
+    assert(pixels(guarded.fb, 64, 32, 65, 64) > 0);  // opposite unfolded side remains visible
+    assert(fabsf(fft_display_relative_phase(.67f, .17f, 1) - .5f) < 1e-6f);
+    assert(fabsf(fft_display_relative_phase(.67f, .17f, 2)) < 1e-6f);
+    draw(FFT_VIEW_TEMPO_RAW, guarded.fb);
+    assert(pixels(guarded.fb, 64, 0, 65, 64) == 64); // BPM bin 40: left margin 24
+    assert(pixels(guarded.fb, 0, 0, 64, 64) == 0);
+    assert(pixels(guarded.fb, 65, 0, 128, 64) == 0);
     fft_history_model_reset(&display);
     memset(packet.magnitudes, 0, sizeof(packet.magnitudes));
     packet.magnitudes[5] = .05f; // moderate input must be visible

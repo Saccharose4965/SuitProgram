@@ -2,108 +2,180 @@ Pending review
 
 # FFT rhythm service
 
-This background service converts microphone PCM into audio levels, a stable BPM
-hold, phase-corrected beat events and diagnostic history. It is the embedded
-port of `../localFFT/LatestFFT.c`. The portable detector and phase tests compile
-both implementations against identical synthetic inputs to guard that parity.
+The service turns microphone audio into a held tempo, a phase-aligned output
+clock, beat events, audio levels and diagnostic history. Its portable detector
+and phase tracker share their decision rules with the PC harness in
+`../localFFT`, versioned on the repository's `pc-fft` branch.
 
 ## Capture and spectral features
 
-Capture runs at 44,100 Hz with non-overlapping 1024-sample frames. The first
-read selects the stronger microphone slot. Signed PCM is amplified fourfold
-with saturation, multiplied by a Hann window and transformed by an in-place
-radix-2 FFT.
+Capture uses 44,100 Hz stereo I2S reads and non-overlapping 1024-sample frames.
+The first read selects the stronger microphone slot. Signed PCM receives a
+saturating fourfold gain, a Hann window and a radix-2 FFT. The first read anchors
+sample time to the monotonic clock; subsequent timestamps advance by sample
+count. DMA receive statistics independently observe frame production and time.
 
-The detector reduces log magnitudes into 32 linear bands above 100 Hz. Bands
-16 through 23 receive a square-root-of-two weight. A broad upper-band impulse
-holds the previous clean frame; button suppression uses the same hold principle
-for recent and upcoming frames. This keeps button clicks from becoming rhythmic
-evidence without inserting artificial silence into history.
+Each frame becomes 32 linear bands of log magnitude above 100 Hz. Bands 16–23
+receive a square-root-of-two weight. Broad upper-band impulses retain the
+previous clean frame. Button suppression applies the same hold to recent and
+upcoming frames. This preserves the history's rhythm through short clicks.
 
-Separate smoothed low, mid, high and overall levels feed LED controls. Their
-publication is independent of the BPM analysis cadence.
+Smoothed low, mid, high and overall audio levels feed lighting controls on each
+capture frame. Histories and FFT buffers use PSRAM; DMA buffers and task stacks
+use internal RAM.
 
-## BPM score and hold decision
+## BPM scores and evidence
 
-The score uses four seconds of band history and evaluates integer BPM 80–159.
-For each candidate, interpolated comb teeth sample multiple phases and measure
-the average variance across phases and bands. Lower variance becomes a larger
-score. A two-half linear baseline is removed, positive results are retained and
-the spectrum is normalized to unit sum.
+Four seconds of cleaned band history supply scores for integer BPM 80–159.
+For each BPM, a comb samples interpolated frames at equally spaced beat times
+for multiple phase offsets. Average variance across the sampled phases and
+bands measures rhythmic mismatch. Lower variance produces a higher score.
+Two fitted linear baseline halves remove the broad trend; positive residuals
+are normalized to unit sum.
 
-Up to eight recent spectra are averaged. The strongest adjacent pair chooses a
-candidate, with its stronger member becoming the exact bin. Evidence combines
-pair strength, low temporal variance and agreement of recent winners. A sudden
-variance change starts a three-second shock cooldown.
+A timestamped score history spans about 4.09 seconds. Observations are weighted
+by the elapsed intervals they cover. Its strongest adjacent pair chooses a
+candidate, and that pair's stronger member supplies the exact integer BPM.
+Candidate quality requires pair score at least 0.05, temporal variance at most
+0.014, and winner consistency at least 0.95. A variance change of at least 0.004
+per reference interval starts a three-second shock cooldown.
 
-Trusted observations add elapsed-time support to candidate bins; support has a
-six-second half-life. Initial acquisition needs one supported second. Switching
-requires a trusted challenger with one second of support and held support below
-half a second. Phase lock raises challenger support to two seconds and lowers
-the held-release threshold to a quarter second. Hard lock prevents automatic
-changes. Adjacent slides are blocked except 158 to 159, the top of the search
-range.
+Trusted observations accumulate support at the candidate bin. Support decays
+with a six-second half-life; fresh credit is bounded by the observation cadence.
+Initial acquisition requires one supported second. A replacement requires one
+second of challenger support and held support at most half a second. Adjacent
+±1 BPM replacements count each exact bin separately. Larger replacements sum
+support over each bin and its neighbours. This lets a persistent neighbouring
+candidate earn acceptance while the old candidate's own support decays.
 
-Loss accumulates while the held pair is below 60 percent of the current winner.
-After 40 seconds the clock is released. Hard lock suspends this release. The
-criterion is rhythmic evidence rather than volume.
+Phase lock raises replacement support to two seconds and lowers the held
+release threshold to a quarter second. Hard BPM lock retains the forced tempo.
+The accepted tempo continues through missing evidence until Reset or a
+supported replacement.
 
-The public evidence value expresses score quality before support/cooldown gates.
-Decision confidence is the minimum readiness across quality, candidate support
-and held release, and becomes zero during shock cooldown. Threshold one means
-ready; these quantities are decision metrics rather than correctness
-probabilities.
+Evidence quality is the minimum readiness of pair score, variance and
+consistency, clipped to 1.1. During acquisition and replacement, decision
+confidence also includes candidate support, held release and shock cooldown.
+For a candidate agreeing with the hold, clean evidence supplies confidence and
+phase trust even during transition cooldown. Threshold one means the relevant
+requirements are satisfied. These values express decision readiness.
 
-## Phase family and beat clock
+## Phase curve and acquisition
 
-Phase analysis runs every eight audio frames. Its 128-bin curve folds opposite
-peaks into 64 families with equal weight. The tracker follows the predicted
-family; a distant family must remain at least 20 percent stronger for six
-seconds before replacement. The chosen unfolded side persists while the BPM
-hold survives. One recently lost candidate can be restored for 45 seconds.
+Phase analysis runs every eight audio frames, about 186 ms. The held BPM defines
+a period. For each of 128 absolute phase bins, comb teeth sample the four-second
+cleaned history at proposed beat positions. The score averages the 32 band
+values at each tooth, then averages across up to 64 teeth. Subtracting the
+curve's minimum exposes relative peaks.
 
-Filtered phase error supplies a bounded anchor correction and a small
-fractional-BPM correction. The beat clock schedules corrections at the next
-boundary and steers the following cycle, preserving an already active cycle.
-Phase lock freezes family selection while drift correction continues and also
-activates the BPM soft-lock thresholds.
+Opposite bins are summed with equal weight into 64 folded timing families.
+The strongest family chooses initial timing; its stronger individual member
+chooses the full-cycle occurrence. Prominence compares the family with a runner
+more than three family bins away.
 
-Ratio and offbeat controls transform emitted boundaries after tracking. Manual
-phase trim shifts that output trigger. Beat events are queued for consumers and
-can independently be exported to the LED beat service.
+Acquisition requires complete score-history coverage, a trusted candidate,
+confidence at least one and candidate/held agreement within 0.5 BPM. Confidence
+loss pauses correction and clears filtered error while the accepted clock
+continues. Returning confidence resumes alignment from current evidence.
 
-## Tasks and stale-result protection
+## Continuous branch and family replacement
 
-Capture and FFT run on core 1 at priority 4. BPM analysis and phase analysis use
-separate priority-2 workers on core 0. BPM work is requested every 88 audio
-frames; phase work every eight. Each worker accepts one immutable snapshot.
-Busy requests are skipped instead of queued, and long BPM loops yield after a
-bounded work slice.
+The anchor records the chosen full-cycle beat timing. Each update predicts the
+folded family from that anchor and searches a 21-bin neighbourhood. Local
+tracking follows gradual phase movement. The numerical side bit identifies the
+chosen member in the family's current wrapped coordinates, and is recomputed
+from the occurrence nearest the anchor as those coordinates cross 0 or 0.5.
 
-Epochs invalidate results spanning a DMA gap or reset. Control revisions reject
-work computed with obsolete lock settings. Timers use audio timestamps, and
-support credit is capped at one normal analysis interval, so delayed computation
-cannot manufacture sustained evidence.
+A distant global family can replace the local family after scoring at least
+1.20 times the local score for six accumulated seconds. Challenger time decays
+when that condition fails. Replacement chooses the full-cycle occurrence
+nearest the existing anchor, preserving timing continuity across coordinate
+wraps. Changes in relative on-beat/offbeat energy retain the selected branch.
+Phase lock holds the current family while allowing local alignment.
 
-The capture loop observes I2S rate, clock revision and RX overflow count. A
-window crossing a clock change, overflow or failed read is discarded while the
-accepted tempo remains available. Recording and playback resource policy stops
-or suspends capture and later restores the 44.1 kHz bus.
+A BPM change greater than 0.5 moves active phase state into one previous slot.
+It remains available for 45 seconds. A compatible returning BPM restores that
+state when local phase evidence lies within 0.10 cycles of its prediction.
+Other acquisitions establish a phase state from the current strongest family.
 
-## Diagnostic history
+## Fine alignment and emitted beats
 
-The service stores raw FFT magnitudes, grouped spectrogram peaks, detector
-scores, phase curve, evidence and confidence in a mutex-protected snapshot.
-Two audio frames form one timeline column. Binary frequency peaks use a 40 dB
-relative range with an absolute floor. This history advances on the audio clock
-whether the viewer is open or closed; it contains no OLED drawing code.
+The local family's two occurrences are compared with the predicted half-beat
+occurrence. Their signed timing error is wrapped over half a period and filtered
+with a 0.8-second time constant and a 0.1-bin deadband. Tracking requires
+prominence at least 1.05 and positive local evidence.
 
-Large histories and FFT buffers live in PSRAM. I2S DMA and task stacks remain
-internal. Runtime logs report capture load, analysis wall time, overdue work,
-errors, current hold, evidence, loss, heap and stack headroom.
+The anchor moves by 20% of filtered error. Each move is bounded by the remaining
+raw error and a 30 ms cap scaled to the update interval. Alignment or a sign
+reversal clears filter momentum. The nominal period is 60 divided by held BPM.
 
-Run `services/fft/tests/run_host_tests.sh` for detector, phase, history and
-desktop-reference parity. Hardware acceptance should cover known steady music,
-track changes, breaks longer than 40 seconds, clicks/speech, locks and ratios,
-then repeated playback/recording/Bluetooth transitions while watching capture
-errors and result cadence.
+Anchor updates become pending output-clock corrections. At the next boundary,
+the following cycle length changes by 30% of the requested timing error, capped
+at 0.6% of its nominal period. Each completed cycle retains its scheduled end.
+Confident updates keep requesting alignment until the clock reaches the target.
+
+Offbeat adds half a base period at output ratio one. Output ratio multiplies
+BPM after phase tracking; the service supports ratios one through three. Manual
+phase offset adds a base-period fraction to the tracked anchor. These controls
+set the output-clock anchor. Controller and viewer timing gestures belong to
+[LED Source](../led_source/README.md).
+
+The monotonic real-time clock drives `fft_beat_clock_emit`. It accepts the newest
+crossed boundary once, with a half-period spacing guard. Publication updates
+cycle phase, queues a beat event and can call the Beat LED renderer. The LED
+rendering task, frame submission and wire transmission follow that request.
+The selected animation determines how brightness and movement express it.
+
+Reset clears accepted tempo, phase, locks, output controls, clock and pending
+beat events while retaining audio and score evidence for the next decision.
+
+## Scheduling and capture continuity
+
+Capture/FFT runs on core 1 at priority 5. BPM and phase use separate priority-2
+workers on core 0. BPM requests occur every 88 audio frames, about 2.04 seconds.
+Each worker processes one immutable snapshot. Busy requests are skipped, and
+long BPM loops yield in bounded work slices.
+
+I2S rate, clock revision and RX overflow observations protect frame continuity.
+Clock changes, overflows and failed or empty reads invalidate the audio window
+and stale worker results while retaining the accepted tempo and running clock.
+Epoch and control-revision checks reject obsolete results. Audio Policy owns
+capture availability during playback, recording and Bluetooth use.
+
+## History and diagnostics
+
+A mutex-protected snapshot holds FFT magnitudes, grouped spectrogram peaks,
+score means, phase curve, evidence and confidence. Two capture frames form each
+spectrogram/history column. The viewer draws the full phase curve below its
+folded sum, translating the emitted output-clock boundary to the left border.
+[FFT View](../../apps/fft_view/README.md) owns OLED drawing and navigation.
+
+The five-second capture report includes work/cadence, result age, overdue work,
+errors, held BPM, evidence, heap and stack headroom. While phase is available,
+`phase timing v2` reports:
+
+- `peak`: strongest full-curve position relative to the clock; zero is the border.
+- `target`: signed output-anchor error in base-period fractions.
+- `ratio`: requested/applied ratio; `offbeat` and `offset`: current controls.
+- `capture-age`: age of the calculated last processed audio timestamp.
+- `phase-age`: age of the active phase update.
+- `emit-late`: event-request lateness after its nominal boundary.
+- `leds`: enabled Beat effect, or `other-renderer`; `export`: FFT LED permission.
+
+`RX clock` reports cumulative DMA production rate, latest-completion age, family
+and side. The driver owns those observations; see its
+[I2S documentation](../../drivers/audio_i2s/README.md). Physical sample age and
+LED output latency require hardware measurement beyond these counters.
+
+## Verification
+
+Run `bash services/fft/tests/run_host_tests.sh`. It compiles actual PC and suit
+implementations and compares scores, filtering, BPM decisions, phase tracking,
+output emissions and both rendered phase bands. Coverage includes sustained
+±1 BPM changes, locks, delayed work, confidence recovery, on/offbeat, 2x, and
+family replacement after crossing 0 and 0.5 in both directions.
+
+Live acceptance includes a user-confirmed metronome run with the Soft Flash
+renderer and pre-gap peaks within approximately eight milliseconds of phase
+zero. Capture overflows and physical timing under other workloads remain
+hardware acceptance checks.

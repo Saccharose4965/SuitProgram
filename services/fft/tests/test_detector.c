@@ -155,15 +155,36 @@ static void test_hold(void)
         if (out.held_bpm == 145 && !soft_switch) soft_switch = i;
     }
     assert(normal_switch > 10 && soft_switch > normal_switch);
-    out = feed(&d, c, 146, 130, HOP);
-    assert(out.held_bpm == 145); // adjacent sliding remains disabled
+    out = feed(&d, c, 146, 2, HOP);
+    assert(out.held_bpm == 145); // brief adjacent challenger is rejected
+    out = feed(&d, c, 145, 20, HOP);
+    soft = d;
+    normal_switch = soft_switch = 0;
+    for (int i = 1; i <= 130; ++i) {
+        out = feed(&d, c, 146, 1, HOP);
+        if (out.held_bpm == 146 && !normal_switch) normal_switch = i;
+        out = feed(&soft, (detector_control_t){.phase_lock = true}, 146, 1, HOP);
+        if (out.held_bpm == 146 && !soft_switch) soft_switch = i;
+    }
+    assert(normal_switch > 2 && soft_switch > normal_switch);
+    out = feed(&d, c, 145, 130, HOP);
+    assert(out.held_bpm == 145); // sustained downward adjacent change
+
     detector_reset(&d);
     out = feed(&d, c, 158, 20, HOP);
     assert(out.held_bpm == 158);
     out = feed(&d, c, 159, 40, HOP);
-    assert(out.held_bpm == 159); // only the existing upper-bound exception
+    assert(out.held_bpm == 159); // sustained adjacent change at the upper boundary
     out = feed(&d, c, 158, 80, HOP);
-    assert(out.held_bpm == 159);
+    assert(out.held_bpm == 158);
+
+    detector_reset(&d);
+    out = feed(&d, c, 80, 20, HOP);
+    assert(out.held_bpm == 80);
+    out = feed(&d, c, 81, 80, HOP);
+    assert(out.held_bpm == 81);
+    out = feed(&d, c, 80, 80, HOP);
+    assert(out.held_bpm == 80);
 
     c.hard_lock = true; c.forced_bpm = 105; c.force_revision = 1;
     out = feed(&d, c, 138, 100, HOP);
@@ -187,12 +208,10 @@ static void test_loss_and_scheduling(void)
     assert(out.held_bpm == 120 && !out.stopped); // ten-second breakdown
     out = feed(&d, c, 120, 40, HOP);
     assert(out.held_bpm == 120 && out.lost_seconds == 0);
-    bool stopped = false;
     for (int i = 0; i < 100; ++i) {
         out = feed_unstable_loss(&d, c, 1, HOP);
-        if (out.stopped) { stopped = true; break; }
     }
-    assert(stopped && out.held_bpm == 0);
+    assert(!out.stopped && out.held_bpm == 120);
     out = feed(&d, c, 120, 40, HOP);
     assert(out.held_bpm == 120);
     detector_reset(&d);

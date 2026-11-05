@@ -52,6 +52,15 @@ int main(void)
     decision = fft_phase_update(&tracker, &evidence, 105, 130, true, false);
     assert(decision.acquired && phase_error(decision.anchor, 105, .32) < .03);
 
+    int held_side = decision.side;
+    make_frames(105, 130.75, .35);
+    start = 130.75 - (DETECTOR_FRAMES - 1) / RATE;
+    assert(fft_phase_evidence(frames, DETECTOR_FRAMES, RATE, 105, start, &evidence));
+    decision = fft_phase_update(&tracker, &evidence, 105, 130.75, false, false);
+    assert(decision.valid && !decision.corrected && !decision.family_switched);
+    assert(fabs(decision.precise_bpm - 105) < 1e-9);
+    assert(decision.side == held_side); // confidence loss cannot select the offbeat side
+
     fft_beat_clock_t clock = {0};
     fft_beat_clock_init(&clock, decision.precise_bpm, decision.anchor, 130);
     double boundary = clock.next_beat;
@@ -60,6 +69,7 @@ int main(void)
     assert(clock.pending && clock.next_beat == boundary);
     fft_beat_clock_update(&clock, boundary + .001);
     assert(!clock.pending && clock.beat_start == boundary);
+    assert(fabs(clock.period - clock.target_period) <= clock.target_period * .006001);
     puts("Phase tracker regressions passed (folded lock, tempo reacquire, boundary steering).");
     return 0;
 }

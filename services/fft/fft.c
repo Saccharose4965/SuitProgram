@@ -19,7 +19,7 @@
 #include "led.h"
 
 static const char *TAG = "fft_vis";
-#define CAPTURE_PRIORITY 4
+#define CAPTURE_PRIORITY 5
 #define ANALYSIS_PRIORITY 2
 #define PHASE_PRIORITY 2
 #define FFT_CORE 1
@@ -100,6 +100,7 @@ static unsigned s_clock_ratio = 1;
 static bool s_clock_offbeat;
 static float s_clock_offset;
 static double s_last_emit;
+static float s_emit_lateness_ms;
 static uint32_t s_skipped, s_capture_errors;
 static double s_analysis_interval;
 static level_track_t s_level[4];
@@ -123,6 +124,7 @@ static void clear_capture(void)
     memset(&s_phase_decision, 0, sizeof(s_phase_decision));
     fft_beat_clock_reset(&s_clock);
     s_last_emit = 0;
+    s_emit_lateness_ms = 0;
     if (s_beats) xQueueReset(s_beats);
     fft_history_reset();
     portENTER_CRITICAL(&s_mux);
@@ -132,7 +134,7 @@ static void clear_capture(void)
     portEXIT_CRITICAL(&s_mux);
 }
 
-static void invalidate_capture(void)
+static void invalidate_capture(const char *reason)
 {
     portENTER_CRITICAL(&s_mux);
     ++s_controls.epoch;
@@ -147,7 +149,8 @@ static void invalidate_capture(void)
     s_current.detector.history_coverage = 0;
     s_current.detector.confidence = s_current.detector.evidence = 0;
     fft_history_update_detector(&s_current.detector);
-    ESP_LOGW(TAG, "Capture gap: rebuilding audio history; retaining BPM %.0f", s_current.detector.held_bpm);
+    ESP_LOGW(TAG, "Capture gap (%s): rebuilding audio history; retaining BPM %.0f",
+             reason ? reason : "unknown", s_current.detector.held_bpm);
     led_audio_raw_volume_set(0);
     led_audio_levels_set(0, 0, 0, 0);
     portENTER_CRITICAL(&s_mux);
@@ -270,17 +273,6 @@ static void poll_analysis(controls_t c)
         d->accepted_phase = accepted_phase;
         d->beat_time = beat_time;
     }
-    if (d->stopped) {
-        ESP_LOGI(TAG, "No credible pulse for 40 s; seeking a new BPM");
-        // Match localFFT: stop the accepted clock, but retain audio/score history
-        // so reacquisition does not start from an empty four-second window.
-        fft_phase_tracker_lose(&s_phase_tracker, result.time);
-        fft_beat_clock_reset(&s_clock);
-        memset(&s_phase_decision, 0, sizeof(s_phase_decision));
-        s_last_emit = 0;
-        fft_history_update_detector(d);
-        return;
-    }
     fft_history_update_detector(d);
 }
 
@@ -340,13 +332,15 @@ static void poll_phase(controls_t c)
         s_clock_offbeat != c.offbeat || s_clock_offset != c.offset;
     if (configuration_changed && s_clock.initialized) {
         fft_beat_clock_init(&s_clock, visual_bpm, anchor, esp_timer_get_time() / 1e6);
-    } else if (certain) {
+    } else {
         if (!s_clock.initialized || s_phase_decision.acquired ||
-            s_phase_decision.restored || configuration_changed)
-            fft_beat_clock_init(&s_clock, visual_bpm, anchor, result.time);
-        else if (s_phase_decision.family_switched || s_phase_decision.corrected)
+            s_phase_decision.restored || configuration_changed) {
+            if (certain) fft_beat_clock_init(&s_clock, visual_bpm, anchor, result.time);
+        } else if (certain) {
             fft_beat_clock_schedule(&s_clock, visual_bpm, anchor);
+        }
     }
+    if (!certain) s_clock.pending = false;
     s_clock_ratio = c.ratio;
     s_clock_offbeat = c.offbeat;
     s_clock_offset = c.offset;
@@ -382,18 +376,17 @@ static void emit_and_publish(double now, controls_t c)
 {
     detector_result_t *d = &s_current.detector;
     float base = c.detector.hard_lock ? c.detector.forced_bpm : d->held_bpm;
-    fft_beat_clock_update(&s_clock, now);
+    bool emitted = fft_beat_clock_emit(&s_clock, now, &s_last_emit);
     float bpm = s_clock.initialized ? (float)s_clock.bpm : 0;
     float phase = 0, target = 0;
     if (bpm > 0) {
         double period = s_clock.period;
         double cycle = (now - s_clock.beat_start) / period;
         phase = (float)(cycle - floor(cycle));
-        double trigger = s_clock.beat_start;
         // Emit the newest crossed boundary once. A delayed capture iteration may
         // make a flash late, but must not silently delete the beat.
-        if (trigger > s_last_emit && now - s_last_emit >= period * 0.5) {
-            s_last_emit = now;
+        if (emitted) {
+            s_emit_lateness_ms = (float)((now - s_clock.beat_start) * 1000);
             if (c.beat_enabled) {
                 fft_beat_event_t evt = { .bpm = bpm, .confidence = fminf(1, d->confidence) };
                 xQueueSend(s_beats, &evt, 0);
@@ -494,10 +487,7 @@ static void process_frame(double time)
     // Keep both histories on the audio clock, including while another app is open.
     fft_get_sync_state(&packet.status);
     packet.decision = s_current.detector.confidence;
-    // Phase evidence uses absolute nominal-BPM coordinates. Using the steered
-    // clock BPM here makes the graph crawl even when its peaks are stationary.
-    double origin_phase = s_clock.initialized && s_phase_decision.valid &&
-                          s_current.detector.held_bpm > 0
+    double origin_phase = s_clock.initialized && s_current.detector.held_bpm > 0
         ? s_clock.beat_start * s_current.detector.held_bpm / 60.0 : 0;
     packet.clock_origin = (float)(origin_phase - floor(origin_phase));
     packet.time = time;
@@ -523,7 +513,10 @@ static void capture_task(void *arg)
         uint32_t revision = audio_i2s_get_clock_revision();
         bool unavailable = audio_i2s_get_rate() != DETECTOR_SAMPLE_RATE || mic_rec_is_recording();
         if (unavailable || revision != clock_revision) {
-            if (!suspended) { invalidate_capture(); suspended = true; }
+            if (!suspended) {
+                invalidate_capture(unavailable ? "audio clock unavailable" : "audio clock changed");
+                suspended = true;
+            }
             clock_revision = revision;
             fill = 0; samples = 0;
             if (unavailable) {
@@ -543,12 +536,16 @@ static void capture_task(void *arg)
         esp_err_t err = i2s_channel_read(rx, input, DETECTOR_FFT_SIZE * 2 * sizeof(*input), &bytes, 100);
         // Never concatenate partial frames across a failed read or clock change.
         uint32_t current_overflows = audio_i2s_get_rx_overflows();
+        uint32_t after_revision = audio_i2s_get_clock_revision();
         if ((err != ESP_OK && err != ESP_ERR_TIMEOUT) || !bytes ||
             current_overflows != overflows ||
-            revision != audio_i2s_get_clock_revision()) {
+            revision != after_revision) {
             ++s_capture_errors;
+            const char *reason = current_overflows != overflows ? "I2S RX overflow" :
+                (revision != after_revision ? "audio clock changed during read" :
+                (!bytes ? "empty I2S read" : "I2S read failure"));
             overflows = current_overflows;
-            if (fill || samples) invalidate_capture();
+            if (fill || samples) invalidate_capture(reason);
             fill = 0; samples = 0;
             if ((err == ESP_ERR_INVALID_STATE || !bytes) && audio_i2s_get_rate() > 0 && !audio_output_active() &&
                 !audio_player_is_active() && !mic_rec_is_recording()) {
@@ -584,6 +581,46 @@ static void capture_task(void *arg)
                      s_current.time > 0 ? esp_timer_get_time() / 1e6 - s_current.time : 0,
                      (unsigned long)s_skipped,
                      (unsigned long)s_capture_errors, status.held_bpm, status.evidence, status.lost_seconds);
+            if (s_clock.initialized && s_current.detector.phase_valid &&
+                s_current.detector.held_bpm > 0) {
+                controls_t cfg = controls_get();
+                detector_result_t *d = &s_current.detector;
+                int peak = 0;
+                for (int i = 1; i < DETECTOR_PHASE_BINS; ++i)
+                    if (d->phase[i] > d->phase[peak]) peak = i;
+                double base_period = 60.0 / d->held_bpm;
+                double clock_origin = s_clock.beat_start / base_period;
+                clock_origin -= floor(clock_origin);
+                double peak_relative = peak / (double)DETECTOR_PHASE_BINS - clock_origin;
+                peak_relative -= floor(peak_relative);
+                double target_error = (phase_clock_anchor(cfg) - s_clock.beat_start) / base_period;
+                target_error -= round(target_error);
+                double capture_age = -1;
+                if (samples > (uint64_t)fill) {
+                    double frame_time = origin + (samples - fill - 1) /
+                                                (double)DETECTOR_SAMPLE_RATE;
+                    capture_age = (esp_timer_get_time() / 1e6 - frame_time) * 1000;
+                }
+                ESP_LOGI(TAG, "phase timing v2: peak=%.3f target=%+.3f ratio=%u/%u offbeat=%d offset=%.3f capture-age=%.1fms phase-age=%.1fms emit-late=%.1fms leds=%s export=%d",
+                         peak_relative, target_error, cfg.ratio, s_clock_ratio,
+                         cfg.offbeat, cfg.offset,
+                         capture_age,
+                         s_phase_tracker.active.have ?
+                             (esp_timer_get_time() / 1e6 - s_phase_tracker.active.last_update) * 1000 : -1,
+                         s_emit_lateness_ms,
+                         led_beat_enabled() ? led_beat_anim_name(led_beat_anim_get()) : "other-renderer",
+                         cfg.export_leds);
+                audio_i2s_rx_timing_t rx_time;
+                if (audio_i2s_rx_timing_snapshot(&rx_time) &&
+                    rx_time.latest_us > rx_time.first_us) {
+                    double measured_rate = (rx_time.frames - rx_time.first_frames) * 1e6 /
+                                           (rx_time.latest_us - rx_time.first_us);
+                    ESP_LOGI(TAG, "RX clock: measured=%.3fHz nominal=%d latest-DMA-age=%.1fms family=%d side=%d branch=nearest-anchor",
+                             measured_rate, DETECTOR_SAMPLE_RATE,
+                             (esp_timer_get_time() - rx_time.latest_us) / 1000.0,
+                             s_phase_tracker.active.family, s_phase_tracker.active.side);
+                }
+            }
             ESP_LOGI(TAG, "internal heap %u; stack headroom capture %u worker %u bytes",
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
                      (unsigned)uxTaskGetStackHighWaterMark(NULL),

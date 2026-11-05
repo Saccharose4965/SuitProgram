@@ -7,6 +7,7 @@
 #include "fft.h"
 #include "led.h"
 #include "led_modes.h"
+#include "esp_timer.h"
 
 static led_source_mode_t s_source_mode = LED_SOURCE_FFT;
 static manual_bpm_sync_state_t s_manual = {
@@ -20,6 +21,24 @@ static bool s_fft_phase_valid = false;
 static float s_fft_prev_aligned_phase = 0.0f;
 static uint32_t s_fft_beat_count = 0;
 static led_timing_mode_t s_timing_mode = LED_TIMING_ON_BEAT;
+static int64_t s_last_timing_press;
+static unsigned s_timing_presses;
+
+void led_source_timing_press(void) {
+  int64_t now = esp_timer_get_time();
+  led_timing_mode_t next;
+  if (!s_last_timing_press || now - s_last_timing_press > 700000) {
+    next = s_timing_mode == LED_TIMING_ON_BEAT ? LED_TIMING_OFFBEAT : LED_TIMING_ON_BEAT;
+    s_timing_presses = 1;
+  } else {
+    next = ++s_timing_presses == 2 ? LED_TIMING_DOUBLE :
+        (led_timing_mode_t)((s_timing_mode + 1) % 3);
+  }
+  s_last_timing_press = now;
+  led_source_timing_set(next);
+}
+
+
 
 static float clamp_bpm(float bpm) {
   if (bpm < 32.0f)

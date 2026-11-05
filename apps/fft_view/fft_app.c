@@ -3,6 +3,7 @@
 #include "audio_policy.h"
 
 #include "fft.h"
+#include "led_source.h"
 #include "fft_display.h"
 #include "fft_history.h"
 #include "oled.h"
@@ -30,8 +31,10 @@ void fft_stub_handle_input(shell_app_context_t *ctx, const input_event_t *ev)
             g_fft_view = (fft_view_t)((g_fft_view + 1) % FFT_VIEW_COUNT);
             break;
         case INPUT_BTN_C:
-        case INPUT_BTN_D:
             fft_detector_reset();
+            return;
+        case INPUT_BTN_D:
+            led_source_timing_press();
             return;
         default:
             return;

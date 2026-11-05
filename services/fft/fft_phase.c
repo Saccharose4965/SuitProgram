@@ -10,17 +10,14 @@
 #define SWITCH_SECONDS 6.0
 #define MAX_BPM_DIFF 0.5
 #define RESTORE_MAX_ERROR 0.10
-#define MAX_PERIOD_OFFSET 0.02
-#define MAX_PERIOD_STEP 0.002
-#define PERIOD_GAIN 0.20
 #define POSITION_GAIN 0.20
 #define MAX_POSITION_STEP 0.030
 #define ERROR_FILTER_SECONDS 0.80
-#define ERROR_DEADBAND_BINS 0.75
+#define ERROR_DEADBAND_BINS 0.10
 #define MIN_PROMINENCE 1.05
 #define BPM_UPDATE_SECONDS ((double)DETECTOR_HOP_FRAMES * DETECTOR_FFT_SIZE / DETECTOR_SAMPLE_RATE)
-#define CLOCK_STEER_GAIN 0.20
-#define CLOCK_STEER_MAX_RATIO 0.004
+#define CLOCK_STEER_GAIN 0.30
+#define CLOCK_STEER_MAX_RATIO 0.006
 
 static double clampd(double x, double lo, double hi)
 { return x < lo ? lo : (x > hi ? hi : x); }
@@ -58,6 +55,15 @@ static int local_best(const fft_phase_evidence_t *e, int center)
         if (e->folded[bin] > e->folded[best]) best = bin;
     }
     return best;
+}
+
+// Keep the full-cycle timing branch when folded-family coordinates wrap.
+static int side_nearest_anchor(int family, double bpm, double anchor)
+{
+    double phase = family / (double)DETECTOR_PHASE_BINS;
+    double a = time_for_phase(phase, bpm, anchor);
+    double b = time_for_phase(phase + .5, bpm, anchor);
+    return fabs(b - anchor) < fabs(a - anchor);
 }
 
 static void acquire(fft_phase_track_t *track, const fft_phase_evidence_t *e,
@@ -150,8 +156,10 @@ fft_phase_decision_t fft_phase_update(fft_phase_tracker_t *tracker,
         fft_phase_tracker_lose(tracker, time);
     if (!bpm_certain) {
         if (tracker->active.have) {
+            tracker->active.filtered_error = 0;
+            tracker->active.last_update = time;
             d.valid = true; d.family = tracker->active.family; d.side = tracker->active.side;
-            d.anchor = tracker->active.anchor; d.precise_bpm = 60 / tracker->active.period;
+            d.anchor = tracker->active.anchor; d.precise_bpm = bpm;
         }
         return d;
     }
@@ -178,16 +186,17 @@ fft_phase_decision_t fft_phase_update(fft_phase_tracker_t *tracker,
     int local = local_best(e, predicted), global = e->best_family;
     double local_score = e->folded[local], global_score = e->folded[global];
     bool distant = distance(global, local, FFT_PHASE_FAMILY_BINS) > LOCAL_RADIUS;
-    if (!family_locked && distant && global_score >= local_score * SWITCH_RATIO) {
+    if (bpm_certain && !family_locked && distant && global_score >= local_score * SWITCH_RATIO) {
         if (track->challenger == global) track->challenger_seconds += elapsed;
         else { track->challenger = global; track->challenger_seconds = fmin(elapsed, BPM_UPDATE_SECONDS); }
     } else {
         track->challenger_seconds = fmax(0, track->challenger_seconds - elapsed);
         if (track->challenger_seconds <= 0) track->challenger = 0;
     }
-    if (!family_locked && track->challenger_seconds >= SWITCH_SECONDS) {
+    if (bpm_certain && !family_locked && track->challenger_seconds >= SWITCH_SECONDS) {
         local = track->challenger;
-        acquire(track, e, bpm, time, local, track->side);
+        int side = side_nearest_anchor(local, bpm, track->anchor);
+        acquire(track, e, bpm, time, local, side);
         d.family_switched = true;
         elapsed = BPM_UPDATE_SECONDS;
     }
@@ -198,25 +207,25 @@ fft_phase_decision_t fft_phase_update(fft_phase_tracker_t *tracker,
                             (track->period * .5)) * (track->period * .5);
     double observed = fabs(a - predicted_time) <= fabs(b - predicted_time) ? a : b;
     double raw_error = wrap_error(observed - predicted_time, track->period * .5);
+    double deadband = (60 / bpm) * ERROR_DEADBAND_BINS / DETECTOR_PHASE_BINS;
     double alpha = 1 - exp(-elapsed / ERROR_FILTER_SECONDS);
-    track->filtered_error += alpha * (raw_error - track->filtered_error);
+    if (fabs(raw_error) <= deadband || track->filtered_error * raw_error < 0)
+        track->filtered_error = 0;
+    else
+        track->filtered_error += alpha * (raw_error - track->filtered_error);
     double error = track->filtered_error;
-    if (fabs(error) <= (60 / bpm) * ERROR_DEADBAND_BINS / DETECTOR_PHASE_BINS) error = 0;
     double cadence = clampd(elapsed / BPM_UPDATE_SECONDS, 0, 1);
     double correction = clampd(error * POSITION_GAIN,
                                -MAX_POSITION_STEP * cadence, MAX_POSITION_STEP * cadence);
+    correction = clampd(correction, -fabs(raw_error), fabs(raw_error));
     bool strong = isfinite(e->prominence) && e->prominence >= MIN_PROMINENCE && local_score > 1e-12;
     if (strong && error != 0) {
-        double nominal = 60 / bpm;
-        double proposed = track->period + PERIOD_GAIN * error * track->period / elapsed;
-        double step = nominal * MAX_PERIOD_STEP * cadence;
-        track->period = clampd(proposed, track->period - step, track->period + step);
-        track->period = clampd(track->period, nominal * (1 - MAX_PERIOD_OFFSET),
-                              nominal * (1 + MAX_PERIOD_OFFSET));
         track->anchor += correction;
         d.corrected = true;
     } else correction = 0;
+    track->period = 60 / bpm;
     track->bpm = bpm; track->family = local; track->last_update = time;
+    track->side = side_nearest_anchor(local, bpm, track->anchor);
     d.valid = true; d.family = local; d.side = track->side; d.raw_best_bin = e->raw_best_bin;
     d.anchor = track->anchor; d.precise_bpm = 60 / track->period;
     d.error = error; d.correction = correction; d.prominence = e->prominence;
@@ -266,4 +275,15 @@ void fft_beat_clock_update(fft_beat_clock_t *c, double now)
         c->bpm = 60 / c->period; c->next_beat = c->beat_start + c->period;
     }
     if (guard >= 8) { c->beat_start = now; c->next_beat = now + c->period; }
+}
+
+bool fft_beat_clock_emit(fft_beat_clock_t *clock, double now, double *last_emit)
+{
+    fft_beat_clock_update(clock, now);
+    if (!clock->initialized || clock->period <= 0) return false;
+    if (clock->beat_start > *last_emit && now - *last_emit >= clock->period * .5) {
+        *last_emit = now;
+        return true;
+    }
+    return false;
 }

@@ -33,5 +33,6 @@ bool led_source_manual_state_get(manual_bpm_sync_state_t *out);
 void led_source_manual_bpm_adjust(float delta);
 void led_source_manual_phase_adjust(float delta);
 void led_source_timing_set(led_timing_mode_t mode);
+void led_source_timing_press(void);
 led_timing_mode_t led_source_timing_get(void);
 const char *led_source_timing_name(led_timing_mode_t mode);

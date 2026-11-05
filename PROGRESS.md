@@ -803,3 +803,17 @@ until visual code has moved into apps. Hardware calibration verification pending
 - Kept live transport lists, graphs, games, media frames and geometry custom.
   Text-page bounds, shared drawing, Paint UI and Show UI tests pass; the full
   firmware builds with 13% of the app partition free.
+
+## Current FFT baseline
+
+- PC and suit use matched tempo support, sustained ±1 BPM replacement, phase
+  family selection, continuous full-cycle branch handling and bounded steering.
+- Output follows the monotonic clock. The folded/full phase graphs share the
+  emitted-clock origin. FFT View D uses the shared Controller timing gesture.
+- Receiver-clock and capture diagnostics expose timing observations. Current
+  metronome acceptance includes a user-confirmed Soft Flash run, with pre-gap
+  peaks approximately within ±8 ms of phase zero. Physical timing and capture
+  continuity under different loads remain hardware checks.
+- PC host tests and actual PC/ESP parity checks cover BPM/phase decisions,
+  emitted boundaries, rendered phase bands and family changes after wrapped
+  phase motion. The PC source is versioned separately on branch pc-fft.

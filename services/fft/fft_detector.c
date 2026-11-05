@@ -13,8 +13,6 @@
 #define SUPPORT_HALF_LIFE 6.0f
 #define SHOCK_LIMIT 0.004f
 #define SHOCK_CALM 3.0f
-#define LOST_TIMEOUT 40.0f
-#define LOST_MIN_HELD_RATIO 0.60f
 
 static float wrap(float x) { return x - floorf(x); }
 static float display_value(float x) { return isfinite(x) ? fminf(1.1f, fmaxf(0, x)) : 0; }
@@ -146,20 +144,6 @@ static float support_credit(float elapsed, bool sustained)
                                (-expm1f(-lambda * REFERENCE_SECONDS));
 }
 
-static float held_score_ratio(const float *scores, float held_bpm)
-{
-    if (!isfinite(held_bpm) || held_bpm < DETECTOR_BPM_MIN || held_bpm > DETECTOR_BPM_MAX)
-        return 0;
-    int held = (int)lroundf(held_bpm) - DETECTOR_BPM_MIN;
-    float maximum = 0, support = 0;
-    for (int i = 0; i < DETECTOR_BPM_COUNT - 1; ++i) {
-        float pair = scores[i] + scores[i + 1];
-        if (!isfinite(pair) || pair < 0) return 0;
-        maximum = fmaxf(maximum, pair);
-        if (i == held || i + 1 == held) support = fmaxf(support, pair);
-    }
-    return maximum > 0 ? support / maximum : 0;
-}
 
 static void reset_hold(detector_t *d)
 {
@@ -182,7 +166,6 @@ void detector_update(detector_t *d, const float scores[DETECTOR_BPM_COUNT], doub
                      detector_control_t control, detector_result_t *out)
 {
     memset(out, 0, sizeof(*out));
-    float previously_held = d->held_bpm;
     float history_elapsed = d->have_time ? fmaxf(0, (float)(time - d->last_time)) : UPDATE_SECONDS;
     float duration = d->have_time ? history_elapsed : UPDATE_SECONDS;
     duration = fminf(duration, UPDATE_SECONDS + 1.0f / FRAME_RATE);
@@ -286,16 +269,15 @@ void detector_update(detector_t *d, const float scores[DETECTOR_BPM_COUNT], doub
         int distance = candidate - held_bin;
         if (distance < 0) distance = -distance;
         float held = support_at(d, held_bin);
-        bool max_slide = distance == 1 && candidate == DETECTOR_BPM_COUNT - 1;
+        if (distance == 1) {
+            // Keep adjacent contestants' persistence separate.
+            challenger = d->support[candidate];
+            held = d->support[held_bin];
+        }
         if (!distance) out->confidence = evidence_quality;
-        else if (max_slide) out->confidence = fminf(quality, d->support[candidate] / required);
-        else if (distance > 1)
+        else if (distance > 0)
             out->confidence = fminf(quality, fminf(challenger / required, release / fmaxf(held, 1e-12f)));
-        if (!control.hard_lock && max_slide && out->trusted &&
-            d->support[DETECTOR_BPM_COUNT - 1] >= required) {
-            d->held_bpm = out->candidate_bpm;
-            d->held_pair = pair;
-        } else if (!control.hard_lock && distance > 1 && out->trusted &&
+        if (!control.hard_lock && distance > 0 && out->trusted &&
                    challenger >= required && held <= release) {
             d->held_bpm = out->candidate_bpm;
             d->held_pair = pair;
@@ -305,23 +287,10 @@ void detector_update(detector_t *d, const float scores[DETECTOR_BPM_COUNT], doub
     // PC exposes clean evidence as trusted when it agrees with the accepted
     // BPM. Shock cooldown guards transitions/support, not ongoing phase tracking.
     if (d->held_bpm == out->candidate_bpm) out->trusted = evidence_quality >= 1;
-    float loss_elapsed = d->have_loss_time ? fmaxf(0.001f, (float)(time - d->loss_last_time)) : 0.5f;
-    d->loss_last_time = time;
-    d->have_loss_time = true;
-    if (control.hard_lock || !d->held_bpm || d->held_bpm != previously_held ||
-        held_score_ratio(out->scores, d->held_bpm) >= LOST_MIN_HELD_RATIO) d->lost_seconds = 0;
-    else d->lost_seconds += loss_elapsed;
-    out->lost_seconds = d->lost_seconds;
     out->held_bpm = d->held_bpm;
     out->phase_stable = d->count >= 2 &&
         coverage >= STABILITY_WINDOW_SECONDS - 0.001 &&
         out->variance <= STABILITY_LIMIT;
-    if (d->lost_seconds >= LOST_TIMEOUT) {
-        reset_hold(d);
-        out->held_bpm = 0;
-        out->stopped = true;
-        out->confidence = 0;
-    }
 }
 
 void detector_phase(detector_t *d, const float *frames, int count, double last_time,

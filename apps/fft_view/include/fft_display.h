@@ -17,5 +17,5 @@ typedef enum {
 // Pure drawing: neither consumes history nor changes detector/display state.
 void fft_display_draw(const fft_history_snapshot_t *display, fft_view_t view,
                       uint8_t fb[FFT_DISPLAY_BYTES]);
-// Absolute base-BPM phase -> actual output-clock coordinates (including ratio).
-float fft_display_clock_phase(float absolute_phase, float origin, unsigned ratio);
+// Absolute base-BPM phase relative to an accepted origin; folds=2 joins half-cycles.
+float fft_display_relative_phase(float absolute_phase, float origin, unsigned folds);

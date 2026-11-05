@@ -34,3 +34,10 @@ clock ownership here.
 The service owns source choice, manual state, timing choice and timeline
 continuity. Menus and drawing belong to
 [LED control](../../apps/led_control/README.md).
+
+## Timing button
+
+Controller and FFT View share `led_source_timing_press`. After 700 ms idle, a
+press toggles on/offbeat; a second quick press selects 2x. Further quick presses
+cycle the three choices. The gesture sets the FFT output controls through the
+same timing selector used by Manual.

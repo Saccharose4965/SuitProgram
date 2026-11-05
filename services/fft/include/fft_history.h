@@ -15,7 +15,7 @@ typedef struct {
     float magnitudes[FFT_HISTORY_ROWS];
     fft_sync_state_t status;
     float decision;
-    float clock_origin;
+    float clock_origin; // latest emitted-clock boundary in base-BPM phase coordinates
     double time;
 } fft_history_packet_t;
 

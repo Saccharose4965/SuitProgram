@@ -54,3 +54,8 @@ void fft_beat_clock_init(fft_beat_clock_t *clock, double bpm,
                          double anchor, double now);
 void fft_beat_clock_schedule(fft_beat_clock_t *clock, double bpm, double anchor);
 void fft_beat_clock_update(fft_beat_clock_t *clock, double now);
+
+// Advance the clock and accept the newest boundary at most once, with the
+// same half-period spacing guard as the PC live harness. last_emit stores
+// actual publication time, not the nominal boundary timestamp.
+bool fft_beat_clock_emit(fft_beat_clock_t *clock, double now, double *last_emit);
