@@ -1,0 +1,8 @@
+/*
+!/.gitignore
+!/README.md
+!/LatestFFT.c
+!/Makefile
+!/include/
+!/tests/
+/tests/test_replay.py
