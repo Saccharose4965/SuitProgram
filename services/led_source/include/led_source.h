@@ -35,4 +35,7 @@ void led_source_manual_phase_adjust(float delta);
 void led_source_timing_set(led_timing_mode_t mode);
 void led_source_timing_press(void);
 led_timing_mode_t led_source_timing_get(void);
+// Phase trim in base-period cycles; positive values move the trigger later.
+float led_source_phase_offset_get(void);
+void led_source_phase_offset_adjust(float delta_cycles);
 const char *led_source_timing_name(led_timing_mode_t mode);

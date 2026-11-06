@@ -35,6 +35,16 @@ void fft_history_update_detector(const detector_result_t *result)
     xSemaphoreGive(s_mutex);
 }
 
+void fft_history_update_output(const fft_sync_state_t *output)
+{
+    if (!s_mutex || !output) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_history.latest.status = *output;
+    s_history.latest.clock_origin = output->clock_origin;
+    ++s_generation;
+    xSemaphoreGive(s_mutex);
+}
+
 void fft_history_submit(const fft_history_packet_t *packet)
 {
     if (!s_mutex || !packet) return;

@@ -73,7 +73,7 @@ typedef struct { float fast, slow, peak, out; } level_track_t;
 
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static controls_t s_controls = { .beat_enabled = true, .export_leds = true, .ratio = 1 };
-static fft_sync_state_t s_status;
+static fft_sync_state_t s_status = {.ratio = 1};
 static fft_levels_t s_levels;
 static TaskHandle_t s_capture_task, s_analysis_task, s_phase_task;
 static QueueHandle_t s_jobs, s_results, s_phase_jobs, s_phase_results, s_beats;
@@ -121,13 +121,15 @@ static void clear_capture(void)
     fft_phase_tracker_reset(&s_phase_tracker);
     memset(&s_phase_decision, 0, sizeof(s_phase_decision));
     fft_beat_clock_reset(&s_clock);
+    s_clock_ratio = 1; s_clock_offbeat = false; s_clock_offset = 0;
     s_last_emit = 0;
     if (s_beats) xQueueReset(s_beats);
     fft_history_reset();
     portENTER_CRITICAL(&s_mux);
     s_status.bpm = s_status.held_bpm = s_status.detected_bpm = 0;
     s_status.confidence = s_status.decision_confidence = s_status.evidence = s_status.lost_seconds = 0;
-    s_status.beat_phase = 0;
+    s_status.beat_phase = s_status.clock_base_bpm = s_status.clock_origin = 0;
+    s_status.ratio = 1; s_status.offbeat = false; s_status.phase_offset = 0;
     portEXIT_CRITICAL(&s_mux);
 }
 
@@ -253,6 +255,12 @@ static void poll_analysis(controls_t c)
     if (xQueueReceive(s_results, &result, 0) != pdTRUE) return;
     s_job_busy = false;
     if (result.epoch != c.epoch || result.revision != c.revision) return;
+    // Apply presentation reset only to accepted hold changes, not contenders.
+    portENTER_CRITICAL(&s_mux);
+    if (fft_output_timing_on_hold_change(s_current.detector.held_bpm,
+            result.detector.held_bpm, &s_controls.offbeat,
+            &s_controls.ratio, &s_controls.offset)) ++s_controls.revision;
+    portEXIT_CRITICAL(&s_mux);
     float live_phase[DETECTOR_PHASE_BINS];
     bool had_phase = s_current.detector.phase_valid &&
         s_current.detector.held_bpm == result.detector.held_bpm && !result.detector.stopped;
@@ -331,7 +339,7 @@ static void poll_phase(controls_t c)
     } else {
         if (!s_clock.initialized || s_phase_decision.acquired ||
             s_phase_decision.restored || configuration_changed) {
-            if (certain) fft_beat_clock_init(&s_clock, visual_bpm, anchor, result.time);
+            if (certain) fft_beat_clock_init(&s_clock, visual_bpm, anchor, esp_timer_get_time() / 1e6);
         } else if (certain) {
             fft_beat_clock_schedule(&s_clock, visual_bpm, anchor);
         }
@@ -372,6 +380,15 @@ static void emit_and_publish(double now, controls_t c)
 {
     detector_result_t *d = &s_current.detector;
     float base = c.detector.hard_lock ? c.detector.forced_bpm : d->held_bpm;
+    if (s_clock.initialized && s_phase_decision.valid &&
+        fabs(s_phase_decision.precise_bpm - d->held_bpm) < .5 &&
+        (s_clock_ratio != c.ratio || s_clock_offbeat != c.offbeat || s_clock_offset != c.offset)) {
+        fft_beat_clock_init(&s_clock, s_phase_decision.precise_bpm * c.ratio,
+                            phase_clock_anchor(c), now);
+        s_clock_ratio = c.ratio;
+        s_clock_offbeat = c.offbeat;
+        s_clock_offset = c.offset;
+    }
     bool emitted = fft_beat_clock_emit(&s_clock, now, &s_last_emit);
     float bpm = s_clock.initialized ? (float)s_clock.bpm : 0;
     float phase = 0, target = 0;
@@ -379,18 +396,16 @@ static void emit_and_publish(double now, controls_t c)
         double period = s_clock.period;
         double cycle = (now - s_clock.beat_start) / period;
         phase = (float)(cycle - floor(cycle));
-        // Emit the newest crossed boundary once. A delayed capture iteration may
-        // make a flash late, but must not silently delete the beat.
-        if (emitted) {
-            if (c.beat_enabled) {
-                fft_beat_event_t evt = { .bpm = bpm, .confidence = fminf(1, d->confidence) };
-                xQueueSend(s_beats, &evt, 0);
-                if (c.export_leds) led_trigger_beat(255, 96, 0);
-            }
-        }
     }
     portENTER_CRITICAL(&s_mux);
     s_status.bpm = bpm;
+    s_status.clock_base_bpm = s_clock.initialized ? s_clock.target_bpm / s_clock_ratio : 0;
+    double origin = s_clock.initialized ?
+        s_clock.beat_start * s_status.clock_base_bpm / 60.0 : 0;
+    s_status.clock_origin = (float)(origin - floor(origin));
+    s_status.ratio = s_clock_ratio;
+    s_status.offbeat = s_clock_offbeat;
+    s_status.phase_offset = s_clock_offset;
     s_status.held_bpm = base;
     s_status.detected_bpm = d->candidate_bpm;
     s_status.confidence = fminf(1, d->confidence);
@@ -402,7 +417,14 @@ static void emit_and_publish(double now, controls_t c)
     s_status.capture_errors = s_capture_errors;
     s_status.beat_phase = phase;
     s_status.trigger_phase = target;
+    fft_sync_state_t output = s_status;
     portEXIT_CRITICAL(&s_mux);
+    fft_history_update_output(&output);
+    if (emitted && c.beat_enabled) {
+        fft_beat_event_t evt = {.bpm = bpm, .confidence = fminf(1, d->confidence)};
+        xQueueSend(s_beats, &evt, 0);
+        if (c.export_leds) led_trigger_beat(255, 96, 0);
+    }
 }
 
 static void process_frame(double time)
@@ -413,6 +435,7 @@ static void process_frame(double time)
     if (c.detector.reset_revision != s_phase_reset_revision) {
         fft_phase_tracker_reset(&s_phase_tracker);
         fft_beat_clock_reset(&s_clock);
+        s_clock_ratio = 1; s_clock_offbeat = false; s_clock_offset = 0;
         memset(&s_phase_decision, 0, sizeof(s_phase_decision));
         s_phase_reset_revision = c.detector.reset_revision;
         s_last_emit = 0;
@@ -466,6 +489,7 @@ static void process_frame(double time)
     s_frame_write = (s_frame_write + 1) % DETECTOR_FRAMES;
     if (s_frame_count < DETECTOR_FRAMES) ++s_frame_count;
     poll_analysis(c);
+    c = controls_get();
     poll_phase(c);
     c = controls_get();
     if (c.epoch != s_capture_epoch) { s_capture_epoch = c.epoch; clear_capture(); }
@@ -482,9 +506,7 @@ static void process_frame(double time)
     // Keep both histories on the audio clock, including while another app is open.
     fft_get_sync_state(&packet.status);
     packet.decision = s_current.detector.confidence;
-    double origin_phase = s_clock.initialized && s_current.detector.held_bpm > 0
-        ? s_clock.beat_start * s_current.detector.held_bpm / 60.0 : 0;
-    packet.clock_origin = (float)(origin_phase - floor(origin_phase));
+    packet.clock_origin = packet.status.clock_origin;
     packet.time = time;
     fft_history_submit(&packet);
     float load = (float)(esp_timer_get_time() - start) / (FRAME_SECONDS * 10000);
@@ -653,11 +675,16 @@ void fft_get_sync_state(fft_sync_state_t *out)
     out->bpm_locked = s_controls.detector.hard_lock;
     out->phase_locked = s_controls.detector.phase_lock;
     out->beat_enabled = s_controls.beat_enabled;
-    out->phase_offset = s_controls.offset;
-    out->ratio = s_controls.ratio;
-    out->offbeat = s_controls.offbeat;
     out->running = s_capture_task != NULL;
     portEXIT_CRITICAL(&s_mux);
+}
+
+void fft_get_output_controls(fft_output_controls_t *out)
+{
+    if (!out) return;
+    controls_t c = controls_get();
+    *out = (fft_output_controls_t){.offbeat = c.offbeat, .ratio = c.ratio,
+                                  .phase_offset = c.offset};
 }
 
 void fft_detector_reset(void)
@@ -708,7 +735,12 @@ void fft_beat_offbeat_set(bool offbeat)
 { portENTER_CRITICAL(&s_mux); s_controls.offbeat = offbeat; portEXIT_CRITICAL(&s_mux); }
 void fft_beat_offbeat_toggle(void) { fft_beat_offbeat_set(!controls_get().offbeat); }
 void fft_beat_phase_offset_add(float delta)
-{ portENTER_CRITICAL(&s_mux); s_controls.offset = wrap(s_controls.offset + delta); portEXIT_CRITICAL(&s_mux); }
+{
+    if (!isfinite(delta)) return;
+    portENTER_CRITICAL(&s_mux);
+    s_controls.offset = wrap(s_controls.offset + delta);
+    portEXIT_CRITICAL(&s_mux);
+}
 void fft_beat_enable_set(bool enabled)
 { portENTER_CRITICAL(&s_mux); s_controls.beat_enabled = enabled; portEXIT_CRITICAL(&s_mux); }
 void fft_beat_enable_toggle(void) { fft_beat_enable_set(!controls_get().beat_enabled); }

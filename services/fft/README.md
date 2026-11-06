@@ -116,18 +116,56 @@ Confident updates keep requesting alignment until the clock reaches the target.
 
 Offbeat adds half a base period at output ratio one. Output ratio multiplies
 BPM after phase tracking; the service supports ratios one through three. Manual
-phase offset adds a base-period fraction to the tracked anchor. These controls
-set the output-clock anchor. Controller and viewer timing gestures belong to
+phase offset adds a base-period fraction to the tracked anchor; positive values
+move the trigger later. Changes apply on the next capture publication using
+the current accepted phase state. These controls
+set the output-clock anchor. Offbeat, ratio and manual offset belong to the
+current accepted BPM. An accepted change, including ±1 BPM or a return to a
+cached previous BPM, clears them to automatic phase, ratio one and offset zero.
+Brief contenders leave the setting intact. Previous-phase restoration retains
+the automatic timing branch separately from the output setting.
+Controller and viewer timing gestures belong to
 [LED Source](../led_source/README.md).
 
 The monotonic real-time clock drives `fft_beat_clock_emit`. It accepts the newest
-crossed boundary once, with a half-period spacing guard. Publication updates
-cycle phase, queues a beat event and can call the Beat LED renderer. The LED
+crossed boundary once. The minimum interval is 75% of the longer of the
+previously emitted period and the current output period. A boundary rejected
+by that guard is consumed permanently. Reanchoring preserves emission history
+and schedules future boundaries; Reset clears clock and emission state.
+Publication updates cycle phase, queues a beat event and can call the Beat LED renderer. The LED
 rendering task, frame submission and wire transmission follow that request.
 The selected animation determines how brightness and movement express it.
 
 Reset clears accepted tempo, phase, locks, output controls, clock and pending
 beat events while retaining audio and score evidence for the next decision.
+
+## Applied output state
+
+The requested controls and applied clock state have separate snapshots.
+`fft_get_output_controls` reads the requested offbeat, ratio and manual trim for
+controller navigation. `fft_get_sync_state` reports the corresponding values
+already applied to the clock, together with its current cycle phase, base tempo
+and full-cycle graph origin.
+
+The full-cycle occurrence is selected when phase is acquired. Fine alignment
+updates that anchor. The clock target adds manual trim and, only at ratio one,
+half a base period when offbeat is requested. Output-clock steering then
+approaches that target. Folded tracking uses half-period coordinates to measure
+family error; it leaves the output offset calculation to this single step.
+
+After advancing the output clock and deciding whether its boundary may emit,
+the capture task publishes one applied output snapshot. History receives that
+same snapshot and its graph origin before LED dispatch. The full graph subtracts
+the published origin; the folded graph applies the same subtraction and folds
+the result. During a tempo handover, a curve whose BPM differs from the output
+clock is withheld until the two belong to the same tempo.
+
+`tests/test_output_wiring.py` compiles the production control getter, phase-result
+processing, clock publication and LED dispatch with portable phase code. It
+checks both initial sides at every phase bin, stronger-side inversions, ratios
+and repeated manual half-cycle changes. Its callback verifies that the display
+snapshot is already the applied blink snapshot. The test also distinguishes a
+requested offbeat change from its application on the next capture update.
 
 ## Scheduling and capture continuity
 
@@ -161,9 +199,13 @@ Run `bash services/fft/tests/run_host_tests.sh`. It compiles actual PC and suit
 implementations and compares scores, filtering, BPM decisions, phase tracking,
 output emissions and both rendered phase bands. Coverage includes sustained
 ±1 BPM changes, locks, delayed work, confidence recovery, on/offbeat, 2x, and
-family replacement after crossing 0 and 0.5 in both directions.
+family replacement after crossing 0 and 0.5 in both directions. Spacing checks
+include reanchoring, period increases/decreases and repeated polls of a rejected
+boundary. Controller acceptance covers C/D phase edits and long presses.
 
 Live acceptance includes a user-confirmed metronome run with the Soft Flash
 renderer and pre-gap peaks within approximately eight milliseconds of phase
-zero. Capture overflows and physical timing under other workloads remain
+zero. User testing also confirms agreement between the OLED phase reference,
+music and suit LED blinks with applied output-state publication.
+Capture overflows and physical timing under other workloads remain
 hardware acceptance checks.

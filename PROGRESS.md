@@ -1,5 +1,19 @@
 # Progress
 
+## FFT applied phase publication audit
+
+- Separated requested timing controls from the applied offbeat/ratio/trim in
+  the sync snapshot. Controller navigation reads requested controls explicitly.
+- Published clock base tempo and full-cycle origin with its output phase, then
+  copied the same output snapshot into display history before LED dispatch.
+  Curves from a different tempo are withheld during clock handover.
+- Audited the half-cycle operations through acquisition, branch tracking,
+  requested offset, steering, emission and display mapping. A production-code
+  replay covers 512 cases and 16,982 simulated LED callbacks.
+- User testing confirms that the OLED phase reference, music and suit LED
+  blinks now agree after the applied-state publication change.
+
+
 ## Remote suit control
 
 - Added a dedicated Remote Control app and service. The controller selects a

@@ -37,5 +37,6 @@ void fft_history_model_push(fft_history_snapshot_t *history,
 esp_err_t fft_history_init(void);
 void fft_history_reset(void);
 void fft_history_update_detector(const detector_result_t *result);
+void fft_history_update_output(const fft_sync_state_t *output);
 void fft_history_submit(const fft_history_packet_t *packet);
 uint32_t fft_history_snapshot(fft_history_snapshot_t *out);

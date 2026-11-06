@@ -9,6 +9,7 @@
 #include "oled.h"
 #include "esp_attr.h"
 
+#include <stdio.h>
 #include <string.h>
 
 static fft_view_t g_fft_view = FFT_VIEW_SPECTRUM;
@@ -82,4 +83,13 @@ void fft_app_draw(shell_app_context_t *ctx, uint8_t *fb, int x, int y, int w, in
         s_have_frame = true;
     }
     memcpy(fb, s_cached_frame, FFT_DISPLAY_BYTES);
+    led_source_mode_t source = led_source_mode_get();
+    if (g_fft_view == FFT_VIEW_PHASE_COMB && source != LED_SOURCE_FFT) {
+        char label[24];
+        snprintf(label, sizeof(label), "LED: %s", led_source_mode_name(source));
+        size_t width = strlen(label) * 4;
+        if (width > 128) width = 128;
+        for (size_t i = 0; i < width; ++i) fb[i] &= 0xC0;
+        oled_draw_text3x5(fb, 0, 0, label);
+    }
 }

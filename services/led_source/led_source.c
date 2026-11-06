@@ -23,16 +23,27 @@ static uint32_t s_fft_beat_count = 0;
 static led_timing_mode_t s_timing_mode = LED_TIMING_ON_BEAT;
 static int64_t s_last_timing_press;
 static unsigned s_timing_presses;
+static float s_timing_press_bpm;
 
 void led_source_timing_press(void) {
   int64_t now = esp_timer_get_time();
+  led_timing_mode_t current = led_source_timing_get();
+  if (s_source_mode == LED_SOURCE_FFT) {
+    fft_sync_state_t state;
+    fft_get_sync_state(&state);
+    if (fabsf(state.held_bpm - s_timing_press_bpm) >= .5f) {
+      s_last_timing_press = 0;
+      s_timing_presses = 0;
+    }
+    s_timing_press_bpm = state.held_bpm;
+  }
   led_timing_mode_t next;
   if (!s_last_timing_press || now - s_last_timing_press > 700000) {
-    next = s_timing_mode == LED_TIMING_ON_BEAT ? LED_TIMING_OFFBEAT : LED_TIMING_ON_BEAT;
+    next = current == LED_TIMING_ON_BEAT ? LED_TIMING_OFFBEAT : LED_TIMING_ON_BEAT;
     s_timing_presses = 1;
   } else {
     next = ++s_timing_presses == 2 ? LED_TIMING_DOUBLE :
-        (led_timing_mode_t)((s_timing_mode + 1) % 3);
+        (led_timing_mode_t)((current + 1) % 3);
   }
   s_last_timing_press = now;
   led_source_timing_set(next);
@@ -146,7 +157,31 @@ void led_source_timing_set(led_timing_mode_t mode) {
   fft_beat_ratio_set(mode == LED_TIMING_DOUBLE ? 2u : 1u);
 }
 
-led_timing_mode_t led_source_timing_get(void) { return s_timing_mode; }
+led_timing_mode_t led_source_timing_get(void) {
+  if (s_source_mode == LED_SOURCE_FFT) {
+    fft_output_controls_t controls;
+    fft_get_output_controls(&controls);
+    return controls.ratio == 2 ? LED_TIMING_DOUBLE :
+        controls.offbeat ? LED_TIMING_OFFBEAT : LED_TIMING_ON_BEAT;
+  }
+  return s_timing_mode;
+}
+
+float led_source_phase_offset_get(void) {
+  if (s_source_mode == LED_SOURCE_MANUAL) return s_manual.phase_offset;
+  if (s_source_mode == LED_SOURCE_FFT) {
+    fft_output_controls_t controls;
+    fft_get_output_controls(&controls);
+    return controls.phase_offset;
+  }
+  return 0;
+}
+
+void led_source_phase_offset_adjust(float delta_cycles) {
+  if (!isfinite(delta_cycles)) return;
+  if (s_source_mode == LED_SOURCE_MANUAL) led_source_manual_phase_adjust(delta_cycles);
+  else if (s_source_mode == LED_SOURCE_FFT) fft_beat_phase_offset_add(delta_cycles);
+}
 
 void led_source_service_tick(float dt_sec) {
   bool following = led_source_is_following();

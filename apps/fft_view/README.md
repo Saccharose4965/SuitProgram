@@ -29,12 +29,18 @@ A and B cycle five full-screen views:
 
 The folded band sums each phase bin with its opposite half-cycle bin, exposing
 the timing family used by the tracker while retaining both individual sides in
-the full band. The graph has no moving playhead: the screen border is the
+the full band. The graph origin comes from the applied output snapshot published before blink
+dispatch. A curve is withheld during a handover if its tempo differs from the
+applied clock. The graph has no moving playhead: the screen border is the
 actual clock reference. Evidence moving away from the border exposes clock
 drift, while gradual steering visibly returns it. The monochrome renderer uses
 solid one-pixel lines and bars. Timeline
 views share the same ring index, keeping confidence and spectrogram events
 aligned. Drawing is pure: it cannot advance history or alter detector state.
+
+Opening the viewer preserves the selected lighting source. In the phase view,
+a small `LED: manual` or `LED: follow A/B/C` label identifies output using a
+different timing authority from the local FFT graphs.
 
 C resets the detector. D uses the shared Controller timing gesture: isolated
 presses alternate on-beat/offbeat; two presses within 700 ms select 2x, and

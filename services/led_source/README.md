@@ -41,3 +41,15 @@ Controller and FFT View share `led_source_timing_press`. After 700 ms idle, a
 press toggles on/offbeat; a second quick press selects 2x. Further quick presses
 cycle the three choices. The gesture sets the FFT output controls through the
 same timing selector used by Manual.
+
+## FFT output controls and phase trim
+
+The timing getter reads requested FFT offbeat/ratio controls, so a button edit
+is immediately visible to navigation. The FFT sync snapshot separately reports
+the applied clock state used for beat export and the phase graph. Accepted BPM
+replacements reset offbeat, ratio and trim; timing gestures restart when the
+held BPM changes.
+
+The phase-offset getter and adjustment route to the selected local source.
+Positive trim moves the trigger later. Manual uses its stored trigger phase;
+FFT uses its requested base-period offset. Follow output retains remote control.

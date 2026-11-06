@@ -13,11 +13,11 @@
   },
   "apps/fft_view/fft_app.c": {
     "doc": "apps/fft_view/README.md",
-    "sha256": "862b5aead4e703213cfc2911d01b5b2f5a4e9a99e80a4ee2e4751fb63601d6c1"
+    "sha256": "464fc68d1059b07dbff6a1b46e32a64622176528517c5e6e57117d37eb533073"
   },
   "apps/fft_view/fft_display.c": {
     "doc": "apps/fft_view/README.md",
-    "sha256": "7cce5a9b38fb82e33f5de9ef36c86c90beda5d14ee4d85e163f0452361504857"
+    "sha256": "16b3deda75acf717e357e0d52af1025f5d08eef5696e62363821b4a39d09a964"
   },
   "apps/fft_view/include/fft_display.h": {
     "doc": "apps/fft_view/README.md",
@@ -25,7 +25,7 @@
   },
   "apps/fft_view/tests/test_display.c": {
     "doc": "apps/fft_view/README.md",
-    "sha256": "b19436e76945f04d3a81e18ca973a9a8c7f641e78b499bf3cf1477805da9c5e0"
+    "sha256": "daebabd88936cef36ca743a10f114ba8715c63e8944762c64b3903d5bc0bdbae"
   },
   "apps/flappy/CMakeLists.txt": {
     "doc": "apps/flappy/README.md",
@@ -49,7 +49,7 @@
   },
   "apps/led_control/fft_sync_app.c": {
     "doc": "apps/led_control/README.md",
-    "sha256": "240d88bba71ab53f80f3ddadad003fd0e2b64989845cb48c99a1227f446724c0"
+    "sha256": "37c5d2a3149d723295284ab8c10acf905929e428d41d2ff6385f93992cde3b9b"
   },
   "apps/led_control/include/led_control_apps.h": {
     "doc": "apps/led_control/README.md",
@@ -245,27 +245,35 @@
   },
   "services/fft/fft.c": {
     "doc": "services/fft/README.md",
-    "sha256": "2e4ba3c4e5b091cae6dcf675bfd4da674cb4f554a4bd6867af2f00545a75bca7"
+    "sha256": "2a92364991aee5e5748ab6eefbd62b3b9dd22a9c61bf219f707681f716edd4c7"
   },
   "services/fft/fft_detector.c": {
     "doc": "services/fft/README.md",
     "sha256": "6ddc7b641f559c195e67a88d0d641ef2b23ba18f5d677691a6b1b605fe1d1562"
   },
+  "services/fft/fft_history.c": {
+    "doc": "services/fft/README.md",
+    "sha256": "7c7c7a9fc3033dc7005fa9fe6e94e7ed4a314555d610506a64e4c4adc2c2dfbf"
+  },
   "services/fft/fft_phase.c": {
     "doc": "services/fft/README.md",
-    "sha256": "cca702e7f6369fa5427860d526a79734b4a00cf4af2b3f60376d6003d456b45d"
+    "sha256": "8a486fcad81e16ca427d9333425dd9e12ba649e49356f752cbf99761732df3b6"
+  },
+  "services/fft/include/fft.h": {
+    "doc": "services/fft/README.md",
+    "sha256": "ae413808a0ce5035724dae941ec3cf40c0eb9a0598c40f28431c1c52a6c35e0a"
   },
   "services/fft/include/fft_history.h": {
     "doc": "services/fft/README.md",
-    "sha256": "9f38272658e37659d1c35a11d2c176ce0dfbf6ac09a2f8ab495a7ca62fa2d610"
+    "sha256": "ce88acd6d8055a102fd445e4e29d088b23ab3a028c7c8196ea487cdb23547945"
   },
   "services/fft/include/fft_phase.h": {
     "doc": "services/fft/README.md",
-    "sha256": "99a432ede321519cb9144da4ee9936fa51c93c5e4e75d89e91cefa32a18c6362"
+    "sha256": "82417295f68fa09de864dbbe7df6399585dcdee92479603e9b9c61504c68c56f"
   },
   "services/fft/tests/run_host_tests.sh": {
     "doc": "services/fft/README.md",
-    "sha256": "fbda29f2ea1c9a817a6a42b3785d39546d37da0148ee70f6006612e4e1a16d28"
+    "sha256": "ff4ba555fd3fe855ced79f9988f8afe4dbdd1a4edeb2e774b993d68e6dc7a859"
   },
   "services/fft/tests/test_detector.c": {
     "doc": "services/fft/README.md",
@@ -273,7 +281,11 @@
   },
   "services/fft/tests/test_localfft_reference.c": {
     "doc": "services/fft/README.md",
-    "sha256": "bd220c037feb5d81415aa63aa30305ec42ad4e501d45c3d4cdae2e08ef7fcb7f"
+    "sha256": "bc6d5caf8261bb17c5c0458f4b0cc837b7c98a4a87e002d9938085d80b195777"
+  },
+  "services/fft/tests/test_output_wiring.py": {
+    "doc": "services/fft/README.md",
+    "sha256": "c80ed1c676e7c839d4157e79732e9a52981bda49cdf2764b174de0f2b7667802"
   },
   "services/fft/tests/test_phase.c": {
     "doc": "services/fft/README.md",
@@ -325,11 +337,11 @@
   },
   "services/led_source/include/led_source.h": {
     "doc": "services/led_source/README.md",
-    "sha256": "c5f81838990bf5adda5f03b1829f72c333de60ce013c6f49d940a1b91f024821"
+    "sha256": "1f01fad1bb6ca25269e755406c0b77c1521d22a10808b330d1d68306c61a7538"
   },
   "services/led_source/led_source.c": {
     "doc": "services/led_source/README.md",
-    "sha256": "5fa970d3d6beb9468cf5ced56e8a4d0dfb12387716b3b38209d75c61ca41fc5e"
+    "sha256": "af33f8c558132556a9815c41a94a3ae618ef02ddc2a0e41d8f18fa9a45aef497"
   },
   "services/link/include/link.h": {
     "doc": "services/link/README.md",

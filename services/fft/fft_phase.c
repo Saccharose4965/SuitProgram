@@ -240,7 +240,16 @@ void fft_beat_clock_init(fft_beat_clock_t *c, double bpm, double anchor, double 
     double period = 60 / bpm, start = anchor;
     while (start > now) start -= period;
     while (start + period <= now) start += period;
-    *c = (fft_beat_clock_t){ .initialized = true, .bpm = bpm, .target_bpm = bpm,
+    bool seen = c->boundary_seen;
+    double last_boundary = c->last_boundary, emitted_period = c->emitted_period;
+    // Initialization selects a future beat. A boundary already in the past
+    // must not become a delayed flash when the new configuration is published.
+    if (start < now - 1e-9) {
+        if (!seen || start > last_boundary) last_boundary = start;
+        seen = true;
+    }
+    *c = (fft_beat_clock_t){ .boundary_seen = seen, .last_boundary = last_boundary,
+        .emitted_period = emitted_period, .initialized = true, .bpm = bpm, .target_bpm = bpm,
         .pending_bpm = bpm, .period = period, .target_period = period,
         .pending_period = period, .pending_anchor = anchor,
         .beat_start = start, .next_beat = start + period, .beats_since_change = 1000000 };
@@ -281,9 +290,23 @@ bool fft_beat_clock_emit(fft_beat_clock_t *clock, double now, double *last_emit)
 {
     fft_beat_clock_update(clock, now);
     if (!clock->initialized || clock->period <= 0) return false;
-    if (clock->beat_start > *last_emit && now - *last_emit >= clock->period * .5) {
-        *last_emit = now;
-        return true;
-    }
-    return false;
+    if (clock->boundary_seen && clock->beat_start <= clock->last_boundary) return false;
+    clock->boundary_seen = true;
+    clock->last_boundary = clock->beat_start;
+    double minimum_gap = .75 * fmax(clock->emitted_period, clock->period);
+    if (clock->emitted_period > 0 && now - *last_emit + 1e-9 < minimum_gap) return false;
+    *last_emit = now;
+    clock->emitted_period = clock->period;
+    return true;
+}
+
+bool fft_output_timing_on_hold_change(double previous, double next,
+                                      bool *offbeat, unsigned *ratio, float *offset)
+{
+    if (!isfinite(previous) || !isfinite(next) || previous <= 0 || next <= 0 ||
+        fabs(next - previous) < .5) return false;
+    *offbeat = false;
+    *ratio = 1;
+    *offset = 0;
+    return true;
 }

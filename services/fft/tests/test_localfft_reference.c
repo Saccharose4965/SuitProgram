@@ -222,6 +222,71 @@ static void test_phase_wrap_and_family_replacement(void)
     puts("Phase branch regression: half/full-cycle wrap in both directions, then family replacement; no half-beat jump.");
 }
 
+static void test_timing_scoped_to_hold(void)
+{
+    const double changes[][2] = {{0,120}, {120,120}, {120,121}, {121,120},
+                                  {120,145}, {145,120}, {120,0}, {NAN,120}};
+    for (unsigned i = 0; i < sizeof(changes) / sizeof(changes[0]); ++i) {
+        for (int mode = 0; mode < 3; ++mode) {
+            int pc_offbeat = mode == 1, pc_ratio = mode == 2 ? 2 : 1;
+            bool esp_offbeat = pc_offbeat; unsigned esp_ratio = pc_ratio;
+            float offset = .125f;
+            double pc_offset = offset;
+            Uint64 last_press = 1234; unsigned presses = 2;
+            bool expected = isfinite(changes[i][0]) && changes[i][0] > 0 &&
+                changes[i][1] > 0 && fabs(changes[i][1] - changes[i][0]) >= .5;
+            assert(reset_output_timing_for_bpm(changes[i][0], changes[i][1],
+                &pc_offbeat, &pc_ratio, &pc_offset, &last_press, &presses) == expected);
+            assert(fft_output_timing_on_hold_change(changes[i][0], changes[i][1],
+                &esp_offbeat, &esp_ratio, &offset) == expected);
+            assert(pc_offbeat == esp_offbeat && pc_ratio == (int)esp_ratio);
+            if (expected) {
+                assert(!pc_offbeat && pc_ratio == 1 && offset == 0 && pc_offset == 0);
+                assert(!last_press && !presses);
+                assert(strcmp(output_timing_name(pc_offbeat, pc_ratio), "auto") == 0);
+            } else {
+                assert(last_press == 1234 && presses == 2 && offset == .125f && pc_offset == .125);
+            }
+        }
+    }
+    puts("Output timing parity: accepted replacements clear offbeat/ratio, adjacent and returning BPMs included.");
+}
+
+static void test_emission_gate_reanchors(void)
+{
+    const double tempos[][2] = {{120,120}, {60,120}, {120,60}, {159,80}, {80,159}};
+    for (unsigned t = 0; t < sizeof(tempos) / sizeof(tempos[0]); ++t) {
+        BeatClock pc = {0}; fft_beat_clock_t esp = {0};
+        double a = 0, b = 0, old_period = 60 / tempos[t][0], new_period = 60 / tempos[t][1];
+        beat_clock_init_from_detected_beat(&pc, tempos[t][0], 10, 10);
+        fft_beat_clock_init(&esp, tempos[t][0], 10, 10);
+        assert(beat_clock_emit(&pc, 10, &a) && fft_beat_clock_emit(&esp, 10, &b));
+        beat_clock_init_from_detected_beat(&pc, tempos[t][1], 10.1, 10.1);
+        fft_beat_clock_init(&esp, tempos[t][1], 10.1, 10.1);
+        for (int i = 0; i < 300; ++i) {
+            double now = 10.1 + i * .01, previous = a;
+            int x = beat_clock_emit(&pc, now, &a);
+            int y = fft_beat_clock_emit(&esp, now, &b);
+            assert(x == y && fabs(a-b) < 1e-9);
+            if (x) {
+                assert(now - previous + 1e-9 >= .75 * fmax(old_period, new_period));
+                assert(now - pc.beatStartTime < .010001);
+                old_period = new_period;
+            }
+        }
+    }
+    // Explicit regression for a rejected beat previously emitted at phase .4.
+    fft_beat_clock_t clock = {0}; double last = 0;
+    fft_beat_clock_init(&clock, 120, 10, 10);
+    assert(fft_beat_clock_emit(&clock, 10, &last));
+    fft_beat_clock_init(&clock, 120, 10.1, 10.1);
+    assert(!fft_beat_clock_emit(&clock, 10.1, &last));
+    assert(!fft_beat_clock_emit(&clock, 10.3, &last));
+    assert(!fft_beat_clock_emit(&clock, 10.49, &last));
+    assert(fft_beat_clock_emit(&clock, 10.6, &last));
+    puts("Emission gate parity: spacing across BPM/ratio changes; rejected beats never reappear mid-cycle.");
+}
+
 static void test_output_clock_and_graph(void)
 {
     SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0, 512, 256, 32,
@@ -357,5 +422,7 @@ int main(void)
     test_bpm_replay();
     test_output_clock_and_graph();
     test_phase_wrap_and_family_replacement();
+    test_timing_scoped_to_hold();
+    test_emission_gate_reanchors();
     puts("Actual localFFT reference regressions passed.");
 }

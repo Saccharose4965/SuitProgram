@@ -39,7 +39,7 @@ link expires. The Source title shows this suit's settled A/B/C identity so the
 wearer knows which role another suit should follow. The manual screen adjusts
 BPM and phase, displays the current
 cycle and briefly marks beat crossings. The FFT
-controller resets the detector, toggles forced lock and selects on-beat,
+controller resets the detector, toggles forced lock and selects automatic phase,
 offbeat or double-rate timing. Two offset presses within 700 ms select double
 rate; isolated presses alternate on-beat and offbeat.
 
@@ -53,3 +53,11 @@ The host regression compiles the production animation input handler and checks
 three-row grid navigation, selection, speed editing and limits. Hardware review should
 exercise every screen while LEDs are visible, including manual-BPM long presses
 and the controller's double-press timing.
+
+## Controller phase alignment
+
+The Controller lists Back, Reset, Force, Set and Phase. A/B browse. D invokes
+the selected action. Set uses the shared timing gesture. Phase uses C/D for
+0.01-cycle earlier/later changes and long presses for 0.05-cycle changes.
+Its signed value and button legend update live. Follow displays `Phase: follow`
+and leaves alignment with the remote source.

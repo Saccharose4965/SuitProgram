@@ -105,6 +105,9 @@ static void phase(const fft_history_snapshot_t *d, uint8_t *fb, int x, int y, in
 {
     if (!d->detector.phase_valid || d->latest.status.bpm <= 0 || h < 2) return;
 
+    if (d->latest.status.clock_base_bpm > 0 && d->detector.held_bpm > 0 &&
+        fabsf(d->latest.status.clock_base_bpm - d->detector.held_bpm) >= .5f) return;
+
     float folded[DETECTOR_PHASE_BINS / 2];
     for (int i = 0; i < DETECTOR_PHASE_BINS / 2; ++i)
         folded[i] = d->detector.phase[i] + d->detector.phase[i + DETECTOR_PHASE_BINS / 2];

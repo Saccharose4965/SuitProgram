@@ -52,6 +52,8 @@ void fft_get_levels(fft_levels_t *out);
 
 typedef struct {
     float bpm;           // effective BPM currently driving beat export
+    float clock_base_bpm; // base tempo belonging to the applied output clock
+    float clock_origin;   // applied clock boundary in base-tempo phase coordinates
     float detected_bpm;  // strongest smoothed BPM candidate
     float confidence;    // decision readiness, capped at 1 for existing consumers
     float decision_confidence; // full 0..1.1 localFFT display value
@@ -64,7 +66,7 @@ typedef struct {
     uint32_t capture_errors;
     float beat_phase;    // 0..1 current beat cycle position
     float trigger_phase; // 0..1 phase where a beat is emitted
-    float phase_offset;  // 0..1 user offset added to trigger phase
+    float phase_offset;  // 0..1 manual offset applied to the output clock
     bool  bpm_locked;
     bool  phase_locked;  // also enables the independent BPM soft-lock
     unsigned ratio;      // output pulse multiplier: 1, 2, 3
@@ -74,6 +76,13 @@ typedef struct {
 } fft_sync_state_t;
 
 void fft_get_sync_state(fft_sync_state_t *out);
+typedef struct {
+    bool offbeat;
+    unsigned ratio;
+    float phase_offset;
+} fft_output_controls_t;
+// Requested controls; the sync snapshot reports the controls actually applied.
+void fft_get_output_controls(fft_output_controls_t *out);
 void fft_beat_phase_offset_add(float delta_cycles);
 void fft_beat_lock_set(bool locked);
 void fft_beat_lock_toggle(void);

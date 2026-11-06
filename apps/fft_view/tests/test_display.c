@@ -70,6 +70,13 @@ int main(void)
     assert(pixels(guarded.fb, 64, 32, 65, 64) > 0);  // opposite unfolded side remains visible
     assert(fabsf(fft_display_relative_phase(.67f, .17f, 1) - .5f) < 1e-6f);
     assert(fabsf(fft_display_relative_phase(.67f, .17f, 2)) < 1e-6f);
+    display.detector.held_bpm = 150;
+    display.latest.status.clock_base_bpm = 120;
+    draw(FFT_VIEW_PHASE_COMB, guarded.fb);
+    assert(!pixels(guarded.fb, 0, 0, 128, 64));
+    display.latest.status.clock_base_bpm = 150;
+    draw(FFT_VIEW_PHASE_COMB, guarded.fb);
+    assert(pixels(guarded.fb, 0, 32, 1, 64) == 32);
     draw(FFT_VIEW_TEMPO_RAW, guarded.fb);
     assert(pixels(guarded.fb, 64, 0, 65, 64) == 64); // BPM bin 40: left margin 24
     assert(pixels(guarded.fb, 0, 0, 64, 64) == 0);

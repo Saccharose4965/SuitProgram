@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../../.."
 fft_test_dir=$(mktemp -d)
 trap 'rm -rf "$fft_test_dir"' EXIT
+python3 services/fft/tests/test_output_wiring.py
 flags=(-std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -fsanitize=address,undefined -I services/fft/include)
 "${CC:-gcc}" "${flags[@]}" services/fft/tests/test_detector.c services/fft/fft_detector.c -lm -o "$fft_test_dir/detector"
 "$fft_test_dir/detector"

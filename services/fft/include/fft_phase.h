@@ -39,6 +39,8 @@ typedef struct {
     double period, target_period, pending_period, pending_anchor;
     double beat_start, next_beat;
     int beats_since_change;
+    bool boundary_seen;
+    double last_boundary, emitted_period;
 } fft_beat_clock_t;
 
 void fft_phase_tracker_reset(fft_phase_tracker_t *tracker);
@@ -50,12 +52,19 @@ fft_phase_decision_t fft_phase_update(fft_phase_tracker_t *tracker,
                                       double bpm, double time,
                                       bool bpm_certain, bool family_locked);
 void fft_beat_clock_reset(fft_beat_clock_t *clock);
+// Initialize a zeroed clock or reanchor an existing clock; retain emission history.
 void fft_beat_clock_init(fft_beat_clock_t *clock, double bpm,
                          double anchor, double now);
 void fft_beat_clock_schedule(fft_beat_clock_t *clock, double bpm, double anchor);
 void fft_beat_clock_update(fft_beat_clock_t *clock, double now);
 
 // Advance the clock and accept the newest boundary at most once, with the
-// same half-period spacing guard as the PC live harness. last_emit stores
+// same 75%-of-longer-period guard as the PC live harness. Rejected
+// boundaries are consumed. Reanchoring preserves emission history; reset
+// clears it. last_emit stores
 // actual publication time, not the nominal boundary timestamp.
 bool fft_beat_clock_emit(fft_beat_clock_t *clock, double now, double *last_emit);
+
+// Output presentation belongs to one accepted tempo, including restored tempos.
+bool fft_output_timing_on_hold_change(double previous, double next,
+                                      bool *offbeat, unsigned *ratio, float *offset);
