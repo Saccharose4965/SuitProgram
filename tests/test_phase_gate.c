@@ -109,13 +109,15 @@ int main(void) {
     beat_clock_init_from_detected_beat(&emission, 120, 10, 10);
     assert(beat_clock_emit(&emission, 10, &lastEmit));
     assert(!beat_clock_emit(&emission, 10.1, &lastEmit));
-    // Skip more than half a cycle: phase-wrap sampling could miss this beat.
-    assert(beat_clock_emit(&emission, 10.9, &lastEmit));
+    // A poll late in a cycle consumes the missed beat without flashing.
+    assert(!beat_clock_emit(&emission, 10.9, &lastEmit));
     assert(!beat_clock_emit(&emission, 10.91, &lastEmit));
-    assert(beat_clock_emit(&emission, 11.4, &lastEmit));
+    assert(beat_clock_emit(&emission, 11.01, &lastEmit));
     // A control reinitialization cannot emit twice within half a period.
-    beat_clock_init_from_detected_beat(&emission, 120, 11.45, 11.45);
-    assert(!beat_clock_emit(&emission, 11.45, &lastEmit));
+    beat_clock_init_from_detected_beat(&emission, 120, 11.05, 11.05);
+    assert(!beat_clock_emit(&emission, 11.05, &lastEmit));
+    assert(!beat_clock_emit(&emission, 20.3, &lastEmit));
+    assert(fabs(emission.beatStartTime - 20.05) < 1e-8);
     test_suppressed_boundary_stays_suppressed();
     test_lost_pulse();
     test_phase_correction_waits_for_boundary();

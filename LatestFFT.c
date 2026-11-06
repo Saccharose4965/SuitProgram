@@ -431,9 +431,10 @@ static void beat_clock_update(BeatClock *clk, double now) {
         clk->nextBeatTime = clk->beatStartTime + clk->periodCurrent;
     }
 
-    if (guard >= 8) {
-        clk->beatStartTime = now;
-        clk->nextBeatTime = now + clk->periodCurrent;
+    if (now >= clk->nextBeatTime) {
+        double missed = floor((now - clk->beatStartTime) / clk->periodCurrent);
+        clk->beatStartTime += missed * clk->periodCurrent;
+        clk->nextBeatTime = clk->beatStartTime + clk->periodCurrent;
     }
 }
 
@@ -445,6 +446,7 @@ static int beat_clock_emit(BeatClock *clock, double now, double *lastEmit) {
     if (clock->boundarySeen && clock->beatStartTime <= clock->lastBoundary) return 0;
     clock->boundarySeen = 1;
     clock->lastBoundary = clock->beatStartTime;
+    if (now - clock->beatStartTime > fmin(.050, clock->periodCurrent * .125) + 1e-9) return 0;
     double minimumGap = .75 * fmax(clock->emittedPeriod, clock->periodCurrent);
     if (clock->emittedPeriod > 0 && now - *lastEmit + 1e-9 < minimumGap) return 0;
     *lastEmit = now;

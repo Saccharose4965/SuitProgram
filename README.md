@@ -55,6 +55,9 @@ and offset/ratio controls follow monotonic real time. The newest crossed beat
 boundary is considered once, with minimum spacing of 75% of the longer of the
 previously emitted and current output periods. Rejected boundaries stay
 consumed. Reanchoring preserves that gate and schedules future beats.
+Emission must arrive within the smaller of 50 ms and one eighth of the current
+period. A later poll consumes the missed boundary and waits for the next one.
+Long suspensions skip whole periods while preserving the established phase grid.
 A full-brightness frame marks an accepted event, followed by exponential decay
 measured from that event. The title shows signed fine phase offset.
 
