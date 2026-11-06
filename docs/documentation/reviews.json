@@ -169,15 +169,23 @@
   },
   "drivers/audio_i2s/CMakeLists.txt": {
     "doc": "drivers/audio_i2s/README.md",
-    "sha256": "d65124b07e8ba8bed28bd3d812377aae899629fd0f1c7c68e8c86deb3f5b7446"
+    "sha256": "6f5d21fc70526535b0983bb3b32facf757dc9cc2534e7c45e8e4ce0881db632a"
+  },
+  "drivers/audio_i2s/README.md": {
+    "doc": "drivers/audio_i2s/README.md",
+    "sha256": "45253d897c6afb5c13afff873f5675bd36cbcdee63af9ca531c72c6f4ec48653"
   },
   "drivers/audio_i2s/audio_i2s.c": {
     "doc": "drivers/audio_i2s/README.md",
-    "sha256": "996db5ceab6831c707a13739d0b5a9ee0118b1828ef83161d86bed954bf8e64a"
+    "sha256": "2eb3e209a24bde0bad87089b9de613f4fd77f8c7c75428a5adf3b97b3b37f85d"
   },
   "drivers/audio_i2s/include/audio_i2s.h": {
     "doc": "drivers/audio_i2s/README.md",
-    "sha256": "b2d24463dd09d11b4547a40c0acfe878e61c44bb8f95979b933cac17e4eb782b"
+    "sha256": "19f27f4e53e883596bc2fa8c45e3981915d50066cf3f93ce54ec4c10e28552e8"
+  },
+  "drivers/audio_i2s/tests/test_rx_timing.py": {
+    "doc": "drivers/audio_i2s/README.md",
+    "sha256": "5036202af87cc9358e4da4880faf56791034d21265c435ab546c2d0875fe7265"
   },
   "drivers/hw/CMakeLists.txt": {
     "doc": "drivers/hw/README.md",
@@ -247,9 +255,13 @@
     "doc": "services/bt_audio/README.md",
     "sha256": "374ddeec918dbd7c212144c4cf65511a24ef9a32c7feaf6775377703d4922af9"
   },
+  "services/fft/README.md": {
+    "doc": "services/fft/README.md",
+    "sha256": "39c8d535060f52ee091b42dfeed0397428c79426f9fd3c961a3c4d0456b80f4d"
+  },
   "services/fft/fft.c": {
     "doc": "services/fft/README.md",
-    "sha256": "2a92364991aee5e5748ab6eefbd62b3b9dd22a9c61bf219f707681f716edd4c7"
+    "sha256": "686667f13bb21fccef17c1d1107301510c18eb8364e2a462f8e076c5675c8abf"
   },
   "services/fft/fft_detector.c": {
     "doc": "services/fft/README.md",
@@ -261,7 +273,7 @@
   },
   "services/fft/fft_phase.c": {
     "doc": "services/fft/README.md",
-    "sha256": "8a486fcad81e16ca427d9333425dd9e12ba649e49356f752cbf99761732df3b6"
+    "sha256": "bf1a00946829a9f4a22dfd77f859805002ddd30877c32393a998e4666a2082c7"
   },
   "services/fft/include/fft.h": {
     "doc": "services/fft/README.md",
@@ -273,11 +285,11 @@
   },
   "services/fft/include/fft_phase.h": {
     "doc": "services/fft/README.md",
-    "sha256": "82417295f68fa09de864dbbe7df6399585dcdee92479603e9b9c61504c68c56f"
+    "sha256": "0d9e4fe38d76ac0f1feafb98ea46ca530dc073ea410ffe0b49d706e04cf5f53e"
   },
   "services/fft/tests/run_host_tests.sh": {
     "doc": "services/fft/README.md",
-    "sha256": "ff4ba555fd3fe855ced79f9988f8afe4dbdd1a4edeb2e774b993d68e6dc7a859"
+    "sha256": "4ca8b0a715845c17afd646be4bd173e2022c0a314c29f8b63037097cf469497a"
   },
   "services/fft/tests/test_detector.c": {
     "doc": "services/fft/README.md",
@@ -293,7 +305,7 @@
   },
   "services/fft/tests/test_phase.c": {
     "doc": "services/fft/README.md",
-    "sha256": "ea285b59c10f5e0488f9de8d2326e1a90638517a19ae35dfccb33868b116a96b"
+    "sha256": "5a9844ff262a8978e29c781a5f87c170cb55b7adfce84dc37aae897f9de4c6fd"
   },
   "services/flappy_game/flappy_game.c": {
     "doc": "services/flappy_game/README.md",
@@ -351,13 +363,17 @@
     "doc": "services/link/README.md",
     "sha256": "352bc663f4565ae44555b11ad4daacc7cb692ebd5e5f3d19a7db2699e35bdde5"
   },
+  "services/microphone/README.md": {
+    "doc": "services/microphone/README.md",
+    "sha256": "1f09d5310cae55a903d51e514d02cc3897b6d5ed24d722a63db65d6246ea5038"
+  },
   "services/microphone/include/microphone.h": {
     "doc": "services/microphone/README.md",
     "sha256": "cfdd3086c3b3f664bd1bfe33ab556f8d1a8834fa90c38c1da1248ca897b7ae85"
   },
   "services/microphone/microphone.c": {
     "doc": "services/microphone/README.md",
-    "sha256": "8ce53799cd377554270351517c5928170a3881470250956967c00c071520a714"
+    "sha256": "f2f6b8598ca75beda3ab3496a4500063edbefe0afad717b9d6acb26fb1e16ea9"
   },
   "services/microphone/recording_counter.c": {
     "doc": "services/microphone/README.md",

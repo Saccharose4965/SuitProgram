@@ -518,11 +518,9 @@ static void process_frame(double time)
 static void capture_task(void *arg)
 {
     int32_t *input = arg;
-    i2s_chan_handle_t rx = audio_i2s_rx_handle();
     uint32_t clock_revision = audio_i2s_get_clock_revision();
     uint32_t overflows = audio_i2s_get_rx_overflows();
     uint64_t samples = 0;
-    double origin = 0;
     int fill = 0, slot = -1;
     bool suspended = false;
     while (!s_stop_capture) {
@@ -549,17 +547,20 @@ static void capture_task(void *arg)
         }
         suspended = false;
         size_t bytes = 0;
-        esp_err_t err = i2s_channel_read(rx, input, DETECTOR_FFT_SIZE * 2 * sizeof(*input), &bytes, 100);
+        int64_t last_sample_us = 0;
+        esp_err_t err = audio_i2s_read_rx(input, DETECTOR_FFT_SIZE * 2 * sizeof(*input),
+                                        &bytes, 100, &last_sample_us);
         // Never concatenate partial frames across a failed read or clock change.
         uint32_t current_overflows = audio_i2s_get_rx_overflows();
         uint32_t after_revision = audio_i2s_get_clock_revision();
-        if ((err != ESP_OK && err != ESP_ERR_TIMEOUT) || !bytes ||
+        if ((err != ESP_OK && err != ESP_ERR_TIMEOUT) || !bytes || last_sample_us <= 0 ||
             current_overflows != overflows ||
             revision != after_revision) {
             ++s_capture_errors;
             const char *reason = current_overflows != overflows ? "I2S RX overflow" :
                 (revision != after_revision ? "audio clock changed during read" :
-                (!bytes ? "empty I2S read" : "I2S read failure"));
+                (!bytes ? "empty I2S read" :
+                 (last_sample_us <= 0 ? "missing RX timestamp" : "I2S read failure")));
             overflows = current_overflows;
             if (fill || samples) invalidate_capture(reason);
             fill = 0; samples = 0;
@@ -572,7 +573,6 @@ static void capture_task(void *arg)
             continue;
         }
         int n = bytes / (2 * sizeof(*input));
-        if (!samples) origin = esp_timer_get_time() / 1e6 - n / (double)DETECTOR_SAMPLE_RATE;
         if (slot < 0) {
             double left = 0, right = 0;
             for (int i = 0; i < n; ++i) { left += fabs((double)input[2*i]); right += fabs((double)input[2*i+1]); }
@@ -585,7 +585,11 @@ static void capture_task(void *arg)
             s_re[fill++] = fmaxf(-1, fminf(1, input[2*i + slot] / 536870912.0f));
             ++samples;
             if (fill == DETECTOR_FFT_SIZE) {
-                process_frame(origin + (samples - 1) / (double)DETECTOR_SAMPLE_RATE);
+                // Date the centre of the Hann window from the received audio,
+                // including remaining samples in this read. Conversion by the
+                // nominal rate spans milliseconds, never the whole session.
+                double after_center = n - 1 - i + (DETECTOR_FFT_SIZE - 1) * .5;
+                process_frame(last_sample_us / 1e6 - after_center / DETECTOR_SAMPLE_RATE);
                 fill = 0;
             }
         }

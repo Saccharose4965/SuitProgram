@@ -11,9 +11,12 @@ and phase tracker share their decision rules with the PC harness in
 
 Capture uses 44,100 Hz stereo I2S reads and non-overlapping 1024-sample frames.
 The first read selects the stronger microphone slot. Signed PCM receives a
-saturating fourfold gain, a Hann window and a radix-2 FFT. The first read anchors
-sample time to the monotonic clock; subsequent timestamps advance by sample
-count. RX overflow counts and clock revisions protect capture continuity.
+saturating fourfold gain, a Hann window and a radix-2 FFT. Each frame is dated at
+the centre of its Hann window. The I2S driver supplies the monotonic timestamp
+of the last returned sample, accounting for queued and dropped DMA blocks.
+Conversion at the nominal sample rate covers the remaining samples in the read
+and half a window. Phase-history spacing uses the nominal rate over its four
+seconds. RX overflow counts and clock revisions protect capture continuity.
 
 Each frame becomes 32 linear bands of log magnitude above 100 Hz. Bands 16–23
 receive a square-root-of-two weight. Broad upper-band impulses retain the
@@ -132,6 +135,10 @@ crossed boundary once. The minimum interval is 75% of the longer of the
 previously emitted period and the current output period. A boundary rejected
 by that guard is consumed permanently. Reanchoring preserves emission history
 and schedules future boundaries; Reset clears clock and emission state.
+Emission also requires arrival within the smaller of 50 ms and one eighth of
+the output period. Later polls consume that boundary silently and wait for the
+next beat. After a long suspension, catch-up skips whole periods on the existing
+grid. This keeps task scheduling from establishing a new musical phase.
 Publication updates cycle phase, queues a beat event and can call the Beat LED renderer. The LED
 rendering task, frame submission and wire transmission follow that request.
 The selected animation determines how brightness and movement express it.
@@ -166,6 +173,14 @@ checks both initial sides at every phase bin, stronger-side inversions, ratios
 and repeated manual half-cycle changes. Its callback verifies that the display
 snapshot is already the applied blink snapshot. The test also distinguishes a
 requested offbeat change from its application on the next capture update.
+
+`drivers/audio_i2s/tests/test_rx_timing.py` exercises the production DMA callbacks
+and timestamped read wrapper with buffering, dropped blocks, partial timeouts
+and stream restarts. Its twelve-minute synthetic session uses a 44,078 Hz input
+clock, two tempos, the production phase tracker, beat clock and OLED renderer.
+It checks audible beat timing independently of graph alignment. The reference
+case demonstrates the accumulated error from first-read/sample-count dating;
+DMA timestamps keep the rendered peak and emitted beats aligned to the input.
 
 ## Scheduling and capture continuity
 

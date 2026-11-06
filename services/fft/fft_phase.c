@@ -283,7 +283,12 @@ void fft_beat_clock_update(fft_beat_clock_t *c, double now)
         }
         c->bpm = 60 / c->period; c->next_beat = c->beat_start + c->period;
     }
-    if (guard >= 8) { c->beat_start = now; c->next_beat = now + c->period; }
+    if (now >= c->next_beat) {
+        // Skip whole missed cycles while preserving the established phase.
+        double missed = floor((now - c->beat_start) / c->period);
+        c->beat_start += missed * c->period;
+        c->next_beat = c->beat_start + c->period;
+    }
 }
 
 bool fft_beat_clock_emit(fft_beat_clock_t *clock, double now, double *last_emit)
@@ -293,6 +298,8 @@ bool fft_beat_clock_emit(fft_beat_clock_t *clock, double now, double *last_emit)
     if (clock->boundary_seen && clock->beat_start <= clock->last_boundary) return false;
     clock->boundary_seen = true;
     clock->last_boundary = clock->beat_start;
+    // A delayed poll must not turn a missed boundary into an offbeat flash.
+    if (now - clock->beat_start > fmin(.050, clock->period * .125) + 1e-9) return false;
     double minimum_gap = .75 * fmax(clock->emitted_period, clock->period);
     if (clock->emitted_period > 0 && now - *last_emit + 1e-9 < minimum_gap) return false;
     *last_emit = now;

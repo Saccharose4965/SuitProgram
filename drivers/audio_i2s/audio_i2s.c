@@ -6,6 +6,7 @@
 #include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -22,6 +23,34 @@ static bool s_tx_enabled;
 static bool s_rx_enabled;
 static bool s_configured;
 static DRAM_ATTR int32_t s_prime_silence[256 * 2];
+static portMUX_TYPE s_rx_clock_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint64_t s_rx_received_bytes, s_rx_read_bytes, s_rx_dropped_bytes;
+static int64_t s_rx_end_us;
+static uint32_t s_rx_generation;
+
+static bool IRAM_ATTR rx_received(i2s_chan_handle_t channel,
+                                  i2s_event_data_t *event, void *user)
+{
+    (void)channel;
+    (void)user;
+    int64_t now = esp_timer_get_time();
+    portENTER_CRITICAL_ISR(&s_rx_clock_mux);
+    s_rx_received_bytes += event->size;
+    s_rx_end_us = now;
+    portEXIT_CRITICAL_ISR(&s_rx_clock_mux);
+    return false;
+}
+
+static esp_err_t enable_rx_channel(void)
+{
+    // Called with RX stopped. IDF clears its receive queue on enable.
+    portENTER_CRITICAL(&s_rx_clock_mux);
+    s_rx_received_bytes = s_rx_read_bytes = s_rx_dropped_bytes = 0;
+    s_rx_end_us = 0;
+    ++s_rx_generation;
+    portEXIT_CRITICAL(&s_rx_clock_mux);
+    return i2s_channel_enable(s_rx);
+}
 
 static i2s_clock_src_t clock_source(int hz)
 {
@@ -32,9 +61,11 @@ static bool IRAM_ATTR rx_overflow(i2s_chan_handle_t channel,
                                   i2s_event_data_t *event, void *user)
 {
     (void)channel;
-    (void)event;
     (void)user;
+    portENTER_CRITICAL_ISR(&s_rx_clock_mux);
+    s_rx_dropped_bytes += event->size;
     ++s_rx_overflows;
+    portEXIT_CRITICAL_ISR(&s_rx_clock_mux);
     return false;
 }
 
@@ -91,7 +122,8 @@ esp_err_t audio_i2s_init(const audio_i2s_config_t *config)
     if (config->din_gpio >= 0) {
         err = i2s_channel_init_std_mode(s_rx, &rx_config);
         if (err != ESP_OK) goto fail;
-        i2s_event_callbacks_t callbacks = {.on_recv_q_ovf = rx_overflow};
+        i2s_event_callbacks_t callbacks = {
+            .on_recv = rx_received, .on_recv_q_ovf = rx_overflow};
         err = i2s_channel_register_event_callback(s_rx, &callbacks, NULL);
         if (err != ESP_OK) goto fail;
     } else {
@@ -191,6 +223,39 @@ uint32_t audio_i2s_get_rx_overflows(void)
     return s_rx_overflows;
 }
 
+esp_err_t audio_i2s_read_rx(void *dest, size_t size, size_t *bytes_read,
+                           uint32_t timeout_ms, int64_t *last_sample_us)
+{
+    if (bytes_read) *bytes_read = 0;
+    if (last_sample_us) *last_sample_us = 0;
+    // Whole DMA blocks keep IDF's partial-buffer skip path out of this API.
+    if (!dest || !size || size % sizeof(s_prime_silence)) return ESP_ERR_INVALID_ARG;
+    if (!s_rx) return ESP_ERR_INVALID_STATE;
+    portENTER_CRITICAL(&s_rx_clock_mux);
+    uint32_t generation = s_rx_generation;
+    portEXIT_CRITICAL(&s_rx_clock_mux);
+    size_t bytes = 0;
+    esp_err_t err = i2s_channel_read(s_rx, dest, size, &bytes, timeout_ms);
+    portENTER_CRITICAL(&s_rx_clock_mux);
+    bool same_stream = generation == s_rx_generation;
+    if (same_stream) s_rx_read_bytes += bytes;
+    uint64_t consumed = s_rx_read_bytes + s_rx_dropped_bytes;
+    uint64_t received = s_rx_received_bytes;
+    int64_t end_us = s_rx_end_us;
+    portEXIT_CRITICAL(&s_rx_clock_mux);
+    if (bytes_read) *bytes_read = bytes;
+    int rate = audio_i2s_get_rate();
+    if (last_sample_us && bytes && same_stream && end_us > 0 && rate > 0 &&
+        received >= consumed) {
+        // The callback dates the end of the newest completed DMA block.
+        // Subtract only unread samples (at most the DMA queue), plus one
+        // sample to date the last actual sample rather than its end boundary.
+        uint64_t behind = (received - consumed) / (2 * sizeof(int32_t));
+        *last_sample_us = end_us - (int64_t)((behind + 1) * 1000000ULL / rate);
+    }
+    return err;
+}
+
 esp_err_t audio_i2s_enable_tx(void)
 {
     esp_err_t err = restore_bus();
@@ -208,7 +273,7 @@ esp_err_t audio_i2s_enable_tx(void)
         }
         if (err == ESP_ERR_TIMEOUT && s_rx && !s_rx_enabled) {
             ESP_LOGW(TAG, "arming RX before final TX retry");
-            esp_err_t rx_err = i2s_channel_enable(s_rx);
+            esp_err_t rx_err = enable_rx_channel();
             if (rx_err == ESP_OK || rx_err == ESP_ERR_INVALID_STATE)
                 s_rx_enabled = true;
             vTaskDelay(pdMS_TO_TICKS(1));
@@ -222,7 +287,7 @@ esp_err_t audio_i2s_enable_tx(void)
     }
 
     if (s_rx && !s_rx_enabled) {
-        esp_err_t rx_err = i2s_channel_enable(s_rx);
+        esp_err_t rx_err = enable_rx_channel();
         if (rx_err == ESP_OK || rx_err == ESP_ERR_INVALID_STATE)
             s_rx_enabled = true;
         else
@@ -257,7 +322,7 @@ esp_err_t audio_i2s_enable_rx(void)
                                 sizeof(s_prime_silence), &written, 10);
     }
     if (!s_rx_enabled) {
-        err = i2s_channel_enable(s_rx);
+        err = enable_rx_channel();
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
         s_rx_enabled = true;
     }

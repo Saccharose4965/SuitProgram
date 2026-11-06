@@ -1,13 +1,29 @@
 # Progress
 
+## FFT phase alignment: capture timestamps and missed beats
+
+- Reopened after recurrence on the suit; the earlier successful listening tests
+  did not establish that the underlying fault was resolved.
+- Reproduced graph-zero/offbeat flashes using production phase/clock/rendering
+  code with a 44,078 Hz input dated by a fixed 44,100 Hz sample counter. The
+  twelve-minute reference run produces 547 half-phase discrepancies, including
+  across a tempo change. DMA-based sample timestamps produce none in that run.
+- Capture now dates Hann-window centres from DMA completion and unread-sample
+  accounting. The phase selection, confidence and steering rules are unchanged.
+- Beat emission consumes stale boundaries; a long stall skips whole cycles
+  without redefining phase zero. The same clock rules apply on PC and ESP.
+- User reports sustained successful operation on the suit and approves this
+  phase fix for release. Marked fixed after hardware testing.
+
+
 ## Passive Controller entry
 
 - Removed audio initialization and the extra LED Source tick from Controller
   entry. Its lifecycle now changes only cursor, menu motion and displayed labels.
 - A controller callback regression checks 100 open/draw/close cycles, a held
   entry button and the explicit timing actions.
-- User long-duration testing passed: opening Controller preserves alignment
-  between the OLED phase reference, music and suit LED blinks. Marked fixed.
+- Initial long-duration testing passed; the half-phase symptom subsequently
+  recurred. Passive entry remains a lifecycle guarantee, not a confirmed root cause.
 
 
 ## FFT applied phase publication audit
@@ -20,8 +36,8 @@
 - Audited the half-cycle operations through acquisition, branch tracking,
   requested offset, steering, emission and display mapping. A production-code
   replay covers 512 cases and 16,982 simulated LED callbacks.
-- User testing confirms that the OLED phase reference, music and suit LED
-  blinks now agree after the applied-state publication change.
+- Initial user testing passed, followed by recurrence; output snapshot coherence
+  alone does not validate the audio-to-wall-clock mapping.
 
 
 ## Remote suit control

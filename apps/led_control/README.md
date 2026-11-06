@@ -70,5 +70,3 @@ Entry preserves source, tempo, phase and output controls.
 
 `tests/test_fft_controller.py` compiles the production callbacks and checks
 100 entry/draw/exit cycles, a held entry button and explicit timing actions.
-User long-duration testing confirms phase alignment remains stable after opening
-Controller.

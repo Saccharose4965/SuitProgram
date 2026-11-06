@@ -41,6 +41,23 @@ The RX overflow callback increments a diagnostic counter in interrupt context.
 Consumers compare revisions and overflow counts before and after a read to
 decide whether its samples form a valid uninterrupted window.
 
+The receive callback records the monotonic time and cumulative byte count of
+each completed DMA block. `audio_i2s_read_rx` tracks consumed bytes and subtracts
+unread frames from that timestamp to date the last returned sample. Dropped
+blocks advance the consumed position too. Each RX enable resets this accounting
+alongside the driver's receive queue. A read crossing a restart returns a zero
+timestamp, which FFT rejects. Nominal-rate conversion spans only the buffered
+samples, keeping its error bounded throughout a long session.
+
+FFT and microphone recording use this wrapper as mutually exclusive readers.
+Requests are multiples of one 256-frame stereo block, matching the DMA buffers;
+recording omits the optional timestamp. The interrupt callback performs integer
+accounting under a short critical section. Buffer counts, allocation, sample
+clock configuration and playback ownership remain the same.
+
+`tests/test_rx_timing.py` checks this accounting and runs the dated audio through
+phase estimation, clock emission and the OLED phase renderer over a long session.
+
 ## Release and restoration
 
 `audio_i2s_release()` disables both directions, mutes the amplifier and deletes

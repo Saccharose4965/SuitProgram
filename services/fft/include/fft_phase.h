@@ -61,7 +61,8 @@ void fft_beat_clock_update(fft_beat_clock_t *clock, double now);
 // Advance the clock and accept the newest boundary at most once, with the
 // same 75%-of-longer-period guard as the PC live harness. Rejected
 // boundaries are consumed. Reanchoring preserves emission history; reset
-// clears it. last_emit stores
+// clears it. Polls later than min(50 ms, 1/8 cycle) consume without emitting.
+// Long pauses skip whole cycles while preserving the phase grid. last_emit stores
 // actual publication time, not the nominal boundary timestamp.
 bool fft_beat_clock_emit(fft_beat_clock_t *clock, double now, double *last_emit);
 

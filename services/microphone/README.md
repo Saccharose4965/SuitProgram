@@ -19,8 +19,9 @@ It sets the audio rate, enables RX, refreshes the RX handle and starts one
 recording task on core 0, priority 5, with a 4096-byte stack. A running session
 is reused; a previous task still finalizing blocks a new start.
 
-The task reads stereo 32-bit frames in batches of up to 256 and takes the left
-slot. Division by 16384 and saturation produce signed 16-bit mono samples.
+The task uses the I2S driver's shared receive wrapper to read stereo 32-bit frames
+in batches of up to 256 and takes the left slot. It omits the optional sample
+timestamp. Division by 16384 and saturation produce signed 16-bit mono samples.
 It appends PCM and periodically flushes the file. Empty/read-error batches retry;
 an all-zero batch warns once per recording. A short SD write ends the session.
 

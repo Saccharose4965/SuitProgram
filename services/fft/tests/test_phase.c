@@ -70,6 +70,19 @@ int main(void)
     fft_beat_clock_update(&clock, boundary + .001);
     assert(!clock.pending && clock.beat_start == boundary);
     assert(fabs(clock.period - clock.target_period) <= clock.target_period * .006001);
+
+    // Task stalls consume missed beats; a resume at half-phase cannot flash or
+    // redefine phase zero. Even a long suspension keeps the original grid.
+    fft_beat_clock_reset(&clock);
+    double last_emit = 0;
+    fft_beat_clock_init(&clock, 150, 10, 10);
+    assert(fft_beat_clock_emit(&clock, 10, &last_emit));
+    assert(!fft_beat_clock_emit(&clock, 10.6, &last_emit));
+    assert(fabs(clock.beat_start - 10.4) < 1e-8);
+    assert(fft_beat_clock_emit(&clock, 10.8, &last_emit));
+    assert(!fft_beat_clock_emit(&clock, 20.2, &last_emit));
+    assert(fabs(clock.beat_start - 20.0) < 1e-8);
+    assert(fft_beat_clock_emit(&clock, 20.4 + 1e-8, &last_emit));
     puts("Phase tracker regressions passed (folded lock, tempo reacquire, boundary steering).");
     return 0;
 }
