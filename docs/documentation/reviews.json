@@ -49,7 +49,7 @@
   },
   "apps/led_control/fft_sync_app.c": {
     "doc": "apps/led_control/README.md",
-    "sha256": "37c5d2a3149d723295284ab8c10acf905929e428d41d2ff6385f93992cde3b9b"
+    "sha256": "0cf9bfb79ed62e23391766eadead34fb3ecbc77736cd6ca68dc0d4e6c23b6d05"
   },
   "apps/led_control/include/led_control_apps.h": {
     "doc": "apps/led_control/README.md",
@@ -62,6 +62,10 @@
   "apps/led_control/tests/test_animation_controls.py": {
     "doc": "apps/led_control/README.md",
     "sha256": "cee2c922af034ff140bbde028f789b4b4b62d131e14cdb49faa0958784c1a8ae"
+  },
+  "apps/led_control/tests/test_fft_controller.py": {
+    "doc": "apps/led_control/README.md",
+    "sha256": "26efe54889da8b7a20c02165875619f89a097765f8c0821e1a5467d5eee44f8c"
   },
   "apps/message_app/message_app.c": {
     "doc": "apps/message_app/README.md",

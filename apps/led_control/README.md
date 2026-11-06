@@ -61,3 +61,14 @@ the selected action. Set uses the shared timing gesture. Phase uses C/D for
 0.01-cycle earlier/later changes and long presses for 0.05-cycle changes.
 Its signed value and button legend update live. Follow displays `Phase: follow`
 and leaves alignment with the remote source.
+
+## Controller lifecycle
+
+Opening, drawing and closing Controller update only UI state. The shell's
+background services own audio setup, source policy and clock advancement.
+Entry preserves source, tempo, phase and output controls.
+
+`tests/test_fft_controller.py` compiles the production callbacks and checks
+100 entry/draw/exit cycles, a held entry button and explicit timing actions.
+User long-duration testing confirms phase alignment remains stable after opening
+Controller.

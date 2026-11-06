@@ -1,5 +1,15 @@
 # Progress
 
+## Passive Controller entry
+
+- Removed audio initialization and the extra LED Source tick from Controller
+  entry. Its lifecycle now changes only cursor, menu motion and displayed labels.
+- A controller callback regression checks 100 open/draw/close cycles, a held
+  entry button and the explicit timing actions.
+- User long-duration testing passed: opening Controller preserves alignment
+  between the OLED phase reference, music and suit LED blinks. Marked fixed.
+
+
 ## FFT applied phase publication audit
 
 - Separated requested timing controls from the applied offbeat/ratio/trim in

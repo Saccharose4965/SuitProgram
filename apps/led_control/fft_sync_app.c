@@ -1,15 +1,10 @@
 #include "led_control_apps.h"
 #include "led_source.h"
-#include "audio_bus.h"
 
 #include <stdio.h>
 #include <math.h>
 
-#include "esp_log.h"
-
 #include "fft.h"
-
-static const char *TAG = "led_controller";
 
 enum {
     CONTROLLER_BACK = 0,
@@ -56,10 +51,6 @@ void fft_sync_app_init(shell_app_context_t *ctx)
     s_selected = CONTROLLER_RESET;
     shell_ui_menu_reset(&s_motion, s_selected);
 
-    if (led_source_mode_get() == LED_SOURCE_FFT && !audio_bus_init_if_needed()) {
-        ESP_LOGE(TAG, "audio_init failed; FFT source unavailable");
-    }
-    led_source_service_tick(0.0f);
     refresh_labels();
 }
 
