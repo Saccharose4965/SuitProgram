@@ -25,9 +25,11 @@ renderer dimensions; the spectrogram texture stores 512 frequency rows.
   score evidence and pending analysis, then seek a new hold.
 - `F`: force the strongest smoothed BPM or release force; restart challenger support.
 - `Space`: toggle phase-family lock and its independent BPM soft lock.
-- `D`: after 700 ms idle, toggle on/offbeat. A second quick press selects 2x;
+- `D`: after 700 ms idle, toggle automatic phase/manual offbeat. A second quick press selects 2x;
   further quick presses cycle all three choices.
 - `O`: toggle offbeat directly. `1` / `2`: select the output ratio directly.
+- `[` / `]`: move the output phase earlier/later by 0.01 base cycle; Shift uses
+  0.05. Backslash clears the fine offset.
 - `Esc`: quit.
 
 ## Live pipeline
@@ -50,13 +52,22 @@ After microphone warm-up and UI/worker setup, queued startup audio is discarded
 and capture is prepared afresh. The first successful read anchors sample time
 to monotonic time; subsequent frames advance by sample count. Output emission
 and offset/ratio controls follow monotonic real time. The newest crossed beat
-boundary triggers once with a half-period spacing guard. A full-brightness frame
-marks that event, followed by exponential decay.
+boundary is considered once, with minimum spacing of 75% of the longer of the
+previously emitted and current output periods. Rejected boundaries stay
+consumed. Reanchoring preserves that gate and schedules future beats.
+A full-brightness frame marks an accepted event, followed by exponential decay
+measured from that event. The title shows signed fine phase offset.
 
 An ALSA overrun rebuilds contiguous evidence and invalidates stale worker
 results while retaining the held BPM and output clock. Reset retains captured
 evidence while clearing accepted state. The held tempo persists through missing
 evidence until Reset or a supported replacement.
+
+Offbeat and 2x are settings for the current held BPM. Every accepted BPM
+replacement, including ±1 and a return to a previous BPM, restores automatic
+phase at 1x and clears the timing-button gesture. Brief contenders preserve the
+setting. The automatic phase cache retains its own timing state independently.
+The title names output `auto`, `offbeat` or `2x`.
 
 ## Display
 

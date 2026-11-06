@@ -52,6 +52,25 @@ static void test_phase_correction_waits_for_boundary(void) {
            clock.periodTarget * BEAT_PHASE_STEER_MAX_RATIO + 1e-12);
 }
 
+static void test_suppressed_boundary_stays_suppressed(void) {
+    BeatClock clock = {0}; double last = 0;
+    beat_clock_init_from_detected_beat(&clock, 120, 10, 10);
+    assert(beat_clock_emit(&clock, 10, &last));
+    beat_clock_init_from_detected_beat(&clock, 120, 10.1, 10.1);
+    assert(!beat_clock_emit(&clock, 10.1, &last));
+    assert(!beat_clock_emit(&clock, 10.3, &last));
+    assert(!beat_clock_emit(&clock, 10.49, &last));
+    assert(beat_clock_flash_phase(&clock, 10.3, last) > .59);
+    assert(beat_clock_emit(&clock, 10.6, &last));
+    assert(beat_clock_flash_phase(&clock, 10.6, last) == 0);
+    // Reinitialization between beats waits for a future boundary.
+    memset(&clock, 0, sizeof(clock)); last = 0;
+    beat_clock_init_from_detected_beat(&clock, 120, 10, 10.2);
+    assert(!beat_clock_emit(&clock, 10.2, &last));
+    assert(beat_clock_emit(&clock, 10.5, &last));
+    puts("Emission gate: rejected boundaries stay rejected; flash brightness follows accepted emissions.");
+}
+
 int main(void) {
     BeatClock view_clock = {.initialized = 1, .beatStartTime = 10.125};
     assert(fabs(phase_graph_origin(&view_clock, 120) - .25) < 1e-12);
@@ -97,6 +116,7 @@ int main(void) {
     // A control reinitialization cannot emit twice within half a period.
     beat_clock_init_from_detected_beat(&emission, 120, 11.45, 11.45);
     assert(!beat_clock_emit(&emission, 11.45, &lastEmit));
+    test_suppressed_boundary_stays_suppressed();
     test_lost_pulse();
     test_phase_correction_waits_for_boundary();
     assert(bpm_confident_for_phase(1, STABILITY_WINDOW_SECONDS, 1, 1, 120, 120));

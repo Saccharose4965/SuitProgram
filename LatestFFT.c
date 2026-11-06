@@ -322,6 +322,8 @@ typedef struct {
     int beatsSincePeriodChange;
     double beatStartTime;
     double nextBeatTime;
+    int boundarySeen;
+    double lastBoundary, emittedPeriod;
 } BeatClock;
 
 typedef struct {
@@ -363,6 +365,10 @@ static void beat_clock_init_from_detected_beat(BeatClock *clk,
     while (start > now) start -= period;
     while (start + period <= now) start += period;
 
+    if (start < now - 1e-9) {
+        if (!clk->boundarySeen || start > clk->lastBoundary) clk->lastBoundary = start;
+        clk->boundarySeen = 1;
+    }
     clk->initialized = 1;
     clk->bpmCurrent = bpm;
     clk->bpmTarget = bpm;
@@ -431,17 +437,23 @@ static void beat_clock_update(BeatClock *clk, double now) {
     }
 }
 
-// Match services/fft/fft.c emit_and_publish: one newest crossed boundary,
-// with the same half-period guard after delayed capture or control changes.
+// Consume each boundary once. Suppressed beats stay suppressed; emission
+// spacing spans reanchors, BPM and ratio changes.
 static int beat_clock_emit(BeatClock *clock, double now, double *lastEmit) {
     beat_clock_update(clock, now);
     if (!clock->initialized || clock->periodCurrent <= 0) return 0;
-    if (clock->beatStartTime > *lastEmit &&
-        now - *lastEmit >= clock->periodCurrent * .5) {
-        *lastEmit = now;
-        return 1;
-    }
-    return 0;
+    if (clock->boundarySeen && clock->beatStartTime <= clock->lastBoundary) return 0;
+    clock->boundarySeen = 1;
+    clock->lastBoundary = clock->beatStartTime;
+    double minimumGap = .75 * fmax(clock->emittedPeriod, clock->periodCurrent);
+    if (clock->emittedPeriod > 0 && now - *lastEmit + 1e-9 < minimumGap) return 0;
+    *lastEmit = now;
+    clock->emittedPeriod = clock->periodCurrent;
+    return 1;
+}
+
+static double beat_clock_flash_phase(const BeatClock *clock, double now, double lastEmit) {
+    return clock->emittedPeriod > 0 ? (now - lastEmit) / clock->emittedPeriod : -1;
 }
 
 static int bpm_confident_for_phase(int haveBpm, double historyCoverage,
@@ -596,6 +608,23 @@ static int phase_graph_sample_bin(double origin, int column, int width, int fold
     double absolute = origin + (double)column / width / folds;
     absolute -= floor(absolute);
     return (int)floor(absolute * PHASE_GRAPH_BINS + 1e-4) % (PHASE_GRAPH_BINS / folds);
+}
+
+static int reset_output_timing_for_bpm(double previous, double next,
+                                      int *offbeat, int *ratio, double *offset,
+                                      Uint64 *lastPress, unsigned *presses) {
+    if (!isfinite(previous) || !isfinite(next) || previous <= 0 || next <= 0 ||
+        fabs(next - previous) < .5) return 0;
+    *offbeat = 0;
+    *ratio = 1;
+    *offset = 0;
+    *lastPress = 0;
+    *presses = 0;
+    return 1;
+}
+
+static const char *output_timing_name(int offbeat, int ratio) {
+    return ratio == 2 ? "2x" : offbeat ? "offbeat" : "auto";
 }
 
 static int timing_button_next(int mode, Uint64 now, Uint64 *last, unsigned *presses) {
@@ -825,6 +854,7 @@ int main(void) {
     int phaseForcedLocked = 0;
     int phaseMultiplier = 1;
     int offbeatEnabled = 0;
+    double phaseOffset = 0;
     uint64_t suppressedFrames = 0;
 
     const int bpmCount = BPM_COUNT;
@@ -964,7 +994,7 @@ int main(void) {
 
     init_scrolling_spectrogram(ren);
 
-    printf("Controls: R clear accepted state | F force/unforce BPM | Space lock/unlock phase | D suit offset button | O opposite side | 1/2 flash ratio | Esc quit.\n");
+    printf("Controls: R clear accepted state | F force/unforce BPM | Space lock/unlock phase | D set output | O set offbeat | 1/2 ratio | [/] phase | Shift coarse | backslash zero | Esc quit.\n");
 
     Uint64 lastTimingPress = 0;
     unsigned timingPresses = 0;
@@ -1008,6 +1038,7 @@ int main(void) {
                     phaseForcedLocked = 0;
                     phaseMultiplier = 1;
                     offbeatEnabled = 0;
+                    phaseOffset = 0;
                     lastTimingPress = 0;
                     timingPresses = 0;
                     lastFlashEmit = 0.0;
@@ -1021,11 +1052,14 @@ int main(void) {
                     if (!historyCount) {
                         printf("Force ignored: no BPM evidence yet.\n");
                     } else if (!manualBpmForced) {
+                        double previousBpm = bpmHold.have ? bpmHold.bpm : 0;
                         manualBpmForced = 1;
                         bpm_hold_force(&bpmHold, accumBpm,
                             (int)accumBpm < BPM_MAX ? (int)accumBpm - BPM_MIN : BPM_COUNT - 2);
                         finalBpm = bpmHold.bpm;
                         finalPairIdx = bpmHold.pairIdx;
+                        reset_output_timing_for_bpm(previousBpm, finalBpm,
+                            &offbeatEnabled, &phaseMultiplier, &phaseOffset, &lastTimingPress, &timingPresses);
                         printf("BPM forced at %.0f.\n", finalBpm);
                     } else {
                         manualBpmForced = 0;
@@ -1043,6 +1077,19 @@ int main(void) {
                             phaseForcedLocked ? "enabled" : "disabled"
                         );
                     }
+                } else if (key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET || key == SDLK_BACKSLASH) {
+                    double step = (e.key.keysym.mod & KMOD_SHIFT) ? .05 : .01;
+                    phaseOffset = key == SDLK_BACKSLASH ? 0 :
+                        phase_wrap01(phaseOffset + (key == SDLK_LEFTBRACKET ? -step : step));
+                    if (beatClock.initialized && phaseDecision.valid) {
+                        double basePeriod = 60 / phaseDecision.preciseBpm;
+                        double anchor = phaseDecision.flashAnchorTime + phaseOffset * basePeriod;
+                        if (offbeatEnabled && phaseMultiplier == 1) anchor += .5 * basePeriod;
+                        beatDebug.acceptedBeatTime = anchor;
+                        beat_clock_init_from_detected_beat(&beatClock,
+                            phaseDecision.preciseBpm * phaseMultiplier, anchor,
+                            SDL_GetTicks64() / 1000.0);
+                    }
                 } else if (key == SDLK_o || key == SDLK_d) {
                     if (key == SDLK_d) {
                         int mode = phaseMultiplier == 2 ? 2 : offbeatEnabled;
@@ -1056,14 +1103,13 @@ int main(void) {
                     if (beatClock.initialized && phaseDecision.valid) {
                         double now = SDL_GetTicks64() / 1000.0;
                         double basePeriod = 60.0 / phaseDecision.preciseBpm;
-                        double anchor = phaseDecision.flashAnchorTime;
+                        double anchor = phaseDecision.flashAnchorTime + phaseOffset * basePeriod;
                         if (offbeatEnabled && phaseMultiplier == 1) anchor += 0.5 * basePeriod;
                         beatDebug.acceptedBeatTime = anchor;
                         beat_clock_init_from_detected_beat(&beatClock,
                             phaseDecision.preciseBpm * phaseMultiplier, anchor, now);
                     }
-                    printf("Output: %dx%s.\n", phaseMultiplier,
-                           offbeatEnabled ? " offbeat" : " on beat");
+                    printf("Output: %s.\n", output_timing_name(offbeatEnabled, phaseMultiplier));
                 } else if (key == SDLK_1 || key == SDLK_2) {
                     int nextMultiplier = key == SDLK_1 ? 1 : 2;
                     if (nextMultiplier != phaseMultiplier) {
@@ -1071,7 +1117,7 @@ int main(void) {
                         phaseMultiplier = nextMultiplier;
                         if (bpmHold.have && beatClock.initialized && phaseDecision.valid) {
                             double basePeriod = 60.0 / phaseDecision.preciseBpm;
-                            double anchor = phaseDecision.flashAnchorTime;
+                            double anchor = phaseDecision.flashAnchorTime + phaseOffset * basePeriod;
                             if (offbeatEnabled && phaseMultiplier == 1) anchor += 0.5 * basePeriod;
                             beatDebug.acceptedBeatTime = anchor;
                             beat_clock_init_from_detected_beat(
@@ -1081,7 +1127,7 @@ int main(void) {
                                 now
                             );
                         }
-                        printf("Visual phase ratio set to %dx.\n", phaseMultiplier);
+                        printf("Output: %s.\n", output_timing_name(offbeatEnabled, phaseMultiplier));
                     }
                 }
             }
@@ -1178,6 +1224,7 @@ int main(void) {
                 ? accumNext
                 : accumPairIdx;
             accumBpm = (double)(BPM_MIN + bestAccumBin);
+            double previousBpm = bpmHold.have ? bpmHold.bpm : 0;
             update_final_bpm_from_accum(
                 accumBpm,
                 accumPairIdx,
@@ -1194,7 +1241,8 @@ int main(void) {
                 &evidenceQuality,
                 &candidateTrusted
             );
-
+            reset_output_timing_for_bpm(previousBpm, bpmHold.have ? bpmHold.bpm : 0,
+                &offbeatEnabled, &phaseMultiplier, &phaseOffset, &lastTimingPress, &timingPresses);
 
             bpmWorker.resultReady = 0;
         }
@@ -1235,7 +1283,7 @@ int main(void) {
                 );
                 if (phaseDecision.valid) {
                     double basePeriod = 60.0 / phaseDecision.preciseBpm;
-                    double clockBeatTime = phaseDecision.flashAnchorTime;
+                    double clockBeatTime = phaseDecision.flashAnchorTime + phaseOffset * basePeriod;
                     if (offbeatEnabled && phaseMultiplier == 1)
                         clockBeatTime += 0.5 * basePeriod;
                     double visualBpm = phaseDecision.preciseBpm * phaseMultiplier;
@@ -1268,7 +1316,7 @@ int main(void) {
                         phaseDecision.restored) {
                         if (phaseUpdateAllowed) {
                             beat_clock_init_from_detected_beat(
-                                &beatClock, visualBpm, clockBeatTime, phaseNow);
+                                &beatClock, visualBpm, clockBeatTime, SDL_GetTicks64() / 1000.0);
                         }
                     } else if (phaseUpdateAllowed) {
                         beat_clock_schedule_from_detected_beat(
@@ -1318,18 +1366,14 @@ int main(void) {
                 beatDebug.detectedPhase = beatDebug.bestPhaseFrames;
             }
         }
-        double blinkPhase = -1.0;
-        if (beatClock.initialized) {
-            blinkPhase = (beatNowSec - beatClock.beatStartTime) / beatClock.periodCurrent;
-            blinkPhase -= floor(blinkPhase);
-        }
+        double blinkPhase = beat_clock_flash_phase(&beatClock, beatNowSec, lastFlashEmit);
 
         char windowTitle[384];
         if (bpmHold.have) {
             snprintf(
                 windowTitle,
                 sizeof(windowTitle),
-                "LatestFFT | candidate %.0f | held %.0f %s | clock %.2f | confidence %.2f evidence %.2f | phase %s err %+.0fms prom %.2f x%d%s",
+                "LatestFFT | candidate %.0f | held %.0f %s | clock %.2f | confidence %.2f evidence %.2f | phase %s err %+.0fms prom %.2f | output %s phase %+.2f",
                 accumBpm,
                 finalBpm,
                 manualBpmForced ? "FORCED" : (phaseForcedLocked ? "SOFT" : "AUTO"),
@@ -1339,19 +1383,19 @@ int main(void) {
                 phaseForcedLocked ? "LOCKED" : "TRACKING",
                 phaseDecision.valid ? phaseDecision.phaseErrorSeconds * 1000.0 : 0.0,
                 phaseDecision.valid ? phaseDecision.familyProminence : 0.0,
-                phaseMultiplier,
-                offbeatEnabled ? " OFFBEAT" : ""
+                output_timing_name(offbeatEnabled, phaseMultiplier),
+                phaseOffset - floor(phaseOffset + .5)
             );
         } else {
             snprintf(
                 windowTitle,
                 sizeof(windowTitle),
-                "LatestFFT | candidate %.0f | seeking lock | confidence %.2f evidence %.2f | phase x%d%s",
+                "LatestFFT | candidate %.0f | seeking lock | confidence %.2f evidence %.2f | output %s phase %+.2f",
                 accumBpm,
                 decisionConfidence,
                 evidenceQuality,
-                phaseMultiplier,
-                offbeatEnabled ? " OFFBEAT" : ""
+                output_timing_name(offbeatEnabled, phaseMultiplier),
+                phaseOffset - floor(phaseOffset + .5)
             );
         }
         size_t titleLength = strlen(windowTitle);
